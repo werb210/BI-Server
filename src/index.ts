@@ -11,6 +11,7 @@ import { requireAdmin } from "./middleware/requireAdmin";
 import { pool } from "./db";
 import { submitClaim } from "./modules/claims.controller";
 import { cancelPolicy } from "./modules/cancel.controller";
+import { runPremiumAccrual } from "./worker/accrual.worker";
 
 const app = express();
 
@@ -30,7 +31,20 @@ app.get("/health", (_, res) => res.json({ ok: true }));
 app.get("/ready", async (_, res) => {
   try {
     await pool.query("SELECT 1");
-    res.json({ ready: true });
+
+    const jobStatus = await pool.query<{ status: string }>(
+      `SELECT status FROM bi_jobs
+       WHERE job_type='premium_accrual'
+       ORDER BY created_at DESC
+       LIMIT 1`
+    );
+
+    res.json({
+      ready: true,
+      worker: {
+        premiumAccrual: jobStatus.rows[0]?.status ?? "never_run"
+      }
+    });
   } catch {
     res.status(500).json({ ready: false });
   }
@@ -49,6 +63,10 @@ app.patch(
   updateUnderwritingStatus
 );
 app.patch("/bi/admin/policy/:id/cancel", requireAdmin, cancelPolicy);
+
+setInterval(() => {
+  runPremiumAccrual();
+}, 1000 * 60 * 60);
 
 async function start() {
   await runSchema();

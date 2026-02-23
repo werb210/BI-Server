@@ -199,6 +199,24 @@ export async function runSchema() {
     ALTER TABLE bi_ledger
       ALTER COLUMN amount SET NOT NULL;
 
+
+    CREATE TABLE IF NOT EXISTS bi_jobs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      job_type TEXT NOT NULL,
+      status TEXT CHECK (status IN ('pending','running','completed','failed')) DEFAULT 'pending',
+      started_at TIMESTAMP,
+      completed_at TIMESTAMP,
+      error TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS bi_job_locks (
+      job_name TEXT PRIMARY KEY,
+      locked_at TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_jobs_type ON bi_jobs(job_type);
+
     CREATE TABLE IF NOT EXISTS bi_idempotency (
       id TEXT PRIMARY KEY,
       created_at TIMESTAMP DEFAULT NOW()
