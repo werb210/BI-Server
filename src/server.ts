@@ -5,6 +5,7 @@ import { z } from "zod";
 import { Pool } from "pg";
 import cron from "node-cron";
 import nodemailer from "nodemailer";
+import { calculateCommission, calculatePremium } from "./commission";
 
 dotenv.config();
 
@@ -127,6 +128,72 @@ app.post("/api/applications", async (req, res) => {
       return;
     }
     res.status(400).json({ error: "Unknown error" });
+  }
+});
+
+
+app.post("/api/applications/:id/approve", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const appResult = await pool.query(
+      "SELECT * FROM bi_applications WHERE id = $1",
+      [id]
+    );
+
+    if (!appResult.rows.length) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+
+    const appData = appResult.rows[0];
+    const securedType = appData.secured_type as "secured" | "unsecured";
+
+    const premium = calculatePremium(Number(appData.loan_amount), securedType);
+    const commission = calculateCommission(premium);
+
+    await pool.query(
+      `
+      INSERT INTO bi_commissions
+      (application_id, annual_premium, commission_amount, year)
+      VALUES ($1,$2,$3,$4)
+      `,
+      [id, premium, commission, new Date().getFullYear()]
+    );
+
+    await pool.query(
+      "UPDATE bi_applications SET status = 'approved' WHERE id = $1",
+      [id]
+    );
+
+    res.json({ success: true });
+  } catch (err: unknown) {
+    if (err instanceof Error) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+
+    res.status(500).json({ error: "Unknown error" });
+  }
+});
+
+app.get("/api/commissions", async (_, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COALESCE(SUM(annual_premium), 0) as total_premium,
+        COALESCE(SUM(commission_amount), 0) as total_commission
+      FROM bi_commissions
+    `);
+
+    res.json(result.rows[0]);
+  } catch (err: unknown) {
+    if (err instanceof Error) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+
+    res.status(500).json({ error: "Unknown error" });
   }
 });
 
