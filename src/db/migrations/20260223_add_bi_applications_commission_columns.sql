@@ -1,0 +1,4 @@
+ALTER TABLE bi_applications
+ADD COLUMN IF NOT EXISTS annual_premium NUMERIC,
+ADD COLUMN IF NOT EXISTS boreal_commission NUMERIC,
+ADD COLUMN IF NOT EXISTS coverage_amount NUMERIC;
