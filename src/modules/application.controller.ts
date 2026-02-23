@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { pool } from "../db";
 import { z } from "zod";
+import { generateRecurringCommission } from "./commission.service";
 
 const schema = z.object({
   leadId: z.string(),
@@ -9,7 +10,10 @@ const schema = z.object({
   guaranteeData: z.any(),
   declarations: z.any(),
   consentData: z.any(),
-  quoteResult: z.any()
+  quoteResult: z.object({
+    estimatedPremium: z.number()
+  }).passthrough(),
+  referrerId: z.string().uuid().optional()
 });
 
 export async function createApplication(req: Request, res: Response) {
@@ -33,6 +37,20 @@ export async function createApplication(req: Request, res: Response) {
       parsed.data.quoteResult
     ]
   );
+
+  await pool.query(
+    `INSERT INTO bi_events(entity_type, entity_id, event_type)
+     VALUES($1,$2,$3)`,
+    ["application", result.rows[0].id, "submitted"]
+  );
+
+  if (parsed.data.referrerId) {
+    await generateRecurringCommission(
+      result.rows[0].id,
+      parsed.data.quoteResult.estimatedPremium,
+      0.15
+    );
+  }
 
   res.json(result.rows[0]);
 }
