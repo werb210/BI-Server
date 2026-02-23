@@ -24,7 +24,7 @@ const DATABASE_URL = process.env.DATABASE_URL!;
 const JWT_SECRET = process.env.JWT_SECRET!;
 const PURBECK_WEBHOOK_SECRET = process.env.PURBECK_WEBHOOK_SECRET || "";
 
-/* ================= DB SINGLETON ================= */
+/* ================= DB ================= */
 
 const pool = new Pool({ connectionString: DATABASE_URL });
 
@@ -33,9 +33,60 @@ const pool = new Pool({ connectionString: DATABASE_URL });
 app.use(
   rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 300
+    max: 500
   })
 );
+
+/* ================= DB BOOTSTRAP ================= */
+
+async function bootstrap() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bi_applications (
+      id SERIAL PRIMARY KEY,
+      name TEXT,
+      email TEXT,
+      business_name TEXT,
+      loan_amount NUMERIC,
+      loan_type TEXT,
+      insured_amount NUMERIC,
+      annual_premium NUMERIC,
+      referrer_email TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bi_policies (
+      id SERIAL PRIMARY KEY,
+      application_id INTEGER REFERENCES bi_applications(id),
+      policy_number TEXT,
+      start_date DATE,
+      end_date DATE,
+      annual_premium NUMERIC,
+      commission NUMERIC,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bi_audit_logs (
+      id SERIAL PRIMARY KEY,
+      action TEXT,
+      payload JSONB,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bi_idempotency (
+      id SERIAL PRIMARY KEY,
+      idempotency_key TEXT UNIQUE,
+      endpoint TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+}
+bootstrap();
 
 /* ================= AUTH ================= */
 
@@ -60,19 +111,7 @@ function requireRole(role: string) {
   };
 }
 
-/* ================= IDEMPOTENCY TABLE ================= */
-
-async function ensureIdempotencyTable() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS bi_idempotency (
-      id SERIAL PRIMARY KEY,
-      idempotency_key TEXT UNIQUE,
-      endpoint TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-  `);
-}
-ensureIdempotencyTable();
+/* ================= IDEMPOTENCY ================= */
 
 async function checkIdempotency(key: string, endpoint: string) {
   const exists = await pool.query(
@@ -91,23 +130,37 @@ async function checkIdempotency(key: string, endpoint: string) {
   return true;
 }
 
-/* ================= ZOD SCHEMAS ================= */
+/* ================= SCHEMAS ================= */
 
 const ApplicationSchema = z.object({
-  name: z.string().min(2),
+  name: z.string(),
   email: z.string().email(),
-  businessName: z.string().min(2),
-  loanAmount: z.number().positive(),
+  businessName: z.string(),
+  loanAmount: z.number(),
   loanType: z.enum(["Secured", "Unsecured"]),
   insuredAmount: z.number(),
   annualPremium: z.number(),
   referrerEmail: z.string().optional().nullable()
 });
 
-const PolicyActivateSchema = z.object({
+const ActivateSchema = z.object({
   applicationId: z.number(),
   policyNumber: z.string(),
   startDate: z.string()
+});
+
+/* ================= LOGIN ================= */
+
+app.post("/bi/auth/login", (req, res) => {
+  const { email, role } = req.body;
+
+  const token = jwt.sign(
+    { email, role },
+    JWT_SECRET,
+    { expiresIn: "8h" }
+  );
+
+  res.json({ token });
 });
 
 /* ================= APPLICATION ================= */
@@ -116,23 +169,20 @@ app.post("/bi/applications", async (req, res) => {
   try {
     const data = ApplicationSchema.parse(req.body);
 
-    await pool.query(
-      `
+    await pool.query(`
       INSERT INTO bi_applications
       (name,email,business_name,loan_amount,loan_type,insured_amount,annual_premium,referrer_email)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-    `,
-      [
-        data.name,
-        data.email,
-        data.businessName,
-        data.loanAmount,
-        data.loanType,
-        data.insuredAmount,
-        data.annualPremium,
-        data.referrerEmail
-      ]
-    );
+    `, [
+      data.name,
+      data.email,
+      data.businessName,
+      data.loanAmount,
+      data.loanType,
+      data.insuredAmount,
+      data.annualPremium,
+      data.referrerEmail
+    ]);
 
     res.json({ success: true });
   } catch (err: any) {
@@ -140,44 +190,43 @@ app.post("/bi/applications", async (req, res) => {
   }
 });
 
-/* ================= POLICY ACTIVATE (IDEMPOTENT) ================= */
+/* ================= ACTIVATE POLICY ================= */
 
 app.post("/bi/policies/activate", auth, requireRole("admin"), async (req, res) => {
   const idempotencyKey = req.headers["x-idempotency-key"] as string;
-
   if (!idempotencyKey)
     return res.status(400).json({ error: "Missing idempotency key" });
 
   const allowed = await checkIdempotency(idempotencyKey, "activate");
-  if (!allowed) return res.status(409).json({ error: "Duplicate request" });
+  if (!allowed)
+    return res.status(409).json({ error: "Duplicate request" });
 
   try {
-    const data = PolicyActivateSchema.parse(req.body);
+    const data = ActivateSchema.parse(req.body);
 
-    const appData = await pool.query(`SELECT * FROM bi_applications WHERE id=$1`, [
-      data.applicationId
-    ]);
+    const appData = await pool.query(
+      `SELECT * FROM bi_applications WHERE id=$1`,
+      [data.applicationId]
+    );
 
     if (!appData.rows.length)
       return res.status(404).json({ error: "Application not found" });
 
-    await pool.query(
-      `
+    const annualPremium = parseFloat(appData.rows[0].annual_premium);
+    const commission = annualPremium * 0.10;
+
+    await pool.query(`
       INSERT INTO bi_policies
-      (application_id, policy_number, start_date, end_date)
-      VALUES ($1,$2,$3,$4)
-    `,
-      [
-        data.applicationId,
-        data.policyNumber,
-        data.startDate,
-        new Date(
-          new Date(data.startDate).setFullYear(
-            new Date(data.startDate).getFullYear() + 1
-          )
-        )
-      ]
-    );
+      (application_id,policy_number,start_date,end_date,annual_premium,commission)
+      VALUES ($1,$2,$3,$4,$5,$6)
+    `, [
+      data.applicationId,
+      data.policyNumber,
+      data.startDate,
+      new Date(new Date(data.startDate).setFullYear(new Date(data.startDate).getFullYear() + 1)),
+      annualPremium,
+      commission
+    ]);
 
     res.json({ activated: true });
   } catch (err: any) {
@@ -185,31 +234,7 @@ app.post("/bi/policies/activate", auth, requireRole("admin"), async (req, res) =
   }
 });
 
-/* ================= WEBHOOK (IDEMPOTENT) ================= */
-
-app.post("/bi/webhook/purbec", async (req, res) => {
-  if (req.headers["x-purbec-secret"] !== PURBECK_WEBHOOK_SECRET)
-    return res.status(403).json({ error: "Unauthorized" });
-
-  const idempotencyKey = req.headers["x-idempotency-key"] as string;
-  if (!idempotencyKey)
-    return res.status(400).json({ error: "Missing idempotency key" });
-
-  const allowed = await checkIdempotency(idempotencyKey, "webhook");
-  if (!allowed) return res.status(409).json({ error: "Duplicate webhook" });
-
-  await pool.query(
-    `
-    INSERT INTO bi_audit_logs (action, payload)
-    VALUES ($1,$2)
-  `,
-    ["purbec_webhook", req.body]
-  );
-
-  res.json({ received: true });
-});
-
-/* ================= POLICY LIST (ROLE ENFORCED) ================= */
+/* ================= LIST POLICIES ================= */
 
 app.get("/bi/policies", auth, async (req: any, res) => {
   const { role, email } = req.user;
@@ -220,20 +245,39 @@ app.get("/bi/policies", auth, async (req: any, res) => {
   }
 
   if (role === "referrer") {
-    const data = await pool.query(
-      `
+    const data = await pool.query(`
       SELECT p.*
       FROM bi_policies p
       JOIN bi_applications a ON p.application_id=a.id
       WHERE a.referrer_email=$1
-    `,
-      [email]
-    );
+    `, [email]);
 
     return res.json(data.rows);
   }
 
   res.status(403).json({ error: "Unauthorized" });
+});
+
+/* ================= WEBHOOK ================= */
+
+app.post("/bi/webhook/purbec", async (req, res) => {
+  if (req.headers["x-purbec-secret"] !== PURBECK_WEBHOOK_SECRET)
+    return res.status(403).json({ error: "Unauthorized" });
+
+  const idempotencyKey = req.headers["x-idempotency-key"] as string;
+  if (!idempotencyKey)
+    return res.status(400).json({ error: "Missing idempotency key" });
+
+  const allowed = await checkIdempotency(idempotencyKey, "webhook");
+  if (!allowed)
+    return res.status(409).json({ error: "Duplicate webhook" });
+
+  await pool.query(`
+    INSERT INTO bi_audit_logs (action,payload)
+    VALUES ($1,$2)
+  `, ["purbec_webhook", req.body]);
+
+  res.json({ received: true });
 });
 
 /* ================= START ================= */
