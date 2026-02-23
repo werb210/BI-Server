@@ -1,18 +1,19 @@
 import dotenv from "dotenv";
+
 dotenv.config();
 
-const required = ["DATABASE_URL", "JWT_SECRET"];
-
-required.forEach((key) => {
-  if (!process.env[key]) {
-    console.error(`Missing required env: ${key}`);
-    process.exit(1);
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
   }
-});
+  return value;
+}
 
-export const config = {
-  port: process.env.PORT || 5001,
-  databaseUrl: process.env.DATABASE_URL!,
-  jwtSecret: process.env.JWT_SECRET!,
-  quoteMode: process.env.BI_QUOTE_MODE || "static"
+export const ENV = {
+  NODE_ENV: process.env.NODE_ENV || "development",
+  PORT: process.env.PORT || "8080",
+  DATABASE_URL: requireEnv("DATABASE_URL"),
+  JWT_SECRET: requireEnv("JWT_SECRET"),
+  CORS_ORIGIN: requireEnv("CORS_ORIGIN")
 };
