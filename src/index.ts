@@ -2,20 +2,30 @@ import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
 import { Pool } from "pg";
+import sgMail from "@sendgrid/mail";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+/* ================= ENV ================= */
+
 const {
   PORT = 4002,
   DATABASE_URL,
-  JWT_SECRET = "dev_secret"
+  JWT_SECRET = "dev_secret",
+  PURBECK_WEBHOOK_SECRET = "purbec_secret",
+  SENDGRID_API_KEY,
+  FROM_EMAIL = "no-reply@boreal.financial"
 } = process.env;
 
 if (!DATABASE_URL) {
   console.error("DATABASE_URL missing");
   process.exit(1);
+}
+
+if (SENDGRID_API_KEY) {
+  sgMail.setApiKey(SENDGRID_API_KEY);
 }
 
 const pool = new Pool({ connectionString: DATABASE_URL });
@@ -43,130 +53,116 @@ function requireRole(role: string) {
   };
 }
 
-/* ================= POLICY LIST ================= */
+/* ================= EMAIL ================= */
 
-app.get("/bi/policies", auth, async (req: any, res) => {
-  const { role, email } = req.user;
+async function sendEmail(to: string, subject: string, text: string) {
+  if (!SENDGRID_API_KEY) return;
 
-  if (role === "admin" || role === "lender") {
-    const data = await pool.query(`
-      SELECT p.*, a.business_name, a.annual_premium
-      FROM bi_policies p
-      JOIN bi_applications a ON p.application_id = a.id
-      ORDER BY p.created_at DESC
-    `);
-    return res.json(data.rows);
-  }
+  await sgMail.send({
+    to,
+    from: FROM_EMAIL,
+    subject,
+    text
+  });
+}
 
-  if (role === "referrer") {
-    const data = await pool.query(`
-      SELECT p.*, a.business_name, a.annual_premium
-      FROM bi_policies p
-      JOIN bi_applications a ON p.application_id = a.id
-      WHERE a.referrer_email = $1
-      ORDER BY p.created_at DESC
-    `, [email]);
+/* ================= RENEWAL ENGINE ================= */
 
-    return res.json(data.rows);
-  }
-
-  res.status(403).json({ error: "Unauthorized" });
-});
-
-/* ================= SINGLE POLICY ================= */
-
-app.get("/bi/policies/:id", auth, async (req: any, res) => {
-  const { id } = req.params;
-
-  const data = await pool.query(`
-    SELECT p.*, a.business_name, a.annual_premium
+async function autoRenewPolicies() {
+  const expiring = await pool.query(`
+    SELECT p.*, a.annual_premium, a.referrer_email, a.email
     FROM bi_policies p
     JOIN bi_applications a ON p.application_id = a.id
-    WHERE p.id = $1
-  `, [id]);
-
-  if (!data.rows.length)
-    return res.status(404).json({ error: "Not found" });
-
-  const commissions = await pool.query(`
-    SELECT * FROM bi_commissions
-    WHERE policy_id = $1
-    ORDER BY year_number ASC
-  `, [id]);
-
-  res.json({
-    ...data.rows[0],
-    commissions: commissions.rows
-  });
-});
-
-/* ================= COMMISSION AGING ================= */
-
-app.get("/bi/admin/commission-aging", auth, requireRole("admin"), async (req, res) => {
-  const data = await pool.query(`
-    SELECT
-      SUM(CASE WHEN payout_status='pending' AND NOW() - created_at < INTERVAL '30 days'
-        THEN commission_amount ELSE 0 END) as current,
-      SUM(CASE WHEN payout_status='pending' AND NOW() - created_at >= INTERVAL '30 days'
-        AND NOW() - created_at < INTERVAL '60 days'
-        THEN commission_amount ELSE 0 END) as over_30,
-      SUM(CASE WHEN payout_status='pending' AND NOW() - created_at >= INTERVAL '60 days'
-        AND NOW() - created_at < INTERVAL '90 days'
-        THEN commission_amount ELSE 0 END) as over_60,
-      SUM(CASE WHEN payout_status='pending' AND NOW() - created_at >= INTERVAL '90 days'
-        THEN commission_amount ELSE 0 END) as over_90
-    FROM bi_commissions
+    WHERE p.status='Active'
+    AND p.end_date <= NOW()
   `);
 
-  res.json(data.rows[0]);
-});
+  for (const policy of expiring.rows) {
+    const yearCount = await pool.query(
+      `SELECT COUNT(*) FROM bi_commissions WHERE policy_id=$1`,
+      [policy.id]
+    );
 
-/* ================= DASHBOARD METRICS ================= */
+    const yearNumber = parseInt(yearCount.rows[0].count) + 1;
 
-app.get("/bi/admin/metrics", auth, requireRole("admin"), async (req, res) => {
-  const active = await pool.query(`
-    SELECT COUNT(*) FROM bi_policies WHERE status='Active'
+    const commission = policy.annual_premium * 0.10;
+
+    if (policy.referrer_email) {
+      await pool.query(`
+        INSERT INTO bi_commissions
+        (policy_id, referrer_email, year_number, premium, commission_amount)
+        VALUES ($1,$2,$3,$4,$5)
+      `, [policy.id, policy.referrer_email, yearNumber, policy.annual_premium, commission]);
+    }
+
+    await pool.query(`
+      UPDATE bi_policies
+      SET start_date = NOW(),
+          end_date = NOW() + INTERVAL '1 year'
+      WHERE id=$1
+    `, [policy.id]);
+
+    await sendEmail(
+      policy.email,
+      "Policy Renewed",
+      "Your Personal Guarantee Insurance policy has been automatically renewed."
+    );
+  }
+}
+
+/* Run daily */
+setInterval(autoRenewPolicies, 24 * 60 * 60 * 1000);
+
+/* ================= REMINDER ENGINE ================= */
+
+async function sendRenewalReminders() {
+  const reminders = await pool.query(`
+    SELECT p.*, a.email
+    FROM bi_policies p
+    JOIN bi_applications a ON p.application_id = a.id
+    WHERE p.status='Active'
+    AND p.end_date <= NOW() + INTERVAL '30 days'
   `);
 
-  const cancelled = await pool.query(`
-    SELECT COUNT(*) FROM bi_policies WHERE status='Cancelled'
-  `);
+  for (const policy of reminders.rows) {
+    await sendEmail(
+      policy.email,
+      "Policy Expiring Soon",
+      "Your Personal Guarantee Insurance policy expires within 30 days."
+    );
+  }
+}
 
-  const totalPremium = await pool.query(`
-    SELECT SUM(annual_premium) FROM bi_applications
-  `);
+setInterval(sendRenewalReminders, 24 * 60 * 60 * 1000);
 
-  const totalCommission = await pool.query(`
-    SELECT SUM(commission_amount) FROM bi_commissions
-  `);
+/* ================= PURBECK WEBHOOK ================= */
 
-  const churnRate =
-    parseInt(cancelled.rows[0].count) /
-    (parseInt(active.rows[0].count) +
-      parseInt(cancelled.rows[0].count) || 1);
+app.post("/bi/webhook/purbec", async (req, res) => {
+  if (req.headers["x-purbec-secret"] !== PURBECK_WEBHOOK_SECRET)
+    return res.status(403).json({ error: "Unauthorized" });
 
-  res.json({
-    activePolicies: active.rows[0].count,
-    cancelledPolicies: cancelled.rows[0].count,
-    churnRate,
-    totalPremium: totalPremium.rows[0].sum || 0,
-    totalCommission: totalCommission.rows[0].sum || 0
-  });
-});
+  const { applicationId, policyNumber, startDate } = req.body;
 
-/* ================= REFERRER PERFORMANCE ================= */
+  const appData = await pool.query(
+    `SELECT * FROM bi_applications WHERE id=$1`,
+    [applicationId]
+  );
 
-app.get("/bi/admin/referrer-performance", auth, requireRole("admin"), async (req, res) => {
-  const data = await pool.query(`
-    SELECT referrer_email,
-           SUM(commission_amount) as total_commission,
-           COUNT(*) as total_policies
-    FROM bi_commissions
-    GROUP BY referrer_email
-    ORDER BY total_commission DESC
-  `);
+  if (!appData.rows.length)
+    return res.status(404).json({ error: "Application not found" });
 
-  res.json(data.rows);
+  await pool.query(`
+    INSERT INTO bi_policies
+    (application_id, policy_number, start_date, end_date)
+    VALUES ($1,$2,$3,$4)
+  `, [
+    applicationId,
+    policyNumber,
+    startDate,
+    new Date(new Date(startDate).setFullYear(new Date(startDate).getFullYear() + 1))
+  ]);
+
+  res.json({ activated: true });
 });
 
 /* ================= START ================= */
