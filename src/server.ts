@@ -5,7 +5,7 @@ import { z } from "zod";
 import { Pool } from "pg";
 import cron from "node-cron";
 import nodemailer from "nodemailer";
-import { calculateCommission, calculatePremium } from "./commission";
+import { calculatePremium } from "./commission";
 
 dotenv.config();
 
@@ -50,31 +50,25 @@ const Schema = z.object({
   )
 });
 
-function calculate(loanAmount: number, securedType: string) {
-  const insuredAmount = Math.min(loanAmount * 0.8, 1400000);
-  const rate = securedType === "secured" ? 0.016 : 0.04;
-  const premium = insuredAmount * rate;
-  const commission = premium * 0.1;
-
-  return { insuredAmount, premium, commission };
-}
-
 app.post("/api/applications", async (req, res) => {
   try {
     const parsed = Schema.parse(req.body);
 
-    const calc = calculate(parsed.loanAmount, parsed.securedType);
+    const { coverageAmount, annualPremium, borealCommission } = calculatePremium(
+      parsed.loanAmount,
+      parsed.securedType
+    );
 
     const result = await pool.query(
       `
       INSERT INTO bi_applications
       (first_name, last_name, email,
        loan_amount, secured_type,
-       insured_amount, annual_premium, commission,
+       coverage_amount, annual_premium, boreal_commission,
        has_bankruptcy, has_existing_pg,
        existing_pg_amount, has_previous_claims,
        directors, status)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending')
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'submitted')
       RETURNING id
       `,
       [
@@ -83,9 +77,9 @@ app.post("/api/applications", async (req, res) => {
         parsed.email,
         parsed.loanAmount,
         parsed.securedType,
-        calc.insuredAmount,
-        calc.premium,
-        calc.commission,
+        coverageAmount,
+        annualPremium,
+        borealCommission,
         parsed.hasBankruptcy,
         parsed.hasExistingPG,
         parsed.existingPGAmount || null,
@@ -149,8 +143,10 @@ app.post("/api/applications/:id/approve", async (req, res) => {
     const appData = appResult.rows[0];
     const securedType = appData.secured_type as "secured" | "unsecured";
 
-    const premium = calculatePremium(Number(appData.loan_amount), securedType);
-    const commission = calculateCommission(premium);
+    const { annualPremium, borealCommission } = calculatePremium(
+      Number(appData.loan_amount),
+      securedType
+    );
 
     await pool.query(
       `
@@ -158,7 +154,7 @@ app.post("/api/applications/:id/approve", async (req, res) => {
       (application_id, annual_premium, commission_amount, year)
       VALUES ($1,$2,$3,$4)
       `,
-      [id, premium, commission, new Date().getFullYear()]
+      [id, annualPremium, borealCommission, new Date().getFullYear()]
     );
 
     await pool.query(
@@ -196,6 +192,58 @@ app.get("/api/commissions", async (_, res) => {
     res.status(500).json({ error: "Unknown error" });
   }
 });
+
+app.get("/api/commissions/summary", async (_, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        COUNT(*) as total_policies,
+        SUM(annual_premium) as total_premium,
+        SUM(boreal_commission) as total_commission
+      FROM bi_applications
+      WHERE status = 'approved'
+    `);
+
+    res.json(result.rows[0]);
+  } catch (err: unknown) {
+    if (err instanceof Error) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+
+    res.status(500).json({ error: "Unknown error" });
+  }
+});
+
+app.get("/api/commissions/detail", async (_, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        id,
+        first_name,
+        last_name,
+        loan_amount,
+        secured_type,
+        coverage_amount,
+        annual_premium,
+        boreal_commission,
+        status,
+        created_at
+      FROM bi_applications
+      ORDER BY created_at DESC
+    `);
+
+    res.json(result.rows);
+  } catch (err: unknown) {
+    if (err instanceof Error) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+
+    res.status(500).json({ error: "Unknown error" });
+  }
+});
+
 
 /**
  * Create initial commission ledger entry when application approved
