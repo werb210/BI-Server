@@ -12,7 +12,7 @@ export async function runCommissionAccrual() {
     await pool.query(
       `INSERT INTO bi_ledger(entity_type, entity_id, transaction_type, amount)
        VALUES ($1,$2,$3,$4)`,
-      ["premium", row.policy_id, "premium_paid", row.premium_amount]
+      ["premium", row.id, "premium_paid", row.premium_amount]
     );
   }
 }
