@@ -11,13 +11,15 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 4002;
-const DATABASE_URL = process.env.DATABASE_URL!;
-const JWT_SECRET = process.env.JWT_SECRET!;
+const DATABASE_URL = process.env.DATABASE_URL;
+const JWT_SECRET = process.env.JWT_SECRET;
 
 if (!DATABASE_URL || !JWT_SECRET) {
-  console.error("Missing environment variables");
+  console.error("Missing DATABASE_URL or JWT_SECRET");
   process.exit(1);
 }
+
+const jwtSecret = JWT_SECRET;
 
 const pool = new Pool({ connectionString: DATABASE_URL });
 
@@ -89,10 +91,7 @@ function auth(req: any, res: any, next: any) {
   if (!header) return res.status(401).json({ error: "No token" });
 
   try {
-    req.user = jwt.verify(
-      header.split(" ")[1],
-      JWT_SECRET
-    );
+    req.user = jwt.verify(header.split(" ")[1], jwtSecret);
     next();
   } catch {
     res.status(401).json({ error: "Invalid token" });
@@ -110,18 +109,25 @@ function requireRole(role: string) {
 /* ================= USER CREATE ================= */
 
 app.post("/bi/users/create", auth, requireRole("admin"), async (req, res) => {
-  const { email, password, role } = req.body;
-  const hash = await bcrypt.hash(password, 10);
+  const schema = z.object({
+    email: z.string().email(),
+    password: z.string().min(6),
+    role: z.enum(["admin", "lender", "referrer"])
+  });
 
   try {
+    const data = schema.parse(req.body);
+    const hash = await bcrypt.hash(data.password, 10);
+
     await pool.query(
       `INSERT INTO bi_users (email,password_hash,role)
        VALUES ($1,$2,$3)`,
-      [email, hash, role]
+      [data.email, hash, data.role]
     );
+
     res.json({ created: true });
   } catch {
-    res.status(400).json({ error: "User exists" });
+    res.status(400).json({ error: "User exists or invalid" });
   }
 });
 
@@ -148,14 +154,14 @@ app.post("/bi/auth/login", async (req, res) => {
 
   const token = jwt.sign(
     { email: user.rows[0].email, role: user.rows[0].role },
-    JWT_SECRET,
+    jwtSecret,
     { expiresIn: "8h" }
   );
 
-  res.json({ token });
+  res.json({ token, role: user.rows[0].role });
 });
 
-/* ================= APPLICATION ================= */
+/* ================= APPLICATION SUBMIT ================= */
 
 const ApplicationSchema = z.object({
   name: z.string(),
@@ -165,7 +171,7 @@ const ApplicationSchema = z.object({
   loanType: z.enum(["Secured", "Unsecured"]),
   insuredAmount: z.number(),
   annualPremium: z.number(),
-  referrerEmail: z.string().optional().nullable()
+  referrerEmail: z.string().nullable().optional()
 });
 
 app.post("/bi/applications", async (req, res) => {
@@ -184,7 +190,7 @@ app.post("/bi/applications", async (req, res) => {
       data.loanType,
       data.insuredAmount,
       data.annualPremium,
-      data.referrerEmail
+      data.referrerEmail || null
     ]);
 
     res.json({ success: true });
@@ -210,6 +216,9 @@ app.post("/bi/policies/activate", auth, requireRole("admin"), async (req, res) =
   const commission = annualPremium * 0.10;
   const referrer = appData.rows[0].referrer_email;
 
+  const endDate = new Date(startDate);
+  endDate.setFullYear(endDate.getFullYear() + 1);
+
   const policy = await pool.query(`
     INSERT INTO bi_policies
     (application_id,policy_number,start_date,end_date,annual_premium)
@@ -219,7 +228,7 @@ app.post("/bi/policies/activate", auth, requireRole("admin"), async (req, res) =
     applicationId,
     policyNumber,
     startDate,
-    new Date(new Date(startDate).setFullYear(new Date(startDate).getFullYear() + 1)),
+    endDate,
     annualPremium
   ]);
 
@@ -231,8 +240,8 @@ app.post("/bi/policies/activate", auth, requireRole("admin"), async (req, res) =
     `, [
       policy.rows[0].id,
       referrer,
-      policy.rows[0].start_date,
-      policy.rows[0].end_date,
+      startDate,
+      endDate,
       annualPremium,
       commission
     ]);
@@ -241,33 +250,43 @@ app.post("/bi/policies/activate", auth, requireRole("admin"), async (req, res) =
   res.json({ activated: true });
 });
 
-/* ================= POLICY LIST ================= */
+/* ================= RENEW POLICY ================= */
 
-app.get("/bi/policies", auth, async (req: any, res) => {
-  const { role, email } = req.user;
+app.post("/bi/policies/:id/renew", auth, requireRole("admin"), async (req, res) => {
+  const { id } = req.params;
 
-  if (role === "admin" || role === "lender") {
-    const policies = await pool.query(
-      `SELECT * FROM bi_policies ORDER BY created_at DESC`
-    );
-    return res.json(policies.rows);
-  }
+  const policy = await pool.query(
+    `SELECT * FROM bi_policies WHERE id=$1`,
+    [id]
+  );
 
-  if (role === "referrer") {
-    const policies = await pool.query(`
-      SELECT p.*
-      FROM bi_policies p
-      JOIN bi_commission_ledger c ON p.id=c.policy_id
-      WHERE c.referrer_email=$1
-    `, [email]);
+  if (!policy.rows.length)
+    return res.status(404).json({ error: "Policy not found" });
 
-    return res.json(policies.rows);
-  }
+  const newStart = new Date(policy.rows[0].end_date);
+  const newEnd = new Date(newStart);
+  newEnd.setFullYear(newEnd.getFullYear() + 1);
 
-  res.status(403).json({ error: "Unauthorized" });
+  await pool.query(`
+    UPDATE bi_policies
+    SET start_date=$1,end_date=$2
+    WHERE id=$3
+  `, [newStart, newEnd, id]);
+
+  const commission = policy.rows[0].annual_premium * 0.10;
+
+  await pool.query(`
+    INSERT INTO bi_commission_ledger
+    (policy_id,referrer_email,period_start,period_end,premium,commission)
+    SELECT id,referrer_email,$1,$2,annual_premium,$3
+    FROM bi_policies
+    WHERE id=$4
+  `, [newStart, newEnd, commission, id]);
+
+  res.json({ renewed: true });
 });
 
-/* ================= REPORTING ================= */
+/* ================= REPORT SUMMARY ================= */
 
 app.get("/bi/reports/summary", auth, requireRole("admin"), async (req, res) => {
   const totals = await pool.query(`
@@ -278,32 +297,6 @@ app.get("/bi/reports/summary", auth, requireRole("admin"), async (req, res) => {
   `);
 
   res.json(totals.rows[0]);
-});
-
-app.get("/bi/reports/referrers", auth, requireRole("admin"), async (req, res) => {
-  const data = await pool.query(`
-    SELECT referrer_email,
-           SUM(commission) as total_commission,
-           SUM(CASE WHEN paid=false THEN commission ELSE 0 END) as unpaid
-    FROM bi_commission_ledger
-    GROUP BY referrer_email
-  `);
-
-  res.json(data.rows);
-});
-
-/* ================= PAY COMMISSION ================= */
-
-app.post("/bi/commission/pay", auth, requireRole("admin"), async (req, res) => {
-  const { referrer_email } = req.body;
-
-  await pool.query(`
-    UPDATE bi_commission_ledger
-    SET paid=true
-    WHERE referrer_email=$1
-  `, [referrer_email]);
-
-  res.json({ paid: true });
 });
 
 /* ================= START ================= */
