@@ -16,25 +16,6 @@ const loginLimiter = rateLimit({
   max: 10
 });
 
-function getClientMeta(req: Request) {
-  return {
-    ip: req.ip,
-    userAgent: req.headers["user-agent"] || "unknown"
-  };
-}
-
-async function sendSecurityAlert(
-  subject: string,
-  message: string
-) {
-  await sgMail.send({
-    to: process.env.ADMIN_EMAIL!,
-    from: process.env.SENDGRID_FROM!,
-    subject,
-    html: `<p>${message}</p>`
-  });
-}
-
 function authenticateAdmin(
   req: Request,
   res: Response,
@@ -56,66 +37,48 @@ function authenticateAdmin(
 /* ---------------- LOGIN STEP 1 ---------------- */
 
 router.post("/admin-login", loginLimiter, async (req, res) => {
-  const { password } = req.body;
-  const email = process.env.ADMIN_EMAIL!;
-  const meta = getClientMeta(req);
+  const { email, password } = req.body;
 
-  const security = await pool.query(
-    `SELECT * FROM admin_login_security WHERE email=$1`,
+  const result = await pool.query(
+    `SELECT * FROM admin_users WHERE email=$1 AND is_active=true`,
     [email]
   );
 
-  const record = security.rows[0];
-
-  if (record?.locked_until && new Date(record.locked_until) > new Date()) {
-    return res.status(403).json({ error: "Account temporarily locked" });
+  if (result.rows.length === 0) {
+    return res.status(401).json({ error: "Invalid credentials" });
   }
 
-  const valid = await bcrypt.compare(
-    password,
-    process.env.ADMIN_PASSWORD_HASH!
-  );
+  const user = result.rows[0];
+
+  if (user.locked_until && new Date(user.locked_until) > new Date()) {
+    return res.status(403).json({ error: "Account locked" });
+  }
+
+  const valid = await bcrypt.compare(password, user.password_hash);
 
   if (!valid) {
-    const attempts = (record?.failed_attempts || 0) + 1;
-
+    const attempts = user.failed_attempts + 1;
     let lockedUntil = null;
 
     if (attempts >= 5) {
       lockedUntil = new Date(Date.now() + 30 * 60 * 1000);
-
-      await sendSecurityAlert(
-        "Admin Account Locked",
-        `Account locked due to repeated failures.<br>
-        IP: ${meta.ip}<br>
-        User-Agent: ${meta.userAgent}`
-      );
     }
 
     await pool.query(
-      `
-      INSERT INTO admin_login_security (email, failed_attempts, locked_until)
-      VALUES ($1,$2,$3)
-      ON CONFLICT (email)
-      DO UPDATE SET failed_attempts=$2, locked_until=$3, updated_at=NOW()
-      `,
-      [email, attempts, lockedUntil]
+      `UPDATE admin_users
+       SET failed_attempts=$1, locked_until=$2
+       WHERE id=$3`,
+      [attempts, lockedUntil, user.id]
     );
-
-    await new Promise(r => setTimeout(r, attempts * 1000));
 
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
-  // Reset on success
   await pool.query(
-    `
-    INSERT INTO admin_login_security (email, failed_attempts, locked_until)
-    VALUES ($1,0,NULL)
-    ON CONFLICT (email)
-    DO UPDATE SET failed_attempts=0, locked_until=NULL, updated_at=NOW()
-    `,
-    [email]
+    `UPDATE admin_users
+     SET failed_attempts=0, locked_until=NULL
+     WHERE id=$1`,
+    [user.id]
   );
 
   const code = crypto.randomInt(100000, 999999).toString();
@@ -137,18 +100,19 @@ router.post("/admin-login", loginLimiter, async (req, res) => {
   res.json({ step: "otp_required" });
 });
 
-/* ---------------- LOGIN STEP 2 ---------------- */
+/* ---------------- OTP VERIFY ---------------- */
 
 router.post("/admin-verify-otp", async (req, res) => {
-  const { code } = req.body;
-  const meta = getClientMeta(req);
+  const { email, code } = req.body;
 
   const result = await pool.query(
     `SELECT * FROM admin_otp_codes
-     WHERE code=$1 AND used=false AND expires_at > NOW()
+     WHERE email=$1 AND code=$2
+     AND used=false
+     AND expires_at > NOW()
      ORDER BY created_at DESC
      LIMIT 1`,
-    [code]
+    [email, code]
   );
 
   if (result.rows.length === 0) {
@@ -160,15 +124,8 @@ router.post("/admin-verify-otp", async (req, res) => {
     [result.rows[0].id]
   );
 
-  await sendSecurityAlert(
-    "Admin Login Successful",
-    `Admin login successful.<br>
-     IP: ${meta.ip}<br>
-     User-Agent: ${meta.userAgent}`
-  );
-
   const token = jwt.sign(
-    { role: "admin" },
+    { role: "admin", email },
     process.env.ADMIN_JWT_SECRET!,
     { expiresIn: "8h" }
   );
