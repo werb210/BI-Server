@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { z } from "zod";
 import { Pool } from "pg";
+import cron from "node-cron";
 
 dotenv.config();
 
@@ -91,6 +92,88 @@ app.post("/api/applications", async (req, res) => {
       return;
     }
     res.status(400).json({ error: "Unknown error" });
+  }
+});
+
+/**
+ * Create initial commission ledger entry when application approved
+ */
+app.post("/internal/create-ledger/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    const appResult = await pool.query("SELECT * FROM bi_applications WHERE id=$1", [
+      id
+    ]);
+
+    const appData = appResult.rows[0];
+    if (!appData) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+
+    const renewalDate = new Date();
+    renewalDate.setFullYear(renewalDate.getFullYear() + 1);
+
+    await pool.query(
+      `
+      INSERT INTO bi_commission_ledger
+      (application_id, policy_year, insured_amount,
+       annual_premium, commission, renewal_date)
+      VALUES ($1,1,$2,$3,$4,$5)
+      `,
+      [
+        id,
+        appData.insured_amount,
+        appData.annual_premium,
+        appData.commission,
+        renewalDate
+      ]
+    );
+
+    res.json({ success: true });
+  } catch (err: unknown) {
+    if (err instanceof Error) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+
+    res.status(500).json({ error: "Unknown error" });
+  }
+});
+
+/**
+ * Renewal Check (daily)
+ */
+cron.schedule("0 3 * * *", async () => {
+  const result = await pool.query(
+    `
+    SELECT * FROM bi_commission_ledger
+    WHERE renewal_date <= NOW() AND paid=true
+    `
+  );
+
+  for (const entry of result.rows) {
+    const nextYear = entry.policy_year + 1;
+    const nextRenewal = new Date(entry.renewal_date);
+    nextRenewal.setFullYear(nextRenewal.getFullYear() + 1);
+
+    await pool.query(
+      `
+      INSERT INTO bi_commission_ledger
+      (application_id, policy_year, insured_amount,
+       annual_premium, commission, renewal_date)
+      VALUES ($1,$2,$3,$4,$5,$6)
+      `,
+      [
+        entry.application_id,
+        nextYear,
+        entry.insured_amount,
+        entry.annual_premium,
+        entry.commission,
+        nextRenewal
+      ]
+    );
   }
 });
 
