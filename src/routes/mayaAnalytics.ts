@@ -1,7 +1,8 @@
 import { Router } from "express";
-import { pool } from "../db";
+import { Pool } from "pg";
 
 const router = Router();
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 router.get("/maya-analytics", async (_req, res) => {
   try {
@@ -14,14 +15,14 @@ router.get("/maya-analytics", async (_req, res) => {
     `);
 
     const byReferral = await pool.query(`
-      SELECT referral_code, COUNT(*)
+      SELECT referral_code, COUNT(*) AS count
       FROM maya_leads
       GROUP BY referral_code
       ORDER BY COUNT(*) DESC
     `);
 
     const bySource = await pool.query(`
-      SELECT utm_source, COUNT(*)
+      SELECT utm_source, COUNT(*) AS count
       FROM maya_leads
       GROUP BY utm_source
       ORDER BY COUNT(*) DESC
@@ -37,14 +38,8 @@ router.get("/maya-analytics", async (_req, res) => {
     return res.json({
       total: Number(total.rows[0].count),
       today: Number(today.rows[0].count),
-      referralBreakdown: byReferral.rows.map((row) => ({
-        referral_code: row.referral_code,
-        count: Number(row.count)
-      })),
-      sourceBreakdown: bySource.rows.map((row) => ({
-        utm_source: row.utm_source,
-        count: Number(row.count)
-      })),
+      referralBreakdown: byReferral.rows,
+      sourceBreakdown: bySource.rows,
       crmStatus: {
         sent: Number(crmSuccess.rows[0].sent ?? 0),
         failed: Number(crmSuccess.rows[0].failed ?? 0)
