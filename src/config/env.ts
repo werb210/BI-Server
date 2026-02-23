@@ -15,5 +15,12 @@ export const ENV = {
   PORT: process.env.PORT || "8080",
   DATABASE_URL: requireEnv("DATABASE_URL"),
   JWT_SECRET: requireEnv("JWT_SECRET"),
-  CORS_ORIGIN: requireEnv("CORS_ORIGIN")
+  CORS_ORIGIN: requireEnv("CORS_ORIGIN"),
+  OPENAI_API_KEY: requireEnv("OPENAI_API_KEY"),
+  TWILIO_ACCOUNT_SID: requireEnv("TWILIO_ACCOUNT_SID"),
+  TWILIO_AUTH_TOKEN: requireEnv("TWILIO_AUTH_TOKEN"),
+  TWILIO_FROM: requireEnv("TWILIO_FROM"),
+  ALERT_SMS_TO: requireEnv("ALERT_SMS_TO"),
+  SENDGRID_API_KEY: requireEnv("SENDGRID_API_KEY"),
+  SENDGRID_FROM: requireEnv("SENDGRID_FROM")
 };
