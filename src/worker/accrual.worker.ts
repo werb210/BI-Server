@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { pool } from "../db";
 
 export async function runPremiumAccrual() {
@@ -58,14 +59,21 @@ export async function runPremiumAccrual() {
         [row.id]
       );
 
+      const grossPremium = Number(row.premium_amount);
+      const premiumTxId = randomUUID();
+
       await client.query(
-        `INSERT INTO bi_ledger(entity_type, entity_id, transaction_type, amount)
-         VALUES('premium', $1, 'premium_paid', $2)`,
-        [row.id, row.premium_amount]
+        `INSERT INTO bi_ledger
+         (tx_id, account, debit, credit, description, reference_id)
+         VALUES
+         ($1,'Premium Receivable',$2,0,'Premium earned',$3),
+         ($1,'Premium Revenue',0,$2,'Premium earned',$3)`,
+        [premiumTxId, grossPremium, row.id]
       );
 
       const commissionRate = Number(row.commission_rate);
-      const grossPremium = Number(row.premium_amount);
+
+      const commissionAmount = grossPremium * commissionRate;
 
       await client.query(
         `INSERT INTO bi_commission_payables
@@ -78,9 +86,22 @@ export async function runPremiumAccrual() {
           row.referrer_id,
           grossPremium,
           commissionRate,
-          grossPremium * commissionRate
+          commissionAmount
         ]
       );
+
+      if (commissionAmount > 0) {
+        const commissionTxId = randomUUID();
+
+        await client.query(
+          `INSERT INTO bi_ledger
+           (tx_id, account, debit, credit, description, reference_id)
+           VALUES
+           ($1,'Commission Expense',$2,0,'Commission earned',$3),
+           ($1,'Commission Payable',0,$2,'Commission earned',$3)`,
+          [commissionTxId, commissionAmount, row.id]
+        );
+      }
     }
 
     await client.query(

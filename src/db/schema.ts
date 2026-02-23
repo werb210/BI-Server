@@ -214,17 +214,18 @@ export async function runSchema() {
 
     CREATE INDEX IF NOT EXISTS idx_claim_status ON bi_claims(claim_status);
 
-    CREATE TABLE IF NOT EXISTS bi_ledger (
+    DROP TABLE IF EXISTS bi_ledger CASCADE;
+
+    CREATE TABLE bi_ledger (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      entity_type TEXT,
-      entity_id UUID,
-      transaction_type TEXT,
-      amount NUMERIC,
+      tx_id UUID NOT NULL,
+      account TEXT NOT NULL,
+      debit NUMERIC DEFAULT 0,
+      credit NUMERIC DEFAULT 0,
+      description TEXT,
+      reference_id UUID,
       created_at TIMESTAMP DEFAULT NOW()
     );
-
-    ALTER TABLE bi_ledger
-      ALTER COLUMN amount SET NOT NULL;
 
 
     CREATE TABLE IF NOT EXISTS bi_jobs (
@@ -249,6 +250,34 @@ export async function runSchema() {
       created_at TIMESTAMP DEFAULT NOW()
     );
 
+    CREATE OR REPLACE FUNCTION enforce_double_entry()
+    RETURNS TRIGGER AS $$
+    DECLARE
+      total_debit NUMERIC;
+      total_credit NUMERIC;
+    BEGIN
+      SELECT COALESCE(SUM(debit),0),
+             COALESCE(SUM(credit),0)
+      INTO total_debit,total_credit
+      FROM bi_ledger
+      WHERE tx_id = NEW.tx_id;
+
+      IF total_debit != total_credit THEN
+        RAISE EXCEPTION 'Unbalanced transaction %', NEW.tx_id;
+      END IF;
+
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS balance_check ON bi_ledger;
+
+    CREATE CONSTRAINT TRIGGER balance_check
+    AFTER INSERT ON bi_ledger
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW
+    EXECUTE FUNCTION enforce_double_entry();
+
     CREATE OR REPLACE FUNCTION prevent_ledger_delete()
     RETURNS trigger AS $$
     BEGIN
@@ -262,5 +291,19 @@ export async function runSchema() {
     BEFORE DELETE ON bi_ledger
     FOR EACH ROW
     EXECUTE FUNCTION prevent_ledger_delete();
+
+    CREATE OR REPLACE FUNCTION prevent_ledger_update()
+    RETURNS trigger AS $$
+    BEGIN
+      RAISE EXCEPTION 'Ledger rows are immutable';
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS no_update_ledger ON bi_ledger;
+
+    CREATE TRIGGER no_update_ledger
+    BEFORE UPDATE ON bi_ledger
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_ledger_update();
   `);
 }

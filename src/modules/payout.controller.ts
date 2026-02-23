@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { Request, Response } from "express";
 import { pool } from "../db";
 
@@ -45,20 +46,50 @@ export async function createPayoutBatch(_: Request, res: Response) {
 
 export async function markBatchPaid(req: Request, res: Response) {
   const { id } = req.params;
+  const client = await pool.connect();
 
-  await pool.query(
-    `UPDATE bi_payout_batches
-     SET status='paid', paid_at=NOW()
-     WHERE id=$1`,
-    [id]
-  );
+  try {
+    await client.query("BEGIN");
 
-  await pool.query(
-    `UPDATE bi_commission_payables
-     SET status='paid'
-     WHERE payout_batch_id=$1`,
-    [id]
-  );
+    const batchResult = await client.query<{ total_amount: string }>(
+      `UPDATE bi_payout_batches
+       SET status='paid', paid_at=NOW()
+       WHERE id=$1
+       RETURNING total_amount`,
+      [id]
+    );
 
-  res.json({ paid: true });
+    if (batchResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Batch not found" });
+      return;
+    }
+
+    await client.query(
+      `UPDATE bi_commission_payables
+       SET status='paid'
+       WHERE payout_batch_id=$1`,
+      [id]
+    );
+
+    const payoutAmount = Number(batchResult.rows[0].total_amount);
+    const txId = randomUUID();
+
+    await client.query(
+      `INSERT INTO bi_ledger
+       (tx_id, account, debit, credit, description, reference_id)
+       VALUES
+       ($1,'Commission Payable',$2,0,'Commission paid',$3),
+       ($1,'Cash',0,$2,'Commission paid',$3)`,
+      [txId, payoutAmount, id]
+    );
+
+    await client.query("COMMIT");
+    res.json({ paid: true });
+  } catch {
+    await client.query("ROLLBACK");
+    res.status(500).json({ error: "Batch payment failed" });
+  } finally {
+    client.release();
+  }
 }
