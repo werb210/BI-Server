@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { z } from "zod";
 import { Pool } from "pg";
 import cron from "node-cron";
+import nodemailer from "nodemailer";
 
 dotenv.config();
 
@@ -14,6 +15,16 @@ if (!process.env.DATABASE_URL) {
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
+});
+
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT),
+  secure: false,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS
+  }
 });
 
 const app = express();
@@ -81,6 +92,30 @@ app.post("/api/applications", async (req, res) => {
         JSON.stringify(parsed.directors)
       ]
     );
+
+    await transporter.sendMail({
+      from: `"Boreal Insurance" <${process.env.SMTP_USER}>`,
+      to: process.env.ADMIN_EMAIL,
+      subject: "New BI Application Submitted",
+      html: `
+        <h2>New Application</h2>
+        <p>Name: ${parsed.firstName} ${parsed.lastName}</p>
+        <p>Email: ${parsed.email}</p>
+        <p>Loan Amount: $${parsed.loanAmount}</p>
+        <p>Type: ${parsed.securedType}</p>
+      `
+    });
+
+    await transporter.sendMail({
+      from: `"Boreal Insurance" <${process.env.SMTP_USER}>`,
+      to: parsed.email,
+      subject: "Application Received",
+      html: `
+        <h2>Thank You</h2>
+        <p>Your Personal Guarantee Insurance application has been received.</p>
+        <p>We will contact you shortly.</p>
+      `
+    });
 
     res.json({
       success: true,
