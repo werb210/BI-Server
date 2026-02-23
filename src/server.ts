@@ -7,6 +7,7 @@ import morgan from "morgan";
 import { ENV } from "./config/env";
 import { pool } from "./db";
 import intakeRoutes from "./routes/intake";
+import chatRoutes from "./routes/chat";
 
 const app = express();
 const spamThrottle = new Map<string, number>();
@@ -49,6 +50,7 @@ app.use("/api", (req, res, next) => {
 });
 
 app.use("/api", intakeRoutes);
+app.use("/api", chatRoutes);
 
 app.get("/health", (_, res) => {
   res.status(200).json({ status: "ok" });
