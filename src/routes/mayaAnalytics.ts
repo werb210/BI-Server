@@ -16,6 +16,25 @@ const loginLimiter = rateLimit({
   max: 10
 });
 
+function getClientMeta(req: Request) {
+  return {
+    ip: req.ip,
+    userAgent: req.headers["user-agent"] || "unknown"
+  };
+}
+
+async function sendSecurityAlert(
+  subject: string,
+  message: string
+) {
+  await sgMail.send({
+    to: process.env.ADMIN_EMAIL!,
+    from: process.env.SENDGRID_FROM!,
+    subject,
+    html: `<p>${message}</p>`
+  });
+}
+
 function authenticateAdmin(
   req: Request,
   res: Response,
@@ -39,6 +58,7 @@ function authenticateAdmin(
 router.post("/admin-login", loginLimiter, async (req, res) => {
   const { password } = req.body;
   const email = process.env.ADMIN_EMAIL!;
+  const meta = getClientMeta(req);
 
   const security = await pool.query(
     `SELECT * FROM admin_login_security WHERE email=$1`,
@@ -60,8 +80,16 @@ router.post("/admin-login", loginLimiter, async (req, res) => {
     const attempts = (record?.failed_attempts || 0) + 1;
 
     let lockedUntil = null;
+
     if (attempts >= 5) {
       lockedUntil = new Date(Date.now() + 30 * 60 * 1000);
+
+      await sendSecurityAlert(
+        "Admin Account Locked",
+        `Account locked due to repeated failures.<br>
+        IP: ${meta.ip}<br>
+        User-Agent: ${meta.userAgent}`
+      );
     }
 
     await pool.query(
@@ -74,13 +102,12 @@ router.post("/admin-login", loginLimiter, async (req, res) => {
       [email, attempts, lockedUntil]
     );
 
-    // Progressive delay
     await new Promise(r => setTimeout(r, attempts * 1000));
 
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
-  // Reset failures on success
+  // Reset on success
   await pool.query(
     `
     INSERT INTO admin_login_security (email, failed_attempts, locked_until)
@@ -114,6 +141,7 @@ router.post("/admin-login", loginLimiter, async (req, res) => {
 
 router.post("/admin-verify-otp", async (req, res) => {
   const { code } = req.body;
+  const meta = getClientMeta(req);
 
   const result = await pool.query(
     `SELECT * FROM admin_otp_codes
@@ -130,6 +158,13 @@ router.post("/admin-verify-otp", async (req, res) => {
   await pool.query(
     `UPDATE admin_otp_codes SET used=true WHERE id=$1`,
     [result.rows[0].id]
+  );
+
+  await sendSecurityAlert(
+    "Admin Login Successful",
+    `Admin login successful.<br>
+     IP: ${meta.ip}<br>
+     User-Agent: ${meta.userAgent}`
   );
 
   const token = jwt.sign(
