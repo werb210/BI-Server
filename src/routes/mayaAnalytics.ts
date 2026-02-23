@@ -7,16 +7,13 @@ import sgMail from "@sendgrid/mail";
 import crypto from "crypto";
 
 const router = Router();
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
-});
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5
+  max: 10
 });
 
 function authenticateAdmin(
@@ -37,46 +34,85 @@ function authenticateAdmin(
   }
 }
 
-/* ---------------- STEP 1: PASSWORD CHECK ---------------- */
+/* ---------------- LOGIN STEP 1 ---------------- */
 
-router.post(
-  "/admin-login",
-  loginLimiter,
-  async (req: Request, res: Response) => {
-    const { password } = req.body;
+router.post("/admin-login", loginLimiter, async (req, res) => {
+  const { password } = req.body;
+  const email = process.env.ADMIN_EMAIL!;
 
-    const isValid = await bcrypt.compare(
-      password,
-      process.env.ADMIN_PASSWORD_HASH!
-    );
+  const security = await pool.query(
+    `SELECT * FROM admin_login_security WHERE email=$1`,
+    [email]
+  );
 
-    if (!isValid) {
-      return res.status(401).json({ error: "Invalid credentials" });
+  const record = security.rows[0];
+
+  if (record?.locked_until && new Date(record.locked_until) > new Date()) {
+    return res.status(403).json({ error: "Account temporarily locked" });
+  }
+
+  const valid = await bcrypt.compare(
+    password,
+    process.env.ADMIN_PASSWORD_HASH!
+  );
+
+  if (!valid) {
+    const attempts = (record?.failed_attempts || 0) + 1;
+
+    let lockedUntil = null;
+    if (attempts >= 5) {
+      lockedUntil = new Date(Date.now() + 30 * 60 * 1000);
     }
 
-    const code = crypto.randomInt(100000, 999999).toString();
-    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
     await pool.query(
-      `INSERT INTO admin_otp_codes (email, code, expires_at)
-       VALUES ($1, $2, $3)`,
-      [process.env.ADMIN_EMAIL, code, expires]
+      `
+      INSERT INTO admin_login_security (email, failed_attempts, locked_until)
+      VALUES ($1,$2,$3)
+      ON CONFLICT (email)
+      DO UPDATE SET failed_attempts=$2, locked_until=$3, updated_at=NOW()
+      `,
+      [email, attempts, lockedUntil]
     );
 
-    await sgMail.send({
-      to: process.env.ADMIN_EMAIL!,
-      from: process.env.SENDGRID_FROM!,
-      subject: "Your Admin Login Code",
-      html: `<p>Your login code is:</p><h2>${code}</h2><p>Valid for 10 minutes.</p>`
-    });
+    // Progressive delay
+    await new Promise(r => setTimeout(r, attempts * 1000));
 
-    res.json({ step: "otp_required" });
+    return res.status(401).json({ error: "Invalid credentials" });
   }
-);
 
-/* ---------------- STEP 2: VERIFY OTP ---------------- */
+  // Reset failures on success
+  await pool.query(
+    `
+    INSERT INTO admin_login_security (email, failed_attempts, locked_until)
+    VALUES ($1,0,NULL)
+    ON CONFLICT (email)
+    DO UPDATE SET failed_attempts=0, locked_until=NULL, updated_at=NOW()
+    `,
+    [email]
+  );
 
-router.post("/admin-verify-otp", async (req: Request, res: Response) => {
+  const code = crypto.randomInt(100000, 999999).toString();
+  const expires = new Date(Date.now() + 10 * 60 * 1000);
+
+  await pool.query(
+    `INSERT INTO admin_otp_codes (email, code, expires_at)
+     VALUES ($1,$2,$3)`,
+    [email, code, expires]
+  );
+
+  await sgMail.send({
+    to: email,
+    from: process.env.SENDGRID_FROM!,
+    subject: "Your Admin Login Code",
+    html: `<h2>${code}</h2><p>Valid for 10 minutes.</p>`
+  });
+
+  res.json({ step: "otp_required" });
+});
+
+/* ---------------- LOGIN STEP 2 ---------------- */
+
+router.post("/admin-verify-otp", async (req, res) => {
   const { code } = req.body;
 
   const result = await pool.query(
@@ -107,26 +143,17 @@ router.post("/admin-verify-otp", async (req: Request, res: Response) => {
 
 /* ---------------- ANALYTICS ---------------- */
 
-router.get(
-  "/maya-analytics",
-  authenticateAdmin,
-  async (_req, res) => {
-    try {
-      const total = await pool.query(`SELECT COUNT(*) FROM maya_leads`);
-      const today = await pool.query(
-        `SELECT COUNT(*) FROM maya_leads
-         WHERE created_at >= CURRENT_DATE`
-      );
+router.get("/maya-analytics", authenticateAdmin, async (_req, res) => {
+  const total = await pool.query(`SELECT COUNT(*) FROM maya_leads`);
+  const today = await pool.query(
+    `SELECT COUNT(*) FROM maya_leads
+     WHERE created_at >= CURRENT_DATE`
+  );
 
-      res.json({
-        total: Number(total.rows[0].count),
-        today: Number(today.rows[0].count)
-      });
-
-    } catch {
-      res.status(500).json({ error: "Analytics failure" });
-    }
-  }
-);
+  res.json({
+    total: Number(total.rows[0].count),
+    today: Number(today.rows[0].count)
+  });
+});
 
 export default router;
