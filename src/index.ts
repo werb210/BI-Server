@@ -1,13 +1,13 @@
-import express, { NextFunction, Request, Response } from "express";
+import express from "express";
 import cors from "cors";
-import jwt, { JwtPayload } from "jsonwebtoken";
+import jwt from "jsonwebtoken";
 import { Pool } from "pg";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* ================= ENV VALIDATION ================= */
+/* ================= ENV ================= */
 
 const { PORT = 4002, DATABASE_URL, JWT_SECRET = "dev_secret" } = process.env;
 
@@ -37,15 +37,29 @@ async function initDB() {
       loan_type TEXT,
       insured_amount NUMERIC,
       annual_premium NUMERIC,
-      status TEXT DEFAULT 'Pending',
+      status TEXT DEFAULT 'Submitted',
+      referrer_email TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS bi_policies (
+      id SERIAL PRIMARY KEY,
+      application_id INTEGER REFERENCES bi_applications(id),
+      policy_number TEXT,
+      start_date DATE,
+      end_date DATE,
+      status TEXT DEFAULT 'Active',
       created_at TIMESTAMP DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS bi_commissions (
       id SERIAL PRIMARY KEY,
-      application_id INTEGER REFERENCES bi_applications(id),
+      policy_id INTEGER REFERENCES bi_policies(id),
       referrer_email TEXT,
+      year_number INTEGER,
+      premium NUMERIC,
       commission_amount NUMERIC,
+      payout_status TEXT DEFAULT 'pending',
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
@@ -55,38 +69,21 @@ void initDB();
 
 /* ================= AUTH ================= */
 
-type UserToken = {
-  email: string;
-  role: string;
-};
-
-type AuthedRequest = Request & {
-  user?: UserToken;
-};
-
-function authMiddleware(req: AuthedRequest, res: Response, next: NextFunction) {
+function auth(req: any, res: any, next: any) {
   const header = req.headers.authorization;
-  if (!header) {
-    return res.status(401).json({ error: "No token" });
-  }
-
-  const token = header.split(" ")[1];
+  if (!header) return res.status(401).json({ error: "No token" });
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload & UserToken;
-    req.user = { email: decoded.email, role: decoded.role };
+    const token = header.split(" ")[1];
+    req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch {
     res.status(401).json({ error: "Invalid token" });
   }
 }
 
-function roleMiddleware(role: string) {
-  return (req: AuthedRequest, res: Response, next: NextFunction) => {
-    if (!req.user) {
-      return res.status(401).json({ error: "No token" });
-    }
-
+function requireRole(role: string) {
+  return (req: any, res: any, next: any) => {
     if (req.user.role !== role && req.user.role !== "admin") {
       return res.status(403).json({ error: "Forbidden" });
     }
@@ -95,10 +92,10 @@ function roleMiddleware(role: string) {
   };
 }
 
-/* ================= AUTH ROUTE ================= */
+/* ================= LOGIN ================= */
 
-app.post("/bi/auth/login", async (req: Request, res: Response) => {
-  const { email, role } = req.body as { email: string; role: string };
+app.post("/bi/auth/login", async (req, res) => {
+  const { email, role } = req.body;
 
   await pool.query(
     `INSERT INTO bi_users (email, role)
@@ -112,121 +109,129 @@ app.post("/bi/auth/login", async (req: Request, res: Response) => {
   res.json({ token });
 });
 
-/* ================= APPLICATION SUBMISSION ================= */
+/* ================= APPLICATION ================= */
 
-app.post("/bi/applications", async (req: Request, res: Response) => {
-  const {
-    name,
-    email,
-    businessName,
-    loanAmount,
-    loanType,
-    insuredAmount,
-    annualPremium,
-    referrerEmail
-  } = req.body as {
-    name: string;
-    email: string;
-    businessName: string;
-    loanAmount: number;
-    loanType: string;
-    insuredAmount: number;
-    annualPremium: number;
-    referrerEmail?: string;
-  };
+app.post("/bi/applications", async (req, res) => {
+  const { name, email, businessName, loanAmount, loanType, insuredAmount, annualPremium, referrerEmail } =
+    req.body;
 
-  const result = await pool.query<{ id: number }>(
+  const result = await pool.query(
     `INSERT INTO bi_applications
-     (name, email, business_name, loan_amount, loan_type, insured_amount, annual_premium)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     (name,email,business_name,loan_amount,loan_type,insured_amount,annual_premium,referrer_email)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      RETURNING id`,
-    [name, email, businessName, loanAmount, loanType, insuredAmount, annualPremium]
+    [name, email, businessName, loanAmount, loanType, insuredAmount, annualPremium, referrerEmail]
   );
 
-  const appId = result.rows[0].id;
+  res.json({ id: result.rows[0].id });
+});
 
-  if (referrerEmail) {
-    const commission = annualPremium * 0.1;
+/* ================= POLICY ACTIVATION ================= */
+/* Admin or webhook would call this */
 
+app.post("/bi/policies/activate", auth, requireRole("admin"), async (req, res) => {
+  const { applicationId, policyNumber, startDate } = req.body;
+
+  const appData = await pool.query(`SELECT * FROM bi_applications WHERE id = $1`, [applicationId]);
+
+  if (!appData.rows.length) return res.status(404).json({ error: "Application not found" });
+
+  const application = appData.rows[0];
+
+  const parsedStartDate = new Date(startDate);
+  const endDate = new Date(parsedStartDate);
+  endDate.setFullYear(parsedStartDate.getFullYear() + 1);
+
+  const policyResult = await pool.query(
+    `INSERT INTO bi_policies
+     (application_id, policy_number, start_date, end_date)
+     VALUES ($1,$2,$3,$4)
+     RETURNING id`,
+    [applicationId, policyNumber, startDate, endDate]
+  );
+
+  const policyId = policyResult.rows[0].id;
+
+  /* Create year 1 commission */
+  const annualPremium = Number(application.annual_premium || 0);
+  const commission = annualPremium * 0.1;
+
+  if (application.referrer_email) {
     await pool.query(
       `INSERT INTO bi_commissions
-       (application_id, referrer_email, commission_amount)
-       VALUES ($1,$2,$3)`,
-      [appId, referrerEmail, commission]
+       (policy_id, referrer_email, year_number, premium, commission_amount)
+       VALUES ($1,$2,1,$3,$4)`,
+      [policyId, application.referrer_email, annualPremium, commission]
     );
   }
 
-  res.json({ success: true, id: appId });
+  res.json({ success: true, policyId });
 });
 
-/* ================= GET APPLICATIONS ================= */
+/* ================= RENEWAL ================= */
 
-app.get("/bi/applications", authMiddleware, async (req: AuthedRequest, res: Response) => {
-  const { role, email } = req.user as UserToken;
+app.post("/bi/policies/:id/renew", auth, requireRole("admin"), async (req, res) => {
+  const { id } = req.params;
 
-  if (role === "lender" || role === "admin") {
-    const data = await pool.query(`SELECT * FROM bi_applications ORDER BY created_at DESC`);
-    return res.json(data.rows);
-  }
+  const policyData = await pool.query(
+    `SELECT p.*, a.annual_premium, a.referrer_email
+     FROM bi_policies p
+     JOIN bi_applications a ON p.application_id = a.id
+     WHERE p.id = $1`,
+    [id]
+  );
 
-  if (role === "referrer") {
-    const data = await pool.query(
-      `SELECT a.*
-       FROM bi_applications a
-       JOIN bi_commissions c ON a.id = c.application_id
-       WHERE c.referrer_email = $1`,
-      [email]
+  if (!policyData.rows.length) return res.status(404).json({ error: "Policy not found" });
+
+  const policy = policyData.rows[0];
+
+  const yearCount = await pool.query(`SELECT COUNT(*) FROM bi_commissions WHERE policy_id = $1`, [id]);
+
+  const yearNumber = parseInt(yearCount.rows[0].count, 10) + 1;
+  const annualPremium = Number(policy.annual_premium || 0);
+  const commission = annualPremium * 0.1;
+
+  if (policy.referrer_email) {
+    await pool.query(
+      `INSERT INTO bi_commissions
+       (policy_id, referrer_email, year_number, premium, commission_amount)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [id, policy.referrer_email, yearNumber, annualPremium, commission]
     );
-    return res.json(data.rows);
   }
 
-  res.status(403).json({ error: "Unauthorized" });
+  res.json({ renewed: true, yearNumber });
 });
 
-/* ================= COMMISSION ENDPOINT ================= */
+/* ================= REFERRER LEDGER ================= */
 
-app.get(
-  "/bi/commission",
-  authMiddleware,
-  roleMiddleware("referrer"),
-  async (req: AuthedRequest, res: Response) => {
-    const { email } = req.user as UserToken;
+app.get("/bi/commission/ledger", auth, requireRole("referrer"), async (req: any, res) => {
+  const { email } = req.user;
 
-    const data = await pool.query<{ total: string | null }>(
-      `SELECT SUM(commission_amount) as total
-       FROM bi_commissions
-       WHERE referrer_email = $1`,
-      [email]
-    );
+  const data = await pool.query(
+    `SELECT * FROM bi_commissions
+     WHERE referrer_email = $1
+     ORDER BY created_at DESC`,
+    [email]
+  );
 
-    res.json({ total: data.rows[0].total || 0 });
-  }
-);
-
-/* ================= CONTACT ================= */
-
-app.post("/bi/contact", (req: Request, res: Response) => {
-  console.log("Contact message:", req.body);
-  res.json({ success: true });
+  res.json(data.rows);
 });
 
-/* ================= STATUS UPDATE (ADMIN) ================= */
+/* ================= ADMIN DASHBOARD ================= */
 
-app.put(
-  "/bi/applications/:id/status",
-  authMiddleware,
-  roleMiddleware("admin"),
-  async (req: Request, res: Response) => {
-    const { status } = req.body as { status: string };
-    const { id } = req.params;
+app.get("/bi/admin/summary", auth, requireRole("admin"), async (_req, res) => {
+  const totalPremium = await pool.query(`SELECT SUM(annual_premium) FROM bi_applications`);
 
-    await pool.query(`UPDATE bi_applications SET status = $1 WHERE id = $2`, [status, id]);
+  const totalCommission = await pool.query(`SELECT SUM(commission_amount) FROM bi_commissions`);
 
-    res.json({ success: true });
-  }
-);
+  res.json({
+    totalPremium: totalPremium.rows[0].sum || 0,
+    totalCommission: totalCommission.rows[0].sum || 0
+  });
+});
 
-/* ================= START SERVER ================= */
+/* ================= START ================= */
 
 app.listen(PORT, () => {
   console.log(`BI Server running on port ${PORT}`);
