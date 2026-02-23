@@ -116,5 +116,70 @@ export async function runSchema() {
       metadata JSONB,
       created_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS bi_policies (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      application_id UUID REFERENCES bi_applications(id),
+      policy_number TEXT UNIQUE,
+      premium_amount NUMERIC,
+      start_date DATE,
+      end_date DATE,
+      status TEXT CHECK (
+        status IN ('active','cancelled','expired','claim')
+      ) DEFAULT 'active',
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS bi_premium_schedule (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      policy_id UUID REFERENCES bi_policies(id),
+      due_date DATE,
+      premium_amount NUMERIC,
+      paid BOOLEAN DEFAULT false,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS bi_claims (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      policy_id UUID REFERENCES bi_policies(id),
+      claim_amount NUMERIC,
+      claim_status TEXT CHECK (
+        claim_status IN ('submitted','under_review','approved','rejected','paid')
+      ) DEFAULT 'submitted',
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS bi_ledger (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      entity_type TEXT,
+      entity_id UUID,
+      transaction_type TEXT,
+      amount NUMERIC,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    ALTER TABLE bi_ledger
+      ALTER COLUMN amount SET NOT NULL;
+
+    CREATE OR REPLACE FUNCTION prevent_bi_ledger_delete()
+    RETURNS trigger AS $$
+    BEGIN
+      RAISE EXCEPTION 'bi_ledger rows are immutable and cannot be deleted';
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'bi_ledger_no_delete'
+      ) THEN
+        CREATE TRIGGER bi_ledger_no_delete
+        BEFORE DELETE ON bi_ledger
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_bi_ledger_delete();
+      END IF;
+    END $$;
   `);
 }

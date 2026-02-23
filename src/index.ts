@@ -9,6 +9,8 @@ import { updateUnderwritingStatus } from "./modules/underwriting.controller";
 import { purbeckWebhook } from "./modules/webhook.controller";
 import { requireAdmin } from "./middleware/requireAdmin";
 import { pool } from "./db";
+import { submitClaim } from "./modules/claims.controller";
+import { cancelPolicy } from "./modules/cancel.controller";
 
 const app = express();
 
@@ -37,6 +39,7 @@ app.get("/ready", async (_, res) => {
 app.post("/bi/quote", quoteHandler);
 app.post("/bi/application", createApplication);
 app.post("/bi/webhooks/purbeck", purbeckWebhook);
+app.post("/bi/claims", submitClaim);
 
 app.get("/bi/admin/applications", requireAdmin, getApplications);
 app.get("/bi/admin/commissions", requireAdmin, getCommissions);
@@ -45,6 +48,7 @@ app.patch(
   requireAdmin,
   updateUnderwritingStatus
 );
+app.patch("/bi/admin/policy/:id/cancel", requireAdmin, cancelPolicy);
 
 async function start() {
   await runSchema();
