@@ -16,8 +16,10 @@ const loginLimiter = rateLimit({
   max: 10
 });
 
+/* ---------------- ROLE AUTH ---------------- */
+
 function authenticateAdmin(
-  req: Request,
+  req: Request & { admin?: any },
   res: Response,
   next: NextFunction
 ) {
@@ -27,11 +29,29 @@ function authenticateAdmin(
   const token = authHeader.split(" ")[1];
 
   try {
-    jwt.verify(token, process.env.ADMIN_JWT_SECRET!);
+    const decoded = jwt.verify(
+      token,
+      process.env.ADMIN_JWT_SECRET!
+    ) as any;
+
+    req.admin = decoded;
     next();
   } catch {
     return res.status(403).json({ error: "Invalid token" });
   }
+}
+
+function requireRole(roles: string[]) {
+  return (
+    req: Request & { admin?: any },
+    res: Response,
+    next: NextFunction
+  ) => {
+    if (!req.admin || !roles.includes(req.admin.role)) {
+      return res.status(403).json({ error: "Insufficient privileges" });
+    }
+    next();
+  };
 }
 
 /* ---------------- LOGIN STEP 1 ---------------- */
@@ -124,8 +144,13 @@ router.post("/admin-verify-otp", async (req, res) => {
     [result.rows[0].id]
   );
 
+  const user = await pool.query(
+    `SELECT role FROM admin_users WHERE email=$1`,
+    [email]
+  );
+
   const token = jwt.sign(
-    { role: "admin", email },
+    { role: user.rows[0].role, email },
     process.env.ADMIN_JWT_SECRET!,
     { expiresIn: "8h" }
   );
@@ -135,17 +160,36 @@ router.post("/admin-verify-otp", async (req, res) => {
 
 /* ---------------- ANALYTICS ---------------- */
 
-router.get("/maya-analytics", authenticateAdmin, async (_req, res) => {
-  const total = await pool.query(`SELECT COUNT(*) FROM maya_leads`);
-  const today = await pool.query(
-    `SELECT COUNT(*) FROM maya_leads
-     WHERE created_at >= CURRENT_DATE`
-  );
+router.get(
+  "/maya-analytics",
+  authenticateAdmin,
+  requireRole(["super_admin", "admin", "analyst"]),
+  async (_req, res) => {
+    const total = await pool.query(`SELECT COUNT(*) FROM maya_leads`);
+    const today = await pool.query(
+      `SELECT COUNT(*) FROM maya_leads
+       WHERE created_at >= CURRENT_DATE`
+    );
 
-  res.json({
-    total: Number(total.rows[0].count),
-    today: Number(today.rows[0].count)
-  });
-});
+    res.json({
+      total: Number(total.rows[0].count),
+      today: Number(today.rows[0].count)
+    });
+  }
+);
+
+/* ---------------- SUPER ADMIN ONLY ---------------- */
+
+router.get(
+  "/admin-users",
+  authenticateAdmin,
+  requireRole(["super_admin"]),
+  async (_req, res) => {
+    const users = await pool.query(
+      `SELECT id,email,role,is_active FROM admin_users`
+    );
+    res.json(users.rows);
+  }
+);
 
 export default router;
