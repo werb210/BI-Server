@@ -130,6 +130,40 @@ export async function runSchema() {
       created_at TIMESTAMP DEFAULT NOW()
     );
 
+    DO $$
+    DECLARE
+      existing_fk TEXT;
+    BEGIN
+      SELECT conname INTO existing_fk
+      FROM pg_constraint
+      WHERE conrelid = 'bi_policies'::regclass
+        AND contype = 'f'
+        AND conname = 'fk_application';
+
+      IF existing_fk IS NOT NULL THEN
+        ALTER TABLE bi_policies DROP CONSTRAINT fk_application;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'bi_policies'::regclass
+          AND contype = 'f'
+          AND conname = 'fk_application'
+      ) THEN
+        ALTER TABLE bi_policies
+          ADD CONSTRAINT fk_application
+          FOREIGN KEY (application_id)
+          REFERENCES bi_applications(id)
+          ON DELETE RESTRICT;
+      END IF;
+    END $$;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_policies_policy_number
+      ON bi_policies(policy_number);
+
+    CREATE INDEX IF NOT EXISTS idx_policy_status ON bi_policies(status);
+
     CREATE TABLE IF NOT EXISTS bi_premium_schedule (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       policy_id UUID REFERENCES bi_policies(id),
@@ -138,6 +172,8 @@ export async function runSchema() {
       paid BOOLEAN DEFAULT false,
       created_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE INDEX IF NOT EXISTS idx_schedule_due ON bi_premium_schedule(due_date);
 
     CREATE TABLE IF NOT EXISTS bi_claims (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -148,6 +184,8 @@ export async function runSchema() {
       ) DEFAULT 'submitted',
       created_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE INDEX IF NOT EXISTS idx_claim_status ON bi_claims(claim_status);
 
     CREATE TABLE IF NOT EXISTS bi_ledger (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -161,25 +199,23 @@ export async function runSchema() {
     ALTER TABLE bi_ledger
       ALTER COLUMN amount SET NOT NULL;
 
-    CREATE OR REPLACE FUNCTION prevent_bi_ledger_delete()
+    CREATE TABLE IF NOT EXISTS bi_idempotency (
+      id TEXT PRIMARY KEY,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE OR REPLACE FUNCTION prevent_ledger_delete()
     RETURNS trigger AS $$
     BEGIN
-      RAISE EXCEPTION 'bi_ledger rows are immutable and cannot be deleted';
+      RAISE EXCEPTION 'Ledger rows are immutable';
     END;
     $$ LANGUAGE plpgsql;
 
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_trigger
-        WHERE tgname = 'bi_ledger_no_delete'
-      ) THEN
-        CREATE TRIGGER bi_ledger_no_delete
-        BEFORE DELETE ON bi_ledger
-        FOR EACH ROW
-        EXECUTE FUNCTION prevent_bi_ledger_delete();
-      END IF;
-    END $$;
+    DROP TRIGGER IF EXISTS no_delete_ledger ON bi_ledger;
+
+    CREATE TRIGGER no_delete_ledger
+    BEFORE DELETE ON bi_ledger
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_ledger_delete();
   `);
 }
