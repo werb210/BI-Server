@@ -30,10 +30,24 @@ export async function runPremiumAccrual() {
 
     jobId = job.rows[0]?.id;
 
-    const due = await client.query<{ id: string; premium_amount: string }>(
-      `SELECT id, premium_amount
-       FROM bi_premium_schedule
-       WHERE due_date <= NOW() AND paid = false`
+    const due = await client.query<{
+      id: string;
+      policy_id: string;
+      premium_amount: string;
+      referrer_id: string | null;
+      commission_rate: string;
+    }>(
+      `SELECT s.id,
+              s.policy_id,
+              s.premium_amount,
+              l.referrer_id,
+              COALESCE(r.commission_rate, 0) AS commission_rate
+       FROM bi_premium_schedule s
+       LEFT JOIN bi_policies p ON p.id = s.policy_id
+       LEFT JOIN bi_applications a ON a.id = p.application_id
+       LEFT JOIN bi_leads l ON l.id = a.lead_id
+       LEFT JOIN bi_referrers r ON r.id = l.referrer_id
+       WHERE s.due_date <= NOW() AND s.paid = false`
     );
 
     for (const row of due.rows) {
@@ -48,6 +62,24 @@ export async function runPremiumAccrual() {
         `INSERT INTO bi_ledger(entity_type, entity_id, transaction_type, amount)
          VALUES('premium', $1, 'premium_paid', $2)`,
         [row.id, row.premium_amount]
+      );
+
+      const commissionRate = Number(row.commission_rate);
+      const grossPremium = Number(row.premium_amount);
+
+      await client.query(
+        `INSERT INTO bi_commission_payables
+         (policy_id, premium_schedule_id, referrer_id,
+          gross_premium, commission_rate, commission_amount)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [
+          row.policy_id,
+          row.id,
+          row.referrer_id,
+          grossPremium,
+          commissionRate,
+          grossPremium * commissionRate
+        ]
       );
     }
 

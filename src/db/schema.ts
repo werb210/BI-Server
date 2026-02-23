@@ -175,6 +175,33 @@ export async function runSchema() {
 
     CREATE INDEX IF NOT EXISTS idx_schedule_due ON bi_premium_schedule(due_date);
 
+    CREATE TABLE IF NOT EXISTS bi_payout_batches (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      status TEXT CHECK (status IN ('open','closed','paid')) DEFAULT 'open',
+      total_amount NUMERIC DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW(),
+      paid_at TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS bi_commission_payables (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      policy_id UUID REFERENCES bi_policies(id) ON DELETE RESTRICT,
+      premium_schedule_id UUID REFERENCES bi_premium_schedule(id) ON DELETE RESTRICT,
+      referrer_id UUID REFERENCES bi_referrers(id) ON DELETE RESTRICT,
+      gross_premium NUMERIC NOT NULL,
+      commission_rate NUMERIC NOT NULL,
+      commission_amount NUMERIC NOT NULL,
+      status TEXT CHECK (status IN ('earned','batched','paid')) DEFAULT 'earned',
+      payout_batch_id UUID,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_commission_status
+      ON bi_commission_payables(status);
+
+    CREATE INDEX IF NOT EXISTS idx_batch_status
+      ON bi_payout_batches(status);
+
     CREATE TABLE IF NOT EXISTS bi_claims (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       policy_id UUID REFERENCES bi_policies(id),

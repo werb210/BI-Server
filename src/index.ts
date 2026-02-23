@@ -12,6 +12,10 @@ import { pool } from "./db";
 import { submitClaim } from "./modules/claims.controller";
 import { cancelPolicy } from "./modules/cancel.controller";
 import { runPremiumAccrual } from "./worker/accrual.worker";
+import {
+  createPayoutBatch,
+  markBatchPaid
+} from "./modules/payout.controller";
 
 const app = express();
 
@@ -63,6 +67,8 @@ app.patch(
   updateUnderwritingStatus
 );
 app.patch("/bi/admin/policy/:id/cancel", requireAdmin, cancelPolicy);
+app.post("/bi/admin/payout/batch", requireAdmin, createPayoutBatch);
+app.patch("/bi/admin/payout/:id/pay", requireAdmin, markBatchPaid);
 
 setInterval(() => {
   runPremiumAccrual();
