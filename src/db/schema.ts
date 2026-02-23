@@ -15,6 +15,15 @@ export async function runSchema() {
       created_at TIMESTAMP DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS maya_leads (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT,
+      email TEXT,
+      phone TEXT,
+      last_message TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
     ALTER TABLE bi_leads
       ADD COLUMN IF NOT EXISTS channel TEXT DEFAULT 'direct',
       ADD COLUMN IF NOT EXISTS referrer_id UUID,
