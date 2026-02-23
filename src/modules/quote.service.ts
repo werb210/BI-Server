@@ -1,12 +1,10 @@
-export function calculatePremium(
-  guaranteeAmount: number,
-  termMonths: number
-) {
-  const baseRate = 0.02;
+import { getRateStrategy } from "./rate.strategy";
+
+export function calculatePremium(guaranteeAmount: number, termMonths: number) {
+  const baseRate = getRateStrategy(guaranteeAmount, termMonths);
   const termMultiplier = termMonths > 36 ? 1.2 : 1;
 
-  const estimatedPremium =
-    guaranteeAmount * baseRate * termMultiplier;
+  const estimatedPremium = guaranteeAmount * baseRate * termMultiplier;
 
   return {
     estimatedPremium,
