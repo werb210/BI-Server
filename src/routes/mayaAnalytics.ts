@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { Pool } from "pg";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcrypt";
 import rateLimit from "express-rate-limit";
 
 const router = Router();
@@ -9,30 +10,13 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL
 });
 
-/* ---------------- RATE LIMITER ---------------- */
+/* ---------------- RATE LIMIT ---------------- */
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   message: { error: "Too many login attempts. Try again later." }
 });
-
-/* ---------------- IP WHITELIST ---------------- */
-
-function ipWhitelist(req: Request, res: Response, next: NextFunction) {
-  const whitelist = process.env.ADMIN_IP_WHITELIST;
-
-  if (!whitelist) return next();
-
-  const allowed = whitelist.split(",").map((ip) => ip.trim());
-  const clientIp = req.ip || "";
-
-  if (!allowed.includes(clientIp)) {
-    return res.status(403).json({ error: "IP not allowed" });
-  }
-
-  next();
-}
 
 /* ---------------- AUTH ---------------- */
 
@@ -60,12 +44,20 @@ function authenticateAdmin(
 
 router.post(
   "/admin-login",
-  ipWhitelist,
   loginLimiter,
   async (req: Request, res: Response) => {
     const { password } = req.body;
 
-    if (!password || password !== process.env.ADMIN_PASSWORD) {
+    if (!password) {
+      return res.status(400).json({ error: "Password required" });
+    }
+
+    const isValid = await bcrypt.compare(
+      password,
+      process.env.ADMIN_PASSWORD_HASH!
+    );
+
+    if (!isValid) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
@@ -83,7 +75,6 @@ router.post(
 
 router.get(
   "/maya-analytics",
-  ipWhitelist,
   authenticateAdmin,
   async (_req, res) => {
     try {
