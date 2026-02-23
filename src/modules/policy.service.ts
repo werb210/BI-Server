@@ -56,10 +56,15 @@ export async function activatePolicy(
       [applicationId, policyNumber, premium]
     );
 
+    const txId = randomUUID();
+
     await client.query(
-      `INSERT INTO bi_ledger(entity_type, entity_id, transaction_type, amount)
-       VALUES ($1,$2,$3,$4)`,
-      ["policy", policy.rows[0].id, "policy_created", premium]
+      `INSERT INTO bi_ledger
+       (tx_id, account, debit, credit, description, reference_id)
+       VALUES
+       ($1,'Premium Receivable',$2,0,'Policy created',$3),
+       ($1,'Premium Revenue',0,$2,'Policy created',$3)`,
+      [txId, premium, policy.rows[0].id]
     );
 
     await client.query("COMMIT");
