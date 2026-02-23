@@ -9,35 +9,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* ================= ENV VALIDATION ================= */
-
-const requiredEnv = ["DATABASE_URL", "JWT_SECRET"];
-requiredEnv.forEach((key) => {
-  if (!process.env[key]) {
-    console.error(`${key} missing`);
-    process.exit(1);
-  }
-});
-
 const PORT = process.env.PORT || 4002;
 const DATABASE_URL = process.env.DATABASE_URL!;
 const JWT_SECRET = process.env.JWT_SECRET!;
 const PURBECK_WEBHOOK_SECRET = process.env.PURBECK_WEBHOOK_SECRET || "";
 
-/* ================= DB ================= */
+if (!DATABASE_URL || !JWT_SECRET) {
+  console.error("Missing environment variables");
+  process.exit(1);
+}
 
 const pool = new Pool({ connectionString: DATABASE_URL });
 
-/* ================= RATE LIMIT ================= */
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
 
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 500
-  })
-);
-
-/* ================= DB BOOTSTRAP ================= */
+/* ================= BOOTSTRAP ================= */
 
 async function bootstrap() {
   await pool.query(`
@@ -63,16 +49,20 @@ async function bootstrap() {
       start_date DATE,
       end_date DATE,
       annual_premium NUMERIC,
-      commission NUMERIC,
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
 
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS bi_audit_logs (
+    CREATE TABLE IF NOT EXISTS bi_commission_ledger (
       id SERIAL PRIMARY KEY,
-      action TEXT,
-      payload JSONB,
+      policy_id INTEGER REFERENCES bi_policies(id),
+      referrer_email TEXT,
+      period_start DATE,
+      period_end DATE,
+      premium NUMERIC,
+      commission NUMERIC,
+      paid BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
@@ -95,8 +85,7 @@ function auth(req: any, res: any, next: any) {
   if (!header) return res.status(401).json({ error: "No token" });
 
   try {
-    const token = header.split(" ")[1];
-    req.user = jwt.verify(token, JWT_SECRET);
+    req.user = jwt.verify(header.split(" ")[1], JWT_SECRET);
     next();
   } catch {
     res.status(401).json({ error: "Invalid token" });
@@ -111,26 +100,17 @@ function requireRole(role: string) {
   };
 }
 
-/* ================= IDEMPOTENCY ================= */
+/* ================= LOGIN ================= */
 
-async function checkIdempotency(key: string, endpoint: string) {
-  const exists = await pool.query(
-    `SELECT id FROM bi_idempotency WHERE idempotency_key=$1`,
-    [key]
-  );
+app.post("/bi/auth/login", (req, res) => {
+  const { email, role } = req.body;
+  const token = jwt.sign({ email, role }, JWT_SECRET, {
+    expiresIn: "8h"
+  });
+  res.json({ token });
+});
 
-  if (exists.rows.length) return false;
-
-  await pool.query(
-    `INSERT INTO bi_idempotency (idempotency_key, endpoint)
-     VALUES ($1,$2)`,
-    [key, endpoint]
-  );
-
-  return true;
-}
-
-/* ================= SCHEMAS ================= */
+/* ================= APPLICATION ================= */
 
 const ApplicationSchema = z.object({
   name: z.string(),
@@ -142,28 +122,6 @@ const ApplicationSchema = z.object({
   annualPremium: z.number(),
   referrerEmail: z.string().optional().nullable()
 });
-
-const ActivateSchema = z.object({
-  applicationId: z.number(),
-  policyNumber: z.string(),
-  startDate: z.string()
-});
-
-/* ================= LOGIN ================= */
-
-app.post("/bi/auth/login", (req, res) => {
-  const { email, role } = req.body;
-
-  const token = jwt.sign(
-    { email, role },
-    JWT_SECRET,
-    { expiresIn: "8h" }
-  );
-
-  res.json({ token });
-});
-
-/* ================= APPLICATION ================= */
 
 app.post("/bi/applications", async (req, res) => {
   try {
@@ -186,102 +144,99 @@ app.post("/bi/applications", async (req, res) => {
 
     res.json({ success: true });
   } catch (err: any) {
-    res.status(400).json({ error: err.errors || "Invalid payload" });
+    res.status(400).json({ error: err.errors });
   }
 });
 
 /* ================= ACTIVATE POLICY ================= */
 
 app.post("/bi/policies/activate", auth, requireRole("admin"), async (req, res) => {
-  const idempotencyKey = req.headers["x-idempotency-key"] as string;
-  if (!idempotencyKey)
-    return res.status(400).json({ error: "Missing idempotency key" });
+  const { applicationId, policyNumber, startDate } = req.body;
 
-  const allowed = await checkIdempotency(idempotencyKey, "activate");
-  if (!allowed)
-    return res.status(409).json({ error: "Duplicate request" });
+  const appData = await pool.query(
+    `SELECT * FROM bi_applications WHERE id=$1`,
+    [applicationId]
+  );
 
-  try {
-    const data = ActivateSchema.parse(req.body);
+  if (!appData.rows.length)
+    return res.status(404).json({ error: "Application not found" });
 
-    const appData = await pool.query(
-      `SELECT * FROM bi_applications WHERE id=$1`,
-      [data.applicationId]
-    );
+  const annualPremium = parseFloat(appData.rows[0].annual_premium);
+  const commission = annualPremium * 0.10;
+  const referrer = appData.rows[0].referrer_email;
 
-    if (!appData.rows.length)
-      return res.status(404).json({ error: "Application not found" });
+  const policy = await pool.query(`
+    INSERT INTO bi_policies
+    (application_id,policy_number,start_date,end_date,annual_premium)
+    VALUES ($1,$2,$3,$4,$5)
+    RETURNING *
+  `, [
+    applicationId,
+    policyNumber,
+    startDate,
+    new Date(new Date(startDate).setFullYear(new Date(startDate).getFullYear() + 1)),
+    annualPremium
+  ]);
 
-    const annualPremium = parseFloat(appData.rows[0].annual_premium);
-    const commission = annualPremium * 0.10;
-
+  if (referrer) {
     await pool.query(`
-      INSERT INTO bi_policies
-      (application_id,policy_number,start_date,end_date,annual_premium,commission)
+      INSERT INTO bi_commission_ledger
+      (policy_id,referrer_email,period_start,period_end,premium,commission)
       VALUES ($1,$2,$3,$4,$5,$6)
     `, [
-      data.applicationId,
-      data.policyNumber,
-      data.startDate,
-      new Date(new Date(data.startDate).setFullYear(new Date(data.startDate).getFullYear() + 1)),
+      policy.rows[0].id,
+      referrer,
+      policy.rows[0].start_date,
+      policy.rows[0].end_date,
       annualPremium,
       commission
     ]);
-
-    res.json({ activated: true });
-  } catch (err: any) {
-    res.status(400).json({ error: err.errors || "Invalid payload" });
   }
+
+  res.json({ activated: true });
 });
 
-/* ================= LIST POLICIES ================= */
+/* ================= REPORTING ================= */
 
-app.get("/bi/policies", auth, async (req: any, res) => {
-  const { role, email } = req.user;
+app.get("/bi/reports/summary", auth, requireRole("admin"), async (req, res) => {
+  const totals = await pool.query(`
+    SELECT 
+      SUM(annual_premium) as total_premium,
+      SUM(commission) as total_commission
+    FROM bi_commission_ledger
+  `);
 
-  if (role === "admin" || role === "lender") {
-    const data = await pool.query(`SELECT * FROM bi_policies`);
-    return res.json(data.rows);
-  }
-
-  if (role === "referrer") {
-    const data = await pool.query(`
-      SELECT p.*
-      FROM bi_policies p
-      JOIN bi_applications a ON p.application_id=a.id
-      WHERE a.referrer_email=$1
-    `, [email]);
-
-    return res.json(data.rows);
-  }
-
-  res.status(403).json({ error: "Unauthorized" });
+  res.json(totals.rows[0]);
 });
 
-/* ================= WEBHOOK ================= */
+app.get("/bi/reports/referrers", auth, requireRole("admin"), async (req, res) => {
+  const data = await pool.query(`
+    SELECT referrer_email,
+           SUM(commission) as total_commission,
+           SUM(CASE WHEN paid=false THEN commission ELSE 0 END) as unpaid
+    FROM bi_commission_ledger
+    GROUP BY referrer_email
+  `);
 
-app.post("/bi/webhook/purbec", async (req, res) => {
-  if (req.headers["x-purbec-secret"] !== PURBECK_WEBHOOK_SECRET)
-    return res.status(403).json({ error: "Unauthorized" });
+  res.json(data.rows);
+});
 
-  const idempotencyKey = req.headers["x-idempotency-key"] as string;
-  if (!idempotencyKey)
-    return res.status(400).json({ error: "Missing idempotency key" });
+/* ================= PAY COMMISSION ================= */
 
-  const allowed = await checkIdempotency(idempotencyKey, "webhook");
-  if (!allowed)
-    return res.status(409).json({ error: "Duplicate webhook" });
+app.post("/bi/commission/pay", auth, requireRole("admin"), async (req, res) => {
+  const { referrer_email } = req.body;
 
   await pool.query(`
-    INSERT INTO bi_audit_logs (action,payload)
-    VALUES ($1,$2)
-  `, ["purbec_webhook", req.body]);
+    UPDATE bi_commission_ledger
+    SET paid=true
+    WHERE referrer_email=$1
+  `, [referrer_email]);
 
-  res.json({ received: true });
+  res.json({ paid: true });
 });
 
 /* ================= START ================= */
 
 app.listen(PORT, () => {
-  console.log(`BI Server running on port ${PORT}`);
+  console.log(`BI Server running on ${PORT}`);
 });
