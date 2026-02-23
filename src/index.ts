@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit";
+import bcrypt from "bcrypt";
 import { Pool } from "pg";
 import { z } from "zod";
 
@@ -12,10 +13,9 @@ app.use(express.json());
 const PORT = process.env.PORT || 4002;
 const DATABASE_URL = process.env.DATABASE_URL!;
 const JWT_SECRET = process.env.JWT_SECRET!;
-const PURBECK_WEBHOOK_SECRET = process.env.PURBECK_WEBHOOK_SECRET || "";
 
 if (!DATABASE_URL || !JWT_SECRET) {
-  console.error("Missing environment variables");
+  console.error("Missing env");
   process.exit(1);
 }
 
@@ -26,6 +26,16 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
 /* ================= BOOTSTRAP ================= */
 
 async function bootstrap() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bi_users (
+      id SERIAL PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('admin','lender','referrer')),
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS bi_applications (
       id SERIAL PRIMARY KEY,
@@ -66,15 +76,6 @@ async function bootstrap() {
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS bi_idempotency (
-      id SERIAL PRIMARY KEY,
-      idempotency_key TEXT UNIQUE,
-      endpoint TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-  `);
 }
 bootstrap();
 
@@ -85,7 +86,8 @@ function auth(req: any, res: any, next: any) {
   if (!header) return res.status(401).json({ error: "No token" });
 
   try {
-    req.user = jwt.verify(header.split(" ")[1], JWT_SECRET);
+    const token = header.split(" ")[1];
+    req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch {
     res.status(401).json({ error: "Invalid token" });
@@ -100,13 +102,53 @@ function requireRole(role: string) {
   };
 }
 
+/* ================= REGISTER (ADMIN ONLY) ================= */
+
+app.post("/bi/users/create", auth, requireRole("admin"), async (req, res) => {
+  const { email, password, role } = req.body;
+
+  const hash = await bcrypt.hash(password, 10);
+
+  try {
+    await pool.query(
+      `INSERT INTO bi_users (email,password_hash,role)
+       VALUES ($1,$2,$3)`,
+      [email, hash, role]
+    );
+
+    res.json({ created: true });
+  } catch {
+    res.status(400).json({ error: "User exists" });
+  }
+});
+
 /* ================= LOGIN ================= */
 
-app.post("/bi/auth/login", (req, res) => {
-  const { email, role } = req.body;
-  const token = jwt.sign({ email, role }, JWT_SECRET, {
-    expiresIn: "8h"
-  });
+app.post("/bi/auth/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  const user = await pool.query(
+    `SELECT * FROM bi_users WHERE email=$1`,
+    [email]
+  );
+
+  if (!user.rows.length)
+    return res.status(401).json({ error: "Invalid credentials" });
+
+  const valid = await bcrypt.compare(
+    password,
+    user.rows[0].password_hash
+  );
+
+  if (!valid)
+    return res.status(401).json({ error: "Invalid credentials" });
+
+  const token = jwt.sign(
+    { email: user.rows[0].email, role: user.rows[0].role },
+    JWT_SECRET,
+    { expiresIn: "8h" }
+  );
+
   res.json({ token });
 });
 
@@ -148,91 +190,17 @@ app.post("/bi/applications", async (req, res) => {
   }
 });
 
-/* ================= ACTIVATE POLICY ================= */
-
-app.post("/bi/policies/activate", auth, requireRole("admin"), async (req, res) => {
-  const { applicationId, policyNumber, startDate } = req.body;
-
-  const appData = await pool.query(
-    `SELECT * FROM bi_applications WHERE id=$1`,
-    [applicationId]
-  );
-
-  if (!appData.rows.length)
-    return res.status(404).json({ error: "Application not found" });
-
-  const annualPremium = parseFloat(appData.rows[0].annual_premium);
-  const commission = annualPremium * 0.10;
-  const referrer = appData.rows[0].referrer_email;
-
-  const policy = await pool.query(`
-    INSERT INTO bi_policies
-    (application_id,policy_number,start_date,end_date,annual_premium)
-    VALUES ($1,$2,$3,$4,$5)
-    RETURNING *
-  `, [
-    applicationId,
-    policyNumber,
-    startDate,
-    new Date(new Date(startDate).setFullYear(new Date(startDate).getFullYear() + 1)),
-    annualPremium
-  ]);
-
-  if (referrer) {
-    await pool.query(`
-      INSERT INTO bi_commission_ledger
-      (policy_id,referrer_email,period_start,period_end,premium,commission)
-      VALUES ($1,$2,$3,$4,$5,$6)
-    `, [
-      policy.rows[0].id,
-      referrer,
-      policy.rows[0].start_date,
-      policy.rows[0].end_date,
-      annualPremium,
-      commission
-    ]);
-  }
-
-  res.json({ activated: true });
-});
-
-/* ================= REPORTING ================= */
+/* ================= REPORTS ================= */
 
 app.get("/bi/reports/summary", auth, requireRole("admin"), async (req, res) => {
   const totals = await pool.query(`
     SELECT 
-      SUM(annual_premium) as total_premium,
+      SUM(premium) as total_premium,
       SUM(commission) as total_commission
     FROM bi_commission_ledger
   `);
 
   res.json(totals.rows[0]);
-});
-
-app.get("/bi/reports/referrers", auth, requireRole("admin"), async (req, res) => {
-  const data = await pool.query(`
-    SELECT referrer_email,
-           SUM(commission) as total_commission,
-           SUM(CASE WHEN paid=false THEN commission ELSE 0 END) as unpaid
-    FROM bi_commission_ledger
-    GROUP BY referrer_email
-  `);
-
-  res.json(data.rows);
-});
-
-/* ================= PAY COMMISSION ================= */
-
-app.post("/bi/commission/pay", auth, requireRole("admin"), async (req, res) => {
-  const { referrer_email } = req.body;
-
-  await pool.query(`
-    UPDATE bi_commission_ledger
-    SET paid=true
-    WHERE referrer_email=$1
-  `, [referrer_email]);
-
-  res.json({ paid: true });
 });
 
 /* ================= START ================= */
