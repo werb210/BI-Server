@@ -1,34 +1,41 @@
 import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
+import rateLimit from "express-rate-limit";
 import { Pool } from "pg";
-import sgMail from "@sendgrid/mail";
+import { z } from "zod";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* ================= ENV ================= */
+/* ================= ENV VALIDATION ================= */
 
-const {
-  PORT = 4002,
-  DATABASE_URL,
-  JWT_SECRET = "dev_secret",
-  PURBECK_WEBHOOK_SECRET = "purbec_secret",
-  SENDGRID_API_KEY,
-  FROM_EMAIL = "no-reply@boreal.financial"
-} = process.env;
+const requiredEnv = ["DATABASE_URL", "JWT_SECRET"];
+requiredEnv.forEach((key) => {
+  if (!process.env[key]) {
+    console.error(`${key} missing`);
+    process.exit(1);
+  }
+});
 
-if (!DATABASE_URL) {
-  console.error("DATABASE_URL missing");
-  process.exit(1);
-}
+const PORT = process.env.PORT || 4002;
+const DATABASE_URL = process.env.DATABASE_URL!;
+const JWT_SECRET = process.env.JWT_SECRET!;
+const PURBECK_WEBHOOK_SECRET = process.env.PURBECK_WEBHOOK_SECRET || "";
 
-if (SENDGRID_API_KEY) {
-  sgMail.setApiKey(SENDGRID_API_KEY);
-}
+/* ================= DB SINGLETON ================= */
 
 const pool = new Pool({ connectionString: DATABASE_URL });
+
+/* ================= RATE LIMIT ================= */
+
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 300
+  })
+);
 
 /* ================= AUTH ================= */
 
@@ -53,116 +60,180 @@ function requireRole(role: string) {
   };
 }
 
-/* ================= EMAIL ================= */
+/* ================= IDEMPOTENCY TABLE ================= */
 
-async function sendEmail(to: string, subject: string, text: string) {
-  if (!SENDGRID_API_KEY) return;
-
-  await sgMail.send({
-    to,
-    from: FROM_EMAIL,
-    subject,
-    text
-  });
-}
-
-/* ================= RENEWAL ENGINE ================= */
-
-async function autoRenewPolicies() {
-  const expiring = await pool.query(`
-    SELECT p.*, a.annual_premium, a.referrer_email, a.email
-    FROM bi_policies p
-    JOIN bi_applications a ON p.application_id = a.id
-    WHERE p.status='Active'
-    AND p.end_date <= NOW()
+async function ensureIdempotencyTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bi_idempotency (
+      id SERIAL PRIMARY KEY,
+      idempotency_key TEXT UNIQUE,
+      endpoint TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
   `);
+}
+ensureIdempotencyTable();
 
-  for (const policy of expiring.rows) {
-    const yearCount = await pool.query(
-      `SELECT COUNT(*) FROM bi_commissions WHERE policy_id=$1`,
-      [policy.id]
-    );
+async function checkIdempotency(key: string, endpoint: string) {
+  const exists = await pool.query(
+    `SELECT id FROM bi_idempotency WHERE idempotency_key=$1`,
+    [key]
+  );
 
-    const yearNumber = parseInt(yearCount.rows[0].count) + 1;
+  if (exists.rows.length) return false;
 
-    const commission = policy.annual_premium * 0.10;
+  await pool.query(
+    `INSERT INTO bi_idempotency (idempotency_key, endpoint)
+     VALUES ($1,$2)`,
+    [key, endpoint]
+  );
 
-    if (policy.referrer_email) {
-      await pool.query(`
-        INSERT INTO bi_commissions
-        (policy_id, referrer_email, year_number, premium, commission_amount)
-        VALUES ($1,$2,$3,$4,$5)
-      `, [policy.id, policy.referrer_email, yearNumber, policy.annual_premium, commission]);
-    }
-
-    await pool.query(`
-      UPDATE bi_policies
-      SET start_date = NOW(),
-          end_date = NOW() + INTERVAL '1 year'
-      WHERE id=$1
-    `, [policy.id]);
-
-    await sendEmail(
-      policy.email,
-      "Policy Renewed",
-      "Your Personal Guarantee Insurance policy has been automatically renewed."
-    );
-  }
+  return true;
 }
 
-/* Run daily */
-setInterval(autoRenewPolicies, 24 * 60 * 60 * 1000);
+/* ================= ZOD SCHEMAS ================= */
 
-/* ================= REMINDER ENGINE ================= */
+const ApplicationSchema = z.object({
+  name: z.string().min(2),
+  email: z.string().email(),
+  businessName: z.string().min(2),
+  loanAmount: z.number().positive(),
+  loanType: z.enum(["Secured", "Unsecured"]),
+  insuredAmount: z.number(),
+  annualPremium: z.number(),
+  referrerEmail: z.string().optional().nullable()
+});
 
-async function sendRenewalReminders() {
-  const reminders = await pool.query(`
-    SELECT p.*, a.email
-    FROM bi_policies p
-    JOIN bi_applications a ON p.application_id = a.id
-    WHERE p.status='Active'
-    AND p.end_date <= NOW() + INTERVAL '30 days'
-  `);
+const PolicyActivateSchema = z.object({
+  applicationId: z.number(),
+  policyNumber: z.string(),
+  startDate: z.string()
+});
 
-  for (const policy of reminders.rows) {
-    await sendEmail(
-      policy.email,
-      "Policy Expiring Soon",
-      "Your Personal Guarantee Insurance policy expires within 30 days."
+/* ================= APPLICATION ================= */
+
+app.post("/bi/applications", async (req, res) => {
+  try {
+    const data = ApplicationSchema.parse(req.body);
+
+    await pool.query(
+      `
+      INSERT INTO bi_applications
+      (name,email,business_name,loan_amount,loan_type,insured_amount,annual_premium,referrer_email)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    `,
+      [
+        data.name,
+        data.email,
+        data.businessName,
+        data.loanAmount,
+        data.loanType,
+        data.insuredAmount,
+        data.annualPremium,
+        data.referrerEmail
+      ]
     );
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(400).json({ error: err.errors || "Invalid payload" });
   }
-}
+});
 
-setInterval(sendRenewalReminders, 24 * 60 * 60 * 1000);
+/* ================= POLICY ACTIVATE (IDEMPOTENT) ================= */
 
-/* ================= PURBECK WEBHOOK ================= */
+app.post("/bi/policies/activate", auth, requireRole("admin"), async (req, res) => {
+  const idempotencyKey = req.headers["x-idempotency-key"] as string;
+
+  if (!idempotencyKey)
+    return res.status(400).json({ error: "Missing idempotency key" });
+
+  const allowed = await checkIdempotency(idempotencyKey, "activate");
+  if (!allowed) return res.status(409).json({ error: "Duplicate request" });
+
+  try {
+    const data = PolicyActivateSchema.parse(req.body);
+
+    const appData = await pool.query(`SELECT * FROM bi_applications WHERE id=$1`, [
+      data.applicationId
+    ]);
+
+    if (!appData.rows.length)
+      return res.status(404).json({ error: "Application not found" });
+
+    await pool.query(
+      `
+      INSERT INTO bi_policies
+      (application_id, policy_number, start_date, end_date)
+      VALUES ($1,$2,$3,$4)
+    `,
+      [
+        data.applicationId,
+        data.policyNumber,
+        data.startDate,
+        new Date(
+          new Date(data.startDate).setFullYear(
+            new Date(data.startDate).getFullYear() + 1
+          )
+        )
+      ]
+    );
+
+    res.json({ activated: true });
+  } catch (err: any) {
+    res.status(400).json({ error: err.errors || "Invalid payload" });
+  }
+});
+
+/* ================= WEBHOOK (IDEMPOTENT) ================= */
 
 app.post("/bi/webhook/purbec", async (req, res) => {
   if (req.headers["x-purbec-secret"] !== PURBECK_WEBHOOK_SECRET)
     return res.status(403).json({ error: "Unauthorized" });
 
-  const { applicationId, policyNumber, startDate } = req.body;
+  const idempotencyKey = req.headers["x-idempotency-key"] as string;
+  if (!idempotencyKey)
+    return res.status(400).json({ error: "Missing idempotency key" });
 
-  const appData = await pool.query(
-    `SELECT * FROM bi_applications WHERE id=$1`,
-    [applicationId]
+  const allowed = await checkIdempotency(idempotencyKey, "webhook");
+  if (!allowed) return res.status(409).json({ error: "Duplicate webhook" });
+
+  await pool.query(
+    `
+    INSERT INTO bi_audit_logs (action, payload)
+    VALUES ($1,$2)
+  `,
+    ["purbec_webhook", req.body]
   );
 
-  if (!appData.rows.length)
-    return res.status(404).json({ error: "Application not found" });
+  res.json({ received: true });
+});
 
-  await pool.query(`
-    INSERT INTO bi_policies
-    (application_id, policy_number, start_date, end_date)
-    VALUES ($1,$2,$3,$4)
-  `, [
-    applicationId,
-    policyNumber,
-    startDate,
-    new Date(new Date(startDate).setFullYear(new Date(startDate).getFullYear() + 1))
-  ]);
+/* ================= POLICY LIST (ROLE ENFORCED) ================= */
 
-  res.json({ activated: true });
+app.get("/bi/policies", auth, async (req: any, res) => {
+  const { role, email } = req.user;
+
+  if (role === "admin" || role === "lender") {
+    const data = await pool.query(`SELECT * FROM bi_policies`);
+    return res.json(data.rows);
+  }
+
+  if (role === "referrer") {
+    const data = await pool.query(
+      `
+      SELECT p.*
+      FROM bi_policies p
+      JOIN bi_applications a ON p.application_id=a.id
+      WHERE a.referrer_email=$1
+    `,
+      [email]
+    );
+
+    return res.json(data.rows);
+  }
+
+  res.status(403).json({ error: "Unauthorized" });
 });
 
 /* ================= START ================= */
