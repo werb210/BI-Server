@@ -11,6 +11,7 @@ import biDocumentRoutes from "./routes/biDocumentRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biReferrerRoutes from "./routes/biReferrerRoutes";
+import biReportRoutes from "./routes/biReportRoutes";
 
 const app = express();
 app.use(cors());
@@ -35,6 +36,7 @@ app.use("/api/bi", biDocumentRoutes);
 app.use("/api/bi", biCrmRoutes);
 app.use("/api/bi", biCommissionRoutes);
 app.use("/api/bi", biReferrerRoutes);
+app.use("/api/bi", biReportRoutes);
 
 /* ================= BOOTSTRAP ================= */
 
