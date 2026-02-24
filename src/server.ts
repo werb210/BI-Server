@@ -11,6 +11,7 @@ import chatRoutes from "./routes/chat";
 import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
 import biRoutes from "./routes/biRoutes";
 import biAuthRoutes from "./routes/biAuthRoutes";
+import biApplicationRoutes from "./routes/biApplicationRoutes";
 import { startPurgeJob } from "./jobs/purgeJob";
 
 const app = express();
@@ -58,6 +59,7 @@ app.use("/api", chatRoutes);
 app.use("/api", mayaAnalyticsRoutes);
 app.use("/api", biRoutes);
 app.use("/api/bi", biAuthRoutes);
+app.use("/api/bi", biApplicationRoutes);
 
 app.get("/health", (_, res) => {
   res.status(200).json({ status: "ok" });
