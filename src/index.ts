@@ -7,6 +7,9 @@ import { Pool } from "pg";
 import { z } from "zod";
 import mayaAnalytics from "./routes/mayaAnalytics";
 import biApplicationRoutes from "./routes/biApplicationRoutes";
+import biDocumentRoutes from "./routes/biDocumentRoutes";
+import biCrmRoutes from "./routes/biCrmRoutes";
+import biCommissionRoutes from "./routes/biCommissionRoutes";
 
 const app = express();
 app.use(cors());
@@ -27,6 +30,9 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
 
 app.use("/api", mayaAnalytics);
 app.use("/api/bi", biApplicationRoutes);
+app.use("/api/bi", biDocumentRoutes);
+app.use("/api/bi", biCrmRoutes);
+app.use("/api/bi", biCommissionRoutes);
 
 /* ================= BOOTSTRAP ================= */
 
