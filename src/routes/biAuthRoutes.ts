@@ -61,47 +61,98 @@ router.post("/otp/verify", async (req, res) => {
 });
 
 router.post("/application/draft", async (req, res) => {
-  const { phone, data } = req.body;
+  const { phone, data, createdBy } = req.body;
 
-  if (!phone) {
-    return res.status(400).json({ error: "Phone required" });
-  }
+  let createdByActor = "applicant";
+  let createdByLenderId = null;
 
-  try {
-    const existing = await pool.query(
-      `SELECT * FROM bi_applications
-       WHERE applicant_phone_e164=$1
-       AND stage='new_application'
-       LIMIT 1`,
+  // If created by lender
+  if (createdBy === "lender") {
+    // find lender user
+    const lenderUser = await pool.query(
+      `SELECT id FROM bi_users WHERE phone_e164=$1 AND user_type='lender'`,
       [phone]
     );
 
-    if (existing.rows.length === 0) {
-      const created = await pool.query(
-        `INSERT INTO bi_applications
-         (created_by_actor,applicant_phone_e164,data)
-         VALUES('applicant',$1,$2)
-         RETURNING *`,
-        [phone, data ?? {}]
-      );
-
-      return res.json(created.rows[0]);
+    if (lenderUser.rows.length === 0) {
+      return res.status(403).json({ error: "Lender not found" });
     }
 
-    const updated = await pool.query(
-      `UPDATE bi_applications
-       SET data=$2,
-           updated_at=NOW()
-       WHERE id=$1
-       RETURNING *`,
-      [existing.rows[0].id, data ?? {}]
-    );
+    const lender = await pool.query(`SELECT id FROM bi_lenders WHERE user_id=$1`, [lenderUser.rows[0].id]);
 
-    return res.json(updated.rows[0]);
-  } catch (error) {
-    console.error("Draft upsert failed", error);
-    return res.status(500).json({ error: "Failed to save draft" });
+    if (lender.rows.length === 0) {
+      return res.status(403).json({ error: "Lender profile not found" });
+    }
+
+    createdByActor = "lender";
+    createdByLenderId = lender.rows[0].id;
   }
+
+  // Create company record (if client provided name)
+  let companyId = null;
+  if (data.client_name) {
+    const companyInsert = await pool.query(
+      `
+      INSERT INTO bi_companies(legal_name)
+      VALUES($1)
+      RETURNING id
+      `,
+      [data.client_name]
+    );
+    companyId = companyInsert.rows[0].id;
+  }
+
+  // Create contact
+  let contactId = null;
+  if (data.client_name) {
+    const contactInsert = await pool.query(
+      `
+      INSERT INTO bi_contacts(full_name,phone_e164,company_id)
+      VALUES($1,$2,$3)
+      RETURNING id
+      `,
+      [data.client_name, data.client_phone || phone, companyId]
+    );
+    contactId = contactInsert.rows[0].id;
+  }
+
+  // Calculate premium immediately if loanAmount exists
+  let premiumSnapshot = {};
+  if (data.loanAmount && data.facilityType) {
+    const { calculatePremium: calculateDraftPremium } = await import("../services/premiumService");
+    premiumSnapshot = calculateDraftPremium({
+      loanAmount: data.loanAmount,
+      facilityType: data.facilityType,
+    });
+  }
+
+  const created = await pool.query(
+    `
+    INSERT INTO bi_applications
+    (
+      created_by_actor,
+      created_by_lender_id,
+      applicant_phone_e164,
+      company_id,
+      primary_contact_id,
+      data,
+      premium_calc
+    )
+    VALUES($1,$2,$3,$4,$5,$6,$7)
+    RETURNING *
+    `,
+    [createdByActor, createdByLenderId, data.client_phone || phone, companyId, contactId, data, premiumSnapshot]
+  );
+
+  await pool.query(
+    `
+    INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
+    VALUES($1,$2,'application_created',$3)
+    `,
+    [created.rows[0].id, createdByActor, `Application created by ${createdByActor}`]
+  );
+
+  res.json(created.rows[0]);
 });
 
 router.post("/application/submit", async (req, res) => {
@@ -122,6 +173,15 @@ router.post("/application/submit", async (req, res) => {
            updated_at=NOW()
        WHERE id=$1`,
       [applicationId, bankruptcy || false, premium]
+    );
+
+    await pool.query(
+      `
+      INSERT INTO bi_commissions(application_id,annual_premium_amount,commission_amount,status)
+      VALUES($1,$2,$3,'estimated')
+      ON CONFLICT (application_id) DO NOTHING
+      `,
+      [applicationId, premium.annualPremium, premium.annualPremium * 0.1]
     );
 
     await pool.query(

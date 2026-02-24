@@ -51,35 +51,38 @@ router.get("/application/by-phone", async (req, res) => {
 router.get("/lender/applications", async (req, res) => {
   const { lenderUserId } = req.query;
 
-  if (!lenderUserId) {
-    return res.status(400).json({ error: "Missing lenderUserId" });
-  }
+  const lenderUser = await pool.query(
+    `SELECT id FROM bi_users WHERE phone_e164=$1 AND user_type='lender'`,
+    [lenderUserId]
+  );
 
-  const lenderResult = await pool.query(`SELECT id FROM bi_lenders WHERE user_id=$1`, [lenderUserId]);
-
-  if (lenderResult.rows.length === 0) {
+  if (lenderUser.rows.length === 0) {
     return res.json([]);
   }
 
-  const lenderId = lenderResult.rows[0].id;
+  const lender = await pool.query(`SELECT id FROM bi_lenders WHERE user_id=$1`, [lenderUser.rows[0].id]);
+
+  if (lender.rows.length === 0) {
+    return res.json([]);
+  }
 
   const apps = await pool.query(
     `
-    SELECT
+    SELECT 
       a.id,
       a.stage,
-      a.premium_calc,
       a.bankruptcy_flag,
+      a.premium_calc,
       c.full_name AS primary_contact_name
     FROM bi_applications a
     LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
     WHERE a.created_by_lender_id=$1
     ORDER BY a.created_at DESC
     `,
-    [lenderId]
+    [lender.rows[0].id]
   );
 
-  return res.json(apps.rows);
+  res.json(apps.rows);
 });
 
 router.get("/applications/:id/activity", async (req, res) => {
