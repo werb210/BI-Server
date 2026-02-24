@@ -2,10 +2,11 @@ import compression from "compression";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
 import morgan from "morgan";
 import { ENV } from "./config/env";
 import { pool } from "./db";
+import { enforceBIPrefix } from "./middleware/biIsolation";
+import { biRateLimiter } from "./middleware/biRateLimit";
 import intakeRoutes from "./routes/intake";
 import chatRoutes from "./routes/chat";
 import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
@@ -20,18 +21,6 @@ const spamThrottle = new Map<string, number>();
 app.use(helmet());
 app.use(compression());
 app.use(express.json({ limit: "10mb" }));
-app.use(
-  cors({
-    origin: ENV.CORS_ORIGIN,
-    credentials: true
-  })
-);
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 200
-  })
-);
 
 if (ENV.NODE_ENV !== "production") {
   app.use(morgan("dev"));
@@ -57,9 +46,23 @@ app.use("/api", (req, res, next) => {
 app.use("/api", intakeRoutes);
 app.use("/api", chatRoutes);
 app.use("/api", mayaAnalyticsRoutes);
-app.use("/api", biRoutes);
-app.use("/api/bi", biAuthRoutes);
-app.use("/api/bi", biApplicationRoutes);
+
+/* =========================
+   BI SILO ROUTES
+========================= */
+
+app.use(
+  "/api/bi",
+  cors({
+    origin: process.env.BI_WEBSITE_ORIGIN || "http://localhost:5173",
+    credentials: true,
+  }),
+  biRateLimiter,
+  enforceBIPrefix,
+  biRoutes,
+  biAuthRoutes,
+  biApplicationRoutes
+);
 
 app.get("/health", (_, res) => {
   res.status(200).json({ status: "ok" });
