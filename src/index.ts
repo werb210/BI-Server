@@ -10,6 +10,7 @@ import biApplicationRoutes from "./routes/biApplicationRoutes";
 import biDocumentRoutes from "./routes/biDocumentRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
+import biReferrerRoutes from "./routes/biReferrerRoutes";
 
 const app = express();
 app.use(cors());
@@ -33,6 +34,7 @@ app.use("/api/bi", biApplicationRoutes);
 app.use("/api/bi", biDocumentRoutes);
 app.use("/api/bi", biCrmRoutes);
 app.use("/api/bi", biCommissionRoutes);
+app.use("/api/bi", biReferrerRoutes);
 
 /* ================= BOOTSTRAP ================= */
 
