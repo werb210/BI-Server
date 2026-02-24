@@ -13,6 +13,7 @@ import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
 import biRoutes from "./routes/biRoutes";
 import biAuthRoutes from "./routes/biAuthRoutes";
 import biApplicationRoutes from "./routes/biApplicationRoutes";
+import biEventsRoutes from "./routes/biEvents";
 import { startPurgeJob } from "./jobs/purgeJob";
 
 const app = express();
@@ -61,7 +62,8 @@ app.use(
   enforceBIPrefix,
   biRoutes,
   biAuthRoutes,
-  biApplicationRoutes
+  biApplicationRoutes,
+  biEventsRoutes
 );
 
 app.get("/health", (_, res) => {
