@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import { Pool } from "pg";
 import { z } from "zod";
 import mayaAnalytics from "./routes/mayaAnalytics";
+import biApplicationRoutes from "./routes/biApplicationRoutes";
 
 const app = express();
 app.use(cors());
@@ -25,6 +26,7 @@ const pool = new Pool({ connectionString: DATABASE_URL });
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
 
 app.use("/api", mayaAnalytics);
+app.use("/api/bi", biApplicationRoutes);
 
 /* ================= BOOTSTRAP ================= */
 

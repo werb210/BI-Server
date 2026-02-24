@@ -124,6 +124,24 @@ router.post("/application/submit", async (req, res) => {
       [applicationId, bankruptcy || false, premium]
     );
 
+    await pool.query(
+      `
+      INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
+      VALUES($1,'applicant','application_submitted','Application submitted and moved to Documents Pending')
+    `,
+      [applicationId]
+    );
+
+    if (bankruptcy) {
+      await pool.query(
+        `
+        INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
+        VALUES($1,'system','red_flag','Bankruptcy flag triggered')
+      `,
+        [applicationId]
+      );
+    }
+
     return res.json({ success: true, premium });
   } catch (error) {
     console.error("Application submit failed", error);
