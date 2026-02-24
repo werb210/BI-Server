@@ -21,6 +21,33 @@ router.get("/applications", async (_req, res) => {
 });
 
 /* =========================
+   GET APPLICATION DETAIL
+========================= */
+router.get("/applications/:id", async (req, res) => {
+  const { id } = req.params;
+
+  const result = await pool.query(
+    `
+    SELECT
+      a.*,
+      c.full_name AS primary_contact_name,
+      co.legal_name AS company_name
+    FROM bi_applications a
+    LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
+    LEFT JOIN bi_companies co ON co.id = a.company_id
+    WHERE a.id=$1
+    `,
+    [id]
+  );
+
+  if (result.rows.length === 0) {
+    return res.status(404).json({ error: "Not found" });
+  }
+
+  return res.json(result.rows[0]);
+});
+
+/* =========================
    GET APPLICATION BY PHONE (RESUME)
 ========================= */
 router.get("/application/by-phone", async (req, res) => {
@@ -99,6 +126,30 @@ router.get("/applications/:id/activity", async (req, res) => {
   );
 
   return res.json(result.rows);
+});
+
+/* =========================
+   GET APPLICATION DOCUMENTS
+========================= */
+router.get("/applications/:id/documents", async (req, res) => {
+  const { id } = req.params;
+
+  const docs = await pool.query(
+    `
+    SELECT id,
+           original_filename,
+           mime_type,
+           bytes,
+           created_at
+    FROM bi_documents
+    WHERE application_id=$1
+      AND purged_at IS NULL
+    ORDER BY created_at DESC
+    `,
+    [id]
+  );
+
+  return res.json(docs.rows);
 });
 
 router.post("/applications/:id/stage", async (req, res) => {

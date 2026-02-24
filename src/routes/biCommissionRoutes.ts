@@ -18,6 +18,29 @@ router.get("/commissions", async (_req, res) => {
   res.json(result.rows);
 });
 
+
+/* =========================
+   GET COMMISSION BY APPLICATION
+========================= */
+router.get("/commissions/by-application/:applicationId", async (req, res) => {
+  const { applicationId } = req.params;
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM bi_commissions
+    WHERE application_id=$1
+    `,
+    [applicationId]
+  );
+
+  if (result.rows.length === 0) {
+    return res.json(null);
+  }
+
+  return res.json(result.rows[0]);
+});
+
 /* =========================
    MARK PREMIUM RECEIVED
 ========================= */
