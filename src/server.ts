@@ -10,6 +10,8 @@ import intakeRoutes from "./routes/intake";
 import chatRoutes from "./routes/chat";
 import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
 import biRoutes from "./routes/biRoutes";
+import biAuthRoutes from "./routes/biAuthRoutes";
+import { startPurgeJob } from "./jobs/purgeJob";
 
 const app = express();
 const spamThrottle = new Map<string, number>();
@@ -55,6 +57,7 @@ app.use("/api", intakeRoutes);
 app.use("/api", chatRoutes);
 app.use("/api", mayaAnalyticsRoutes);
 app.use("/api", biRoutes);
+app.use("/api/bi", biAuthRoutes);
 
 app.get("/health", (_, res) => {
   res.status(200).json({ status: "ok" });
@@ -127,6 +130,7 @@ async function bootstrap() {
 
 bootstrap()
   .then(() => {
+    startPurgeJob();
     app.listen(ENV.PORT, () => {
       console.log(`BI-Server running on port ${ENV.PORT}`);
     });
