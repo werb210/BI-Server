@@ -22,7 +22,7 @@ export const ENV = {
   TWILIO_FROM: requireEnv("TWILIO_FROM"),
   TWILIO_VERIFY_SERVICE_SID: requireEnv("TWILIO_VERIFY_SERVICE_SID"),
   ALERT_SMS_TO: requireEnv("ALERT_SMS_TO"),
-  SENDGRID_API_KEY: requireEnv("SENDGRID_API_KEY"),
-  SENDGRID_FROM: requireEnv("SENDGRID_FROM"),
+  SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || "",
+  SENDGRID_FROM: process.env.SENDGRID_FROM || "",
   PURGE_BUFFER_DAYS: Number(process.env.PURGE_BUFFER_DAYS || "30")
 };
