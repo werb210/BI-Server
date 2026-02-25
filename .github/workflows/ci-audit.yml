@@ -1,0 +1,84 @@
+name: CI Audit
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.11.1'
+          cache: 'npm'
+
+      - name: Verify Node Version
+        run: node -v
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Run Lint (if exists)
+        run: |
+          if npm run | grep -q "lint"; then
+            npm run lint
+          else
+            echo "No lint script found"
+          fi
+
+      - name: Run TypeScript Check (if exists)
+        run: |
+          if npm run | grep -q "typecheck"; then
+            npm run typecheck
+          elif [ -f "tsconfig.json" ]; then
+            npx tsc --noEmit
+          else
+            echo "No TypeScript config found"
+          fi
+
+      - name: Run Build (if exists)
+        run: |
+          if npm run | grep -q "build"; then
+            npm run build
+          else
+            echo "No build script found"
+          fi
+
+      - name: Run Tests (if exists)
+        run: |
+          if npm run | grep -q "test"; then
+            npm test -- --verbose || npm test
+          else
+            echo "No test script found"
+          fi
+
+      - name: Run npm audit
+        run: npm audit --json > audit.json || true
+
+      - name: Generate Report
+        run: |
+          echo "Node version: $(node -v)" > report.txt
+          echo "" >> report.txt
+          echo "Dependency Audit:" >> report.txt
+          if [ -f audit.json ]; then
+            cat audit.json >> report.txt
+          else
+            echo "No audit data" >> report.txt
+          fi
+
+      - name: Upload Report Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-audit-report
+          path: |
+            report.txt
+            audit.json
