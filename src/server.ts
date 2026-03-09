@@ -1,5 +1,6 @@
 import compression from "compression";
 import cors from "cors";
+import { startPremiumAccrualJob } from "./jobs/premiumAccrualJob";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -8,6 +9,11 @@ import { ENV } from "./config/env";
 import { pool, runMigrations } from "./db";
 import { enforceBIPrefix } from "./middleware/biIsolation";
 import { biRateLimiter } from "./middleware/biRateLimit";
+
+import biPolicyRoutes from "./routes/biPolicyRoutes";
+import biPayoutRoutes from "./routes/biPayoutRoutes";
+import biUnderwritingRoutes from "./routes/biUnderwritingRoutes";
+
 import biApplicationRoutes from "./routes/biApplicationRoutes";
 import biAuthRoutes from "./routes/biAuthRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
@@ -74,6 +80,9 @@ app.use("/api/bi/commissions", biCommissionRoutes);
 app.use("/api/bi/crm", biCrmRoutes);
 app.use("/api/bi/referrers", biReferrerRoutes);
 app.use("/api/bi/reports", biReportRoutes);
+app.use("/api/bi/policies", biPolicyRoutes);
+app.use("/api/bi/payouts", biPayoutRoutes);
+app.use("/api/bi/underwriting", biUnderwritingRoutes);
 
 app.get("/health", (_, res) => {
   res.status(200).json({ status: "ok" });
@@ -144,7 +153,7 @@ async function bootstrap() {
   `);
 
   await pool.query(`ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB`);
-}
+  startPremiumAccrualJob();
 
   app.listen(ENV.PORT, () => {
     console.log(`BI-Server running on port ${ENV.PORT}`);
