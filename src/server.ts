@@ -1,6 +1,14 @@
 import compression from "compression";
 import cors from "cors";
 import { startPremiumAccrualJob } from "./jobs/premiumAccrualJob";
+
+import swaggerUi from "swagger-ui-express";
+import { openApiSpec } from "./docs/openapi";
+import { httpLogger } from "./utils/httpLogger";
+import healthRoutes from "./routes/healthRoutes";
+import { errorHandler } from "./middleware/errorHandler";
+
+import rateLimit from "express-rate-limit";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -30,11 +38,22 @@ import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
 validateEnv();
 
 const app = express();
+app.use(httpLogger);
+
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100
+});
+
+app.use(limiter);
+
 const spamThrottle = new Map<string, number>();
 
 app.use(helmet());
 app.use(compression());
 app.use(express.json({ limit: "10mb" }));
+app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
+app.use(healthRoutes);
 
 if (ENV.NODE_ENV !== "production") {
   app.use(morgan("dev"));
@@ -83,10 +102,6 @@ app.use("/api/bi/reports", biReportRoutes);
 app.use("/api/bi/policies", biPolicyRoutes);
 app.use("/api/bi/payouts", biPayoutRoutes);
 app.use("/api/bi/underwriting", biUnderwritingRoutes);
-
-app.get("/health", (_, res) => {
-  res.status(200).json({ status: "ok" });
-});
 
 async function bootstrap() {
   await runMigrations(ENV.DATABASE_URL);
@@ -164,3 +179,5 @@ bootstrap().catch((error) => {
   console.error("Failed to bootstrap server", error);
   process.exit(1);
 });
+
+app.use(errorHandler);
