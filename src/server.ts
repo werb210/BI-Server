@@ -3,18 +3,26 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
+import { validateEnv } from "./config/validateEnv";
 import { ENV } from "./config/env";
-import { pool } from "./db";
+import { runMigrations } from "./db/runMigrations";
+import { startPurgeJob } from "./jobs/purgeJob";
 import { enforceBIPrefix } from "./middleware/biIsolation";
 import { biRateLimiter } from "./middleware/biRateLimit";
-import intakeRoutes from "./routes/intake";
-import chatRoutes from "./routes/chat";
-import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
-import biRoutes from "./routes/biRoutes";
-import biAuthRoutes from "./routes/biAuthRoutes";
 import biApplicationRoutes from "./routes/biApplicationRoutes";
+import biAuthRoutes from "./routes/biAuthRoutes";
+import biCommissionRoutes from "./routes/biCommissionRoutes";
+import biCrmRoutes from "./routes/biCrmRoutes";
+import biDocumentRoutes from "./routes/biDocumentRoutes";
 import biEventsRoutes from "./routes/biEvents";
-import { startPurgeJob } from "./jobs/purgeJob";
+import biReferrerRoutes from "./routes/biReferrerRoutes";
+import biReportRoutes from "./routes/biReportRoutes";
+import biRoutes from "./routes/biRoutes";
+import chatRoutes from "./routes/chat";
+import intakeRoutes from "./routes/intake";
+import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
+
+validateEnv();
 
 const app = express();
 const spamThrottle = new Map<string, number>();
@@ -48,10 +56,6 @@ app.use("/api", intakeRoutes);
 app.use("/api", chatRoutes);
 app.use("/api", mayaAnalyticsRoutes);
 
-/* =========================
-   BI SILO ROUTES
-========================= */
-
 app.use(
   "/api/bi",
   cors({
@@ -66,83 +70,31 @@ app.use(
   biEventsRoutes
 );
 
+app.use("/api/bi/documents", biDocumentRoutes);
+app.use("/api/bi/commissions", biCommissionRoutes);
+app.use("/api/bi/crm", biCrmRoutes);
+app.use("/api/bi/referrers", biReferrerRoutes);
+app.use("/api/bi/reports", biReportRoutes);
+
 app.get("/health", (_, res) => {
   res.status(200).json({ status: "ok" });
 });
 
 async function bootstrap() {
-  await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) {
+    throw new Error("DATABASE_URL not set");
+  }
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS contact_leads (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      company TEXT,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL,
-      phone TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
+  await runMigrations(dbUrl);
+  startPurgeJob();
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS referrers (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      company TEXT NOT NULL,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL,
-      phone TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS referrals (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      referrer_id UUID REFERENCES referrers(id),
-      company TEXT NOT NULL,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL,
-      phone TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS lenders (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      email TEXT UNIQUE NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS lender_uploads (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      lender_id UUID REFERENCES lenders(id),
-      filename TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS pgi_applications (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      data JSONB,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB`);
+  app.listen(ENV.PORT, () => {
+    console.log(`BI-Server running on port ${ENV.PORT}`);
+  });
 }
 
-bootstrap()
-  .then(() => {
-    startPurgeJob();
-    app.listen(ENV.PORT, () => {
-      console.log(`BI-Server running on port ${ENV.PORT}`);
-    });
-  })
-  .catch((error) => {
-    console.error("Failed to bootstrap server", error);
-    process.exit(1);
-  });
+bootstrap().catch((error) => {
+  console.error("Failed to bootstrap server", error);
+  process.exit(1);
+});
