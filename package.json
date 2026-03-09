@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn src/server.ts",
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
@@ -27,6 +28,7 @@
     "multer": "^2.0.2",
     "node-cron": "^4.2.1",
     "node-fetch": "^2.7.0",
+    "node-pg-migrate": "^8.0.4",
     "nodemailer": "^8.0.1",
     "openai": "^6.23.0",
     "pg": "^8.11.5",
