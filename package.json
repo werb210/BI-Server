@@ -27,6 +27,7 @@
     "multer": "^2.0.2",
     "node-cron": "^4.2.1",
     "node-fetch": "^2.7.0",
+    "node-pg-migrate": "^8.0.4",
     "nodemailer": "^8.0.1",
     "openai": "^6.23.0",
     "pg": "^8.11.5",

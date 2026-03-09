@@ -4,7 +4,7 @@ import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
 import { ENV } from "./config/env";
-import { pool } from "./db";
+import { pool, runMigrations } from "./db";
 import { enforceBIPrefix } from "./middleware/biIsolation";
 import { biRateLimiter } from "./middleware/biRateLimit";
 import intakeRoutes from "./routes/intake";
@@ -71,6 +71,8 @@ app.get("/health", (_, res) => {
 });
 
 async function bootstrap() {
+  await runMigrations(ENV.DATABASE_URL);
+
   await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
 
   await pool.query(`
