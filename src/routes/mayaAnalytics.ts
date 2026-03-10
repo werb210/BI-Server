@@ -5,11 +5,12 @@ import bcrypt from "bcrypt";
 import rateLimit from "express-rate-limit";
 import sgMail from "@sendgrid/mail";
 import crypto from "crypto";
+import { env } from "../platform/env";
 
 const router = Router();
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({ connectionString: env.DATABASE_URL });
 
-sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
+sgMail.setApiKey(env.SENDGRID_API_KEY);
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -31,7 +32,7 @@ function authenticateAdmin(
   try {
     const decoded = jwt.verify(
       token,
-      process.env.ADMIN_JWT_SECRET!
+      env.ADMIN_JWT_SECRET
     ) as any;
 
     req.admin = decoded;
@@ -112,7 +113,7 @@ router.post("/admin-login", loginLimiter, async (req, res) => {
 
   await sgMail.send({
     to: email,
-    from: process.env.SENDGRID_FROM!,
+    from: env.SENDGRID_FROM,
     subject: "Your Admin Login Code",
     html: `<h2>${code}</h2><p>Valid for 10 minutes.</p>`
   });
@@ -151,7 +152,7 @@ router.post("/admin-verify-otp", async (req, res) => {
 
   const token = jwt.sign(
     { role: user.rows[0].role, email },
-    process.env.ADMIN_JWT_SECRET!,
+    env.ADMIN_JWT_SECRET,
     { expiresIn: "8h" }
   );
 

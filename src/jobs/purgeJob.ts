@@ -1,7 +1,8 @@
 import cron from "node-cron";
 import { pool } from "../db";
+import { env } from "../platform/env";
 
-const bufferDays = Number(process.env.PURGE_BUFFER_DAYS || 30);
+const bufferDays = Number(env.PURGE_BUFFER_DAYS || "30");
 
 export function startPurgeJob() {
   cron.schedule("0 3 * * *", async () => {

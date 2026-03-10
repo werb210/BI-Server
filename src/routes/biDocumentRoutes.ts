@@ -3,9 +3,10 @@ import multer from "multer";
 import { Pool } from "pg";
 import path from "path";
 import fs from "fs";
+import { env } from "../platform/env";
 
 const router = Router();
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({ connectionString: env.DATABASE_URL });
 
 const uploadDir = path.join(__dirname, "../../uploads/bi");
 

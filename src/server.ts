@@ -1,43 +1,46 @@
 import compression from "compression";
 import cors from "cors";
-import { startPremiumAccrualJob } from "./jobs/premiumAccrualJob";
-
-import swaggerUi from "swagger-ui-express";
-import { openApiSpec } from "./docs/openapi";
-import { httpLogger } from "./utils/httpLogger";
-import healthRoutes from "./routes/healthRoutes";
-import { errorHandler } from "./middleware/errorHandler";
-
 import rateLimit from "express-rate-limit";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import { validateEnv } from "./config/validateEnv";
-import { ENV } from "./config/env";
+import swaggerUi from "swagger-ui-express";
+
+import { openApiSpec } from "./docs/openapi";
 import { pool, runMigrations } from "./db";
-import { enforceBIPrefix } from "./middleware/biIsolation";
+import { startPremiumAccrualJob } from "./jobs/premiumAccrualJob";
 import { biRateLimiter } from "./middleware/biRateLimit";
-
-import biPolicyRoutes from "./routes/biPolicyRoutes";
-import biPayoutRoutes from "./routes/biPayoutRoutes";
-import biUnderwritingRoutes from "./routes/biUnderwritingRoutes";
-
+import { enforceBIPrefix } from "./middleware/biIsolation";
 import biApplicationRoutes from "./routes/biApplicationRoutes";
 import biAuthRoutes from "./routes/biAuthRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
 import biDocumentRoutes from "./routes/biDocumentRoutes";
 import biEventsRoutes from "./routes/biEvents";
+import biPayoutRoutes from "./routes/biPayoutRoutes";
+import biPolicyRoutes from "./routes/biPolicyRoutes";
 import biReferrerRoutes from "./routes/biReferrerRoutes";
 import biReportRoutes from "./routes/biReportRoutes";
 import biRoutes from "./routes/biRoutes";
+import biUnderwritingRoutes from "./routes/biUnderwritingRoutes";
 import chatRoutes from "./routes/chat";
 import intakeRoutes from "./routes/intake";
 import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
-
-validateEnv();
+import { requireAuth } from "./platform/auth";
+import { env } from "./platform/env";
+import { errorHandler } from "./platform/errorHandler";
+import healthRoutes from "./platform/healthRoutes";
+import { idempotency } from "./platform/idempotency";
+import { logger } from "./platform/logger";
+import metricsRoutes from "./platform/metricsRoutes";
+import { requestId } from "./platform/requestId";
+import { httpLogger } from "./utils/httpLogger";
 
 const app = express();
+
+app.use(requestId);
+app.use(idempotency);
+app.use(express.json({ limit: "10mb" }));
 app.use(httpLogger);
 
 const limiter = rateLimit({
@@ -51,11 +54,11 @@ const spamThrottle = new Map<string, number>();
 
 app.use(helmet());
 app.use(compression());
-app.use(express.json({ limit: "10mb" }));
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
-app.use(healthRoutes);
+app.use("/health", healthRoutes);
+app.use(metricsRoutes);
 
-if (ENV.NODE_ENV !== "production") {
+if (env.NODE_ENV !== "production") {
   app.use(morgan("dev"));
 }
 
@@ -83,8 +86,8 @@ app.use("/api", mayaAnalyticsRoutes);
 app.use(
   "/api/bi",
   cors({
-    origin: process.env.BI_WEBSITE_ORIGIN || "http://localhost:5173",
-    credentials: true,
+    origin: env.BI_WEBSITE_ORIGIN,
+    credentials: true
   }),
   biRateLimiter,
   enforceBIPrefix,
@@ -94,17 +97,19 @@ app.use(
   biEventsRoutes
 );
 
-app.use("/api/bi/documents", biDocumentRoutes);
-app.use("/api/bi/commissions", biCommissionRoutes);
-app.use("/api/bi/crm", biCrmRoutes);
-app.use("/api/bi/referrers", biReferrerRoutes);
-app.use("/api/bi/reports", biReportRoutes);
-app.use("/api/bi/policies", biPolicyRoutes);
-app.use("/api/bi/payouts", biPayoutRoutes);
-app.use("/api/bi/underwriting", biUnderwritingRoutes);
+app.use("/api/bi/documents", requireAuth, biDocumentRoutes);
+app.use("/api/bi/commissions", requireAuth, biCommissionRoutes);
+app.use("/api/bi/crm", requireAuth, biCrmRoutes);
+app.use("/api/bi/referrers", requireAuth, biReferrerRoutes);
+app.use("/api/bi/reports", requireAuth, biReportRoutes);
+app.use("/api/bi/policies", requireAuth, biPolicyRoutes);
+app.use("/api/bi/payouts", requireAuth, biPayoutRoutes);
+app.use("/api/bi/underwriting", requireAuth, biUnderwritingRoutes);
+
+app.use(errorHandler);
 
 async function bootstrap() {
-  await runMigrations(ENV.DATABASE_URL);
+  await runMigrations(env.DATABASE_URL);
 
   await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
 
@@ -167,17 +172,15 @@ async function bootstrap() {
     )
   `);
 
-  await pool.query(`ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB`);
+  await pool.query("ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB");
   startPremiumAccrualJob();
 
-  app.listen(ENV.PORT, () => {
-    console.log(`BI-Server running on port ${ENV.PORT}`);
+  app.listen(Number(env.PORT), () => {
+    logger.info(`BI-Server running on port ${env.PORT}`);
   });
 }
 
 bootstrap().catch((error) => {
-  console.error("Failed to bootstrap server", error);
+  logger.error({ err: error }, "Failed to bootstrap server");
   process.exit(1);
 });
-
-app.use(errorHandler);

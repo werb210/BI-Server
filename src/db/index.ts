@@ -1,13 +1,13 @@
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { Pool } from "pg";
-import { ENV } from "../config/env";
+import { env } from "../platform/env";
 
 const execFileAsync = promisify(execFile);
 
 export const pool = new Pool({
-  connectionString: ENV.DATABASE_URL,
-  ssl: ENV.NODE_ENV === "production" ? { rejectUnauthorized: false } : false
+  connectionString: env.DATABASE_URL,
+  ssl: env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false
 });
 
 export async function runMigrations(databaseUrl: string): Promise<void> {
@@ -20,7 +20,6 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
       "src/db/migrations",
       "--database-url",
       databaseUrl
-    ],
-    { env: process.env }
+    ]
   );
 }
