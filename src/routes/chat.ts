@@ -4,23 +4,24 @@ import { Pool } from "pg";
 import twilio from "twilio";
 import sgMail from "@sendgrid/mail";
 import fetch from "node-fetch";
+import { env } from "../platform/env";
 
 const router = Router();
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: env.OPENAI_API_KEY
 });
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
+  connectionString: env.DATABASE_URL
 });
 
 const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID!,
-  process.env.TWILIO_AUTH_TOKEN!
+  env.TWILIO_ACCOUNT_SID,
+  env.TWILIO_AUTH_TOKEN
 );
 
-sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
+sgMail.setApiKey(env.SENDGRID_API_KEY);
 
 function extractEmail(text: string): string | null {
   const match = text.match(
@@ -58,7 +59,7 @@ router.post("/maya-chat", async (req, res) => {
 
       // CRM Webhook
       try {
-        await fetch(process.env.CRM_WEBHOOK_URL!, {
+        await fetch(env.CRM_WEBHOOK_URL || "", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -86,14 +87,14 @@ router.post("/maya-chat", async (req, res) => {
       // SMS Alert
       await twilioClient.messages.create({
         body: `New Maya Lead: ${email}`,
-        from: process.env.TWILIO_FROM!,
-        to: process.env.ALERT_SMS_TO!
+        from: env.TWILIO_FROM,
+        to: env.ALERT_SMS_TO
       });
 
       // Confirmation Email
       await sgMail.send({
         to: email,
-        from: process.env.SENDGRID_FROM!,
+        from: env.SENDGRID_FROM,
         subject: "We Received Your PGI Inquiry",
         html: `
           <p>Thanks for contacting Boreal Insurance.</p>

@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { Pool } from "pg";
+import { env } from "../platform/env";
 
 const router = Router();
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({ connectionString: env.DATABASE_URL });
 
 /* =========================
    LOAD REFERRER PROFILE
