@@ -2,6 +2,8 @@ import { Router } from "express";
 import { Pool } from "pg";
 import { env } from "../platform/env";
 
+import { badRequest, ok } from "../utils/apiResponse";
+
 const router = Router();
 const db = new Pool({ connectionString: env.DATABASE_URL });
 
@@ -13,7 +15,7 @@ router.get("/", async (_req, res) => {
     ORDER BY created_at DESC
   `);
 
-  res.json(result.rows);
+  ok(res, result.rows);
 
 });
 
@@ -28,7 +30,7 @@ router.post("/:id/premium-received", async (req, res) => {
     [id]
   );
 
-  res.json({ success: true });
+  ok(res, { success: true });
 
 });
 

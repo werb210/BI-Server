@@ -2,6 +2,7 @@ import { Router } from "express";
 import sgMail from "@sendgrid/mail";
 import { pool } from "../db";
 import { ENV } from "../config/env";
+import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
 
@@ -12,7 +13,7 @@ router.post("/contact", async (req, res) => {
     const { company, name, email, phone } = req.body;
 
     if (!name || !email || !phone) {
-      return res.status(400).json({ error: "Missing required fields" });
+      return badRequest(res, "Missing required fields");
     }
 
     await pool.query(
@@ -21,10 +22,10 @@ router.post("/contact", async (req, res) => {
       [company ?? null, name, email, phone]
     );
 
-    return res.json({ success: true });
+    return ok(res, { success: true });
   } catch (error) {
     console.error("Failed to submit contact lead", error);
-    return res.status(500).json({ error: "Server error" });
+    return badRequest(res, "Server error");
   }
 });
 
@@ -35,7 +36,7 @@ router.post("/referrals", async (req, res) => {
     const { referrer, referrals } = req.body;
 
     if (!referrer || !Array.isArray(referrals) || referrals.length === 0) {
-      return res.status(400).json({ error: "Invalid payload" });
+      return badRequest(res, "Invalid payload");
     }
 
     await client.query("BEGIN");
@@ -59,11 +60,11 @@ router.post("/referrals", async (req, res) => {
 
     await client.query("COMMIT");
 
-    return res.json({ success: true });
+    return ok(res, { success: true });
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("Failed to submit referrals", error);
-    return res.status(500).json({ error: "Server error" });
+    return badRequest(res, "Server error");
   } finally {
     client.release();
   }
@@ -74,7 +75,7 @@ router.post("/lender-login", async (req, res) => {
     const { email } = req.body;
 
     if (!email) {
-      return res.status(400).json({ error: "Email required" });
+      return badRequest(res, "Email required");
     }
 
     let lender = await pool.query(`SELECT * FROM lenders WHERE email=$1`, [email]);
@@ -83,10 +84,10 @@ router.post("/lender-login", async (req, res) => {
       lender = await pool.query(`INSERT INTO lenders(email) VALUES($1) RETURNING *`, [email]);
     }
 
-    return res.json({ success: true, lender: lender.rows[0] });
+    return ok(res, { success: true, lender: lender.rows[0] });
   } catch (error) {
     console.error("Failed lender login", error);
-    return res.status(500).json({ error: "Server error" });
+    return badRequest(res, "Server error");
   }
 });
 
@@ -95,7 +96,7 @@ router.post("/pgi-application", async (req, res) => {
     const data = req.body;
 
     if (!data.personal || !data.loan) {
-      return res.status(400).json({ error: "Invalid application" });
+      return badRequest(res, "Invalid application");
     }
 
     try {
@@ -123,10 +124,10 @@ router.post("/pgi-application", async (req, res) => {
       html: `<h2>Application Received</h2><p>Thank you ${data.personal.firstName}, your application has been submitted.</p>`
     });
 
-    return res.json({ success: true });
+    return ok(res, { success: true });
   } catch (error) {
     console.error("Failed PGI application", error);
-    return res.status(500).json({ error: "Server error" });
+    return badRequest(res, "Server error");
   }
 });
 

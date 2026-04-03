@@ -2,6 +2,8 @@ import { Router } from "express";
 import { Pool } from "pg";
 import { env } from "../platform/env";
 
+import { badRequest, ok } from "../utils/apiResponse";
+
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
 
@@ -17,7 +19,7 @@ router.get("/referrer/profile", async (req, res) => {
   );
 
   if (userResult.rows.length === 0) {
-    return res.json({ profile: null, referrals: [] });
+    return ok(res, { profile: null, referrals: [] });
   }
 
   const user = userResult.rows[0];
@@ -28,7 +30,7 @@ router.get("/referrer/profile", async (req, res) => {
   );
 
   if (referrerResult.rows.length === 0) {
-    return res.json({ profile: null, referrals: [] });
+    return ok(res, { profile: null, referrals: [] });
   }
 
   const referrer = referrerResult.rows[0];
@@ -51,7 +53,7 @@ router.get("/referrer/profile", async (req, res) => {
     [referrer.id]
   );
 
-  res.json({
+  ok(res, {
     profile: {
       is_active: referrer.is_active,
       agreement_status: referrer.agreement_status
@@ -119,7 +121,7 @@ router.post("/referrer/request-agreement", async (req, res) => {
     [referrer.id]
   );
 
-  res.json({ success: true });
+  ok(res, { success: true });
 });
 
 /* =========================
@@ -148,7 +150,7 @@ router.post("/referrer/agreement-signed", async (req, res) => {
     [referrerId]
   );
 
-  res.json({ success: true });
+  ok(res, { success: true });
 });
 
 /* =========================
@@ -169,7 +171,7 @@ router.post("/referrer/add-referral", async (req, res) => {
   );
 
   if (userResult.rows.length === 0) {
-    return res.status(403).json({ error: "Not authorized" });
+    return badRequest(res, "Not authorized");
   }
 
   const refResult = await pool.query(`SELECT * FROM bi_referrers WHERE user_id=$1`, [userResult.rows[0].id]);
@@ -177,7 +179,7 @@ router.post("/referrer/add-referral", async (req, res) => {
   const referrer = refResult.rows[0];
 
   if (!referrer.is_active) {
-    return res.status(403).json({ error: "Agreement not signed" });
+    return badRequest(res, "Agreement not signed");
   }
 
   await pool.query(
@@ -197,7 +199,7 @@ router.post("/referrer/add-referral", async (req, res) => {
     [`Referral created for ${full_name}`]
   );
 
-  res.json({ success: true });
+  ok(res, { success: true });
 });
 
 export default router;

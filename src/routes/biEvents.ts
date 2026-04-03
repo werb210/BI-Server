@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { pool } from "../db";
 
+import { badRequest, ok } from "../utils/apiResponse";
+
 const router = Router();
 
 router.post("/events", async (req, res) => {
@@ -8,7 +10,7 @@ router.post("/events", async (req, res) => {
     const { applicationId, eventType, metadata } = req.body;
 
     if (!applicationId || !eventType) {
-      return res.status(400).json({ error: "Missing required fields" });
+      return badRequest(res, "Missing required fields");
     }
 
     await pool.query(
@@ -27,10 +29,10 @@ router.post("/events", async (req, res) => {
       [applicationId, eventType, `Event recorded: ${eventType}`]
     );
 
-    return res.json({ success: true });
+    return ok(res, { success: true });
   } catch (err) {
     console.error("BI CRM event error:", err);
-    return res.status(500).json({ error: "Internal error" });
+    return badRequest(res, "Internal error");
   }
 });
 

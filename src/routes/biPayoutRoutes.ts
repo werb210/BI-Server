@@ -2,6 +2,8 @@ import { Router } from "express";
 import { Pool } from "pg";
 import { env } from "../platform/env";
 
+import { badRequest, ok } from "../utils/apiResponse";
+
 const router = Router();
 const db = new Pool({ connectionString: env.DATABASE_URL });
 
@@ -13,7 +15,7 @@ router.post("/create-batch", async (_req, res) => {
     RETURNING *
   `);
 
-  res.json(batch.rows[0]);
+  ok(res, batch.rows[0]);
 
 });
 
@@ -28,7 +30,7 @@ router.post("/:batchId/pay", async (req, res) => {
     [batchId]
   );
 
-  res.json({ success: true });
+  ok(res, { success: true });
 
 });
 

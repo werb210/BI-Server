@@ -2,6 +2,8 @@ import { Router } from "express";
 import { Pool } from "pg";
 import { env } from "../platform/env";
 
+import { badRequest, ok } from "../utils/apiResponse";
+
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
 
@@ -66,7 +68,7 @@ router.get("/reports/summary", async (_req, res) => {
   const conversionRate =
     totalApplications > 0 ? Number(((totalIssued / totalApplications) * 100).toFixed(2)) : 0;
 
-  res.json({
+  ok(res, {
     totalApplications,
     policiesIssued: totalIssued,
     conversionRate,

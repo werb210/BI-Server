@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { env } from "../platform/env";
 import { pool } from "../db";
+import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
 
@@ -18,7 +19,7 @@ router.get("/applications", async (_req, res) => {
     ORDER BY a.created_at DESC
   `);
 
-  return res.json(result.rows);
+  return ok(res, result.rows);
 });
 
 /* =========================
@@ -42,10 +43,10 @@ router.get("/applications/:id", async (req, res) => {
   );
 
   if (result.rows.length === 0) {
-    return res.status(404).json({ error: "Not found" });
+    return badRequest(res, "Not found");
   }
 
-  return res.json(result.rows[0]);
+  return ok(res, result.rows[0]);
 });
 
 /* =========================
@@ -67,10 +68,10 @@ router.get("/application/by-phone", async (req, res) => {
   );
 
   if (result.rows.length === 0) {
-    return res.json(null);
+    return ok(res, null);
   }
 
-  return res.json(result.rows[0]);
+  return ok(res, result.rows[0]);
 });
 
 /* =========================
@@ -85,13 +86,13 @@ router.get("/lender/applications", async (req, res) => {
   );
 
   if (lenderUser.rows.length === 0) {
-    return res.json([]);
+    return ok(res, []);
   }
 
   const lender = await pool.query(`SELECT id FROM bi_lenders WHERE user_id=$1`, [lenderUser.rows[0].id]);
 
   if (lender.rows.length === 0) {
-    return res.json([]);
+    return ok(res, []);
   }
 
   const apps = await pool.query(
@@ -110,7 +111,7 @@ router.get("/lender/applications", async (req, res) => {
     [lender.rows[0].id]
   );
 
-  res.json(apps.rows);
+  return ok(res, apps.rows);
 });
 
 router.get("/applications/:id/activity", async (req, res) => {
@@ -126,7 +127,7 @@ router.get("/applications/:id/activity", async (req, res) => {
     [id]
   );
 
-  return res.json(result.rows);
+  return ok(res, result.rows);
 });
 
 /* =========================
@@ -150,7 +151,7 @@ router.get("/applications/:id/documents", async (req, res) => {
     [id]
   );
 
-  return res.json(docs.rows);
+  return ok(res, docs.rows);
 });
 
 router.post("/applications/:id/stage", async (req, res) => {
@@ -162,7 +163,7 @@ router.post("/applications/:id/stage", async (req, res) => {
     const lender = await pool.query(`SELECT id FROM bi_lenders WHERE user_id=$1`, [actorUserId]);
 
     if (lender.rows.length === 0) {
-      return res.status(403).json({ error: "Not authorized" });
+      return badRequest(res, "Not authorized");
     }
 
     const ownership = await pool.query(
@@ -172,7 +173,7 @@ router.post("/applications/:id/stage", async (req, res) => {
     );
 
     if (ownership.rows.length === 0) {
-      return res.status(403).json({ error: "Forbidden" });
+      return badRequest(res, "Forbidden");
     }
   }
 
@@ -206,7 +207,7 @@ router.post("/applications/:id/stage", async (req, res) => {
     );
   }
 
-  return res.json({ success: true });
+  return ok(res, { success: true });
 });
 
 export default router;

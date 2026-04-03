@@ -11,6 +11,7 @@ export const envSchema = z.object({
   SERVICE_NAME: z.string().default("bi-server"),
   LOG_LEVEL: z.string().default("info"),
   BI_WEBSITE_ORIGIN: z.string().default("http://localhost:5173"),
+  API_BASE_URL: z.string().default("https://server.boreal.financial"),
   CORS_ORIGIN: z.string(),
   OPENAI_API_KEY: z.string(),
   TWILIO_ACCOUNT_SID: z.string(),

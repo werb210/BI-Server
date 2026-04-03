@@ -2,6 +2,8 @@ import { Router } from "express";
 import { Pool } from "pg";
 import { env } from "../platform/env";
 
+import { badRequest, ok } from "../utils/apiResponse";
+
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
 
@@ -15,7 +17,7 @@ router.get("/crm/contacts", async (_req, res) => {
     ORDER BY created_at DESC
   `);
 
-  res.json(result.rows);
+  ok(res, result.rows);
 });
 
 /* =========================
@@ -28,7 +30,7 @@ router.get("/crm/referrers", async (_req, res) => {
     ORDER BY created_at DESC
   `);
 
-  res.json(result.rows);
+  ok(res, result.rows);
 });
 
 /* =========================
@@ -41,7 +43,7 @@ router.get("/crm/lenders", async (_req, res) => {
     ORDER BY created_at DESC
   `);
 
-  res.json(result.rows);
+  ok(res, result.rows);
 });
 
 export default router;

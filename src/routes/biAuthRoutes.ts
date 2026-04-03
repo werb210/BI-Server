@@ -2,6 +2,7 @@ import { Router } from "express";
 import { pool } from "../db";
 import { sendOtp, verifyOtp } from "../services/otpService";
 import { calculatePremium } from "../services/premiumService";
+import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
 
@@ -9,7 +10,7 @@ router.post("/otp/request", async (req, res) => {
   const { phone } = req.body;
 
   if (!phone) {
-    return res.status(400).json({ error: "Phone required" });
+    return badRequest(res, "Phone required");
   }
 
   try {
@@ -21,10 +22,10 @@ router.post("/otp/request", async (req, res) => {
       [phone]
     );
 
-    return res.json({ success: true });
+    return ok(res, { success: true });
   } catch (error) {
     console.error("OTP request failed", error);
-    return res.status(500).json({ error: "Failed to request OTP" });
+    return badRequest(res, "Failed to request OTP");
   }
 });
 
@@ -32,14 +33,14 @@ router.post("/otp/verify", async (req, res) => {
   const { phone, code, userType } = req.body;
 
   if (!phone || !code) {
-    return res.status(400).json({ error: "Phone and code required" });
+    return badRequest(res, "Phone and code required");
   }
 
   try {
     const approved = await verifyOtp(phone, code);
 
     if (!approved) {
-      return res.status(401).json({ error: "Invalid code" });
+      return badRequest(res, "Invalid code");
     }
 
     let user = await pool.query(`SELECT * FROM bi_users WHERE phone_e164=$1`, [phone]);
@@ -53,10 +54,10 @@ router.post("/otp/verify", async (req, res) => {
       );
     }
 
-    return res.json({ success: true, userId: user.rows[0].id });
+    return ok(res, { success: true, userId: user.rows[0].id });
   } catch (error) {
     console.error("OTP verification failed", error);
-    return res.status(500).json({ error: "Failed to verify OTP" });
+    return badRequest(res, "Failed to verify OTP");
   }
 });
 
@@ -75,13 +76,13 @@ router.post("/application/draft", async (req, res) => {
     );
 
     if (lenderUser.rows.length === 0) {
-      return res.status(403).json({ error: "Lender not found" });
+      return badRequest(res, "Lender not found");
     }
 
     const lender = await pool.query(`SELECT id FROM bi_lenders WHERE user_id=$1`, [lenderUser.rows[0].id]);
 
     if (lender.rows.length === 0) {
-      return res.status(403).json({ error: "Lender profile not found" });
+      return badRequest(res, "Lender profile not found");
     }
 
     createdByActor = "lender";
@@ -152,14 +153,14 @@ router.post("/application/draft", async (req, res) => {
     [created.rows[0].id, createdByActor, `Application created by ${createdByActor}`]
   );
 
-  res.json(created.rows[0]);
+  return ok(res, created.rows[0]);
 });
 
 router.post("/application/submit", async (req, res) => {
   const { applicationId, facilityType, loanAmount, bankruptcy } = req.body;
 
   if (!applicationId || !facilityType || typeof loanAmount !== "number") {
-    return res.status(400).json({ error: "applicationId, facilityType and loanAmount are required" });
+    return badRequest(res, "applicationId, facilityType and loanAmount are required");
   }
 
   try {
@@ -202,10 +203,10 @@ router.post("/application/submit", async (req, res) => {
       );
     }
 
-    return res.json({ success: true, premium });
+    return ok(res, { success: true, premium });
   } catch (error) {
     console.error("Application submit failed", error);
-    return res.status(500).json({ error: "Failed to submit application" });
+    return badRequest(res, "Failed to submit application");
   }
 });
 
