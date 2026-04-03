@@ -2,6 +2,8 @@ import { Router } from "express";
 import { Pool } from "pg";
 import { env } from "../platform/env";
 
+import { badRequest, ok } from "../utils/apiResponse";
+
 const router = Router();
 const db = new Pool({ connectionString: env.DATABASE_URL });
 
@@ -16,7 +18,7 @@ router.post("/:id/activate", async (req, res) => {
     [id]
   );
 
-  res.json(result.rows[0]);
+  ok(res, result.rows[0]);
 });
 
 router.post("/:id/cancel", async (req, res) => {
@@ -29,7 +31,7 @@ router.post("/:id/cancel", async (req, res) => {
     [id]
   );
 
-  res.json({ success: true });
+  ok(res, { success: true });
 });
 
 router.post("/:id/renew", async (req, res) => {
@@ -42,7 +44,7 @@ router.post("/:id/renew", async (req, res) => {
     [id]
   );
 
-  res.json({ success: true });
+  ok(res, { success: true });
 });
 
 export default router;

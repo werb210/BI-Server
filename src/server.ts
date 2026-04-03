@@ -34,6 +34,7 @@ import { idempotency } from "./platform/idempotency";
 import { logger } from "./platform/logger";
 import metricsRoutes from "./platform/metricsRoutes";
 import { requestId } from "./platform/requestId";
+import { badRequest } from "./utils/apiResponse";
 import { httpLogger } from "./utils/httpLogger";
 
 const app = express();
@@ -62,7 +63,7 @@ if (env.NODE_ENV !== "production") {
   app.use(morgan("dev"));
 }
 
-app.use("/api", (req, res, next) => {
+app.use("/api/v1", (req, res, next) => {
   if (req.path !== "/pgi-intake" || req.method !== "POST") {
     return next();
   }
@@ -72,19 +73,19 @@ app.use("/api", (req, res, next) => {
   const lastSeen = spamThrottle.get(throttleKey) ?? 0;
 
   if (now - lastSeen < 5000) {
-    return res.status(429).json({ error: "Too many submissions" });
+    return badRequest(res, "Too many submissions");
   }
 
   spamThrottle.set(throttleKey, now);
   return next();
 });
 
-app.use("/api", intakeRoutes);
-app.use("/api", chatRoutes);
-app.use("/api", mayaAnalyticsRoutes);
+app.use("/api/v1", intakeRoutes);
+app.use("/api/v1", chatRoutes);
+app.use("/api/v1", mayaAnalyticsRoutes);
 
 app.use(
-  "/api/bi",
+  "/api/v1/bi",
   cors({
     origin: env.BI_WEBSITE_ORIGIN,
     credentials: true
@@ -97,23 +98,35 @@ app.use(
   biEventsRoutes
 );
 
-app.use("/api/bi/documents", requireAuth, biDocumentRoutes);
-app.use("/api/bi/commissions", requireAuth, biCommissionRoutes);
-app.use("/api/bi/crm", requireAuth, biCrmRoutes);
-app.use("/api/bi/referrers", requireAuth, biReferrerRoutes);
-app.use("/api/bi/reports", requireAuth, biReportRoutes);
-app.use("/api/bi/policies", requireAuth, biPolicyRoutes);
-app.use("/api/bi/payouts", requireAuth, biPayoutRoutes);
-app.use("/api/bi/underwriting", requireAuth, biUnderwritingRoutes);
+app.use("/api/v1/bi/documents", requireAuth, biDocumentRoutes);
+app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
+app.use("/api/v1/bi/crm", requireAuth, biCrmRoutes);
+app.use("/api/v1/bi/referrers", requireAuth, biReferrerRoutes);
+app.use("/api/v1/bi/reports", requireAuth, biReportRoutes);
+app.use("/api/v1/bi/policies", requireAuth, biPolicyRoutes);
+app.use("/api/v1/bi/payouts", requireAuth, biPayoutRoutes);
+app.use("/api/v1/bi/underwriting", requireAuth, biUnderwritingRoutes);
 
 app.use(errorHandler);
 
-async function bootstrap() {
-  await runMigrations(env.DATABASE_URL);
+export async function bootstrap() {
+  await Promise.race([
+    pool.query("SELECT 1"),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("DB timeout")), 5000))
+  ])
+    .then(() => {
+      console.log("✅ BI DB connected");
+    })
+    .catch((err) => {
+      const message = err instanceof Error ? err.message : "Unknown DB error";
+      console.error("⚠️ BI DB skipped:", message);
+    });
 
-  await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
+  try {
+    await runMigrations(env.DATABASE_URL);
+    await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
 
-  await pool.query(`
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS contact_leads (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       company TEXT,
@@ -172,15 +185,11 @@ async function bootstrap() {
     )
   `);
 
-  await pool.query("ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB");
-  startPremiumAccrualJob();
-
-  app.listen(Number(env.PORT), () => {
-    logger.info(`BI-Server running on port ${env.PORT}`);
-  });
+    await pool.query("ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB");
+    startPremiumAccrualJob();
+  } catch (error) {
+    logger.error({ err: error }, "Database initialization failed (non-blocking)");
+  }
 }
 
-bootstrap().catch((error) => {
-  logger.error({ err: error }, "Failed to bootstrap server");
-  process.exit(1);
-});
+export default app;

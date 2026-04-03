@@ -5,6 +5,8 @@ import path from "path";
 import fs from "fs";
 import { env } from "../platform/env";
 
+import { badRequest, ok } from "../utils/apiResponse";
+
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
 
@@ -50,7 +52,7 @@ router.post("/application/:id/documents", upload.array("files"), async (req, res
     );
   }
 
-  res.json({ success: true });
+  ok(res, { success: true });
 });
 
 export default router;

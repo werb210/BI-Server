@@ -2,6 +2,8 @@ import { Router } from "express";
 import { Pool } from "pg";
 import { env } from "../platform/env";
 
+import { badRequest, ok } from "../utils/apiResponse";
+
 const router = Router();
 const db = new Pool({ connectionString: env.DATABASE_URL });
 
@@ -17,7 +19,7 @@ router.post("/:id/status", async (req, res) => {
     [id, status]
   );
 
-  res.json({ success: true });
+  ok(res, { success: true });
 
 });
 

@@ -1,12 +1,13 @@
 import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { env } from "./env";
+import { badRequest } from "../utils/apiResponse";
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const auth = req.headers.authorization;
 
   if (!auth) {
-    return res.status(401).json({ success: false, error: "Unauthorized" });
+    return badRequest(res, "Unauthorized");
   }
 
   const token = auth.replace("Bearer ", "");
@@ -18,9 +19,6 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 
     next();
   } catch {
-    return res.status(401).json({
-      success: false,
-      error: "Invalid token"
-    });
+    return badRequest(res, "Invalid token");
   }
 }
