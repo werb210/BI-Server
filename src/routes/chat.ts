@@ -5,6 +5,8 @@ import twilio from "twilio";
 import sgMail from "@sendgrid/mail";
 import fetch from "node-fetch";
 import { env } from "../platform/env";
+import { logger } from "../platform/logger";
+import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
 
@@ -40,7 +42,7 @@ router.post("/maya-chat", async (req, res) => {
     const { message, utm_source, utm_medium, utm_campaign } = req.body;
 
     if (!message) {
-      return res.status(400).json({ error: "Message required" });
+      return badRequest(res, "Message required");
     }
 
     const email = extractEmail(message);
@@ -102,7 +104,7 @@ router.post("/maya-chat", async (req, res) => {
         `
       });
 
-      return res.json({
+      return ok(res, {
         reply:
           "Thanks. I've captured your details. A specialist will contact you shortly."
       });
@@ -121,15 +123,15 @@ router.post("/maya-chat", async (req, res) => {
       temperature: 0.4
     });
 
-    res.json({
+    return ok(res, {
       reply:
         response.choices[0]?.message?.content ||
         "I'm sorry, I couldn't process that."
     });
 
   } catch (err) {
-    console.error("Maya error:", err);
-    res.status(500).json({ error: "Chat failure" });
+    logger.error({ err }, "Maya error");
+    return badRequest(res, "Chat failure");
   }
 });
 

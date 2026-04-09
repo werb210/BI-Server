@@ -1,12 +1,13 @@
 import cron from "node-cron";
 import { pool } from "../db";
 import { env } from "../platform/env";
+import { logger } from "../platform/logger";
 
 const bufferDays = Number(env.PURGE_BUFFER_DAYS || "30");
 
 export function startPurgeJob() {
   cron.schedule("0 3 * * *", async () => {
-    console.log(`Running BI document purge job (bufferDays=${bufferDays})...`);
+    logger.info({ bufferDays }, "Running BI document purge job");
 
     const eligible = await pool.query(
       `SELECT application_id

@@ -23,7 +23,9 @@ export const envSchema = z.object({
   SENDGRID_FROM: z.string().default(""),
   CRM_WEBHOOK_URL: z.string().optional(),
   ADMIN_JWT_SECRET: z.string(),
-  PURGE_BUFFER_DAYS: z.string().default("30")
+  PURGE_BUFFER_DAYS: z.string().default("30"),
+  PGI_API_KEY: z.string().regex(/^pk_(test|live)_/),
+  PGI_WEBHOOK_SECRET: z.string().regex(/^whsec_/),
 });
 
 export const env = envSchema.parse(process.env);

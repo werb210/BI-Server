@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import sgMail from "@sendgrid/mail";
 import crypto from "crypto";
 import { env } from "../platform/env";
+import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
@@ -17,45 +18,35 @@ const loginLimiter = rateLimit({
   max: 10
 });
 
-/* ---------------- ROLE AUTH ---------------- */
-
 function authenticateAdmin(
-  req: Request & { admin?: any },
+  req: Request & { admin?: unknown },
   res: Response,
   next: NextFunction
 ) {
   const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: "Missing token" });
+  if (!authHeader) {
+    return badRequest(res, "Missing token");
+  }
 
   const token = authHeader.split(" ")[1];
 
   try {
-    const decoded = jwt.verify(
-      token,
-      env.ADMIN_JWT_SECRET
-    ) as any;
-
+    const decoded = jwt.verify(token, env.ADMIN_JWT_SECRET) as { role: string; email: string };
     req.admin = decoded;
-    next();
+    return next();
   } catch {
-    return res.status(403).json({ error: "Invalid token" });
+    return badRequest(res, "Invalid token");
   }
 }
 
 function requireRole(roles: string[]) {
-  return (
-    req: Request & { admin?: any },
-    res: Response,
-    next: NextFunction
-  ) => {
-    if (!req.admin || !roles.includes(req.admin.role)) {
-      return res.status(403).json({ error: "Insufficient privileges" });
+  return (req: Request & { admin?: { role?: string } }, res: Response, next: NextFunction) => {
+    if (!req.admin?.role || !roles.includes(req.admin.role)) {
+      return badRequest(res, "Insufficient privileges");
     }
-    next();
+    return next();
   };
 }
-
-/* ---------------- LOGIN STEP 1 ---------------- */
 
 router.post("/admin-login", loginLimiter, async (req, res) => {
   const { email, password } = req.body;
@@ -66,13 +57,13 @@ router.post("/admin-login", loginLimiter, async (req, res) => {
   );
 
   if (result.rows.length === 0) {
-    return res.status(401).json({ error: "Invalid credentials" });
+    return badRequest(res, "Invalid credentials");
   }
 
   const user = result.rows[0];
 
   if (user.locked_until && new Date(user.locked_until) > new Date()) {
-    return res.status(403).json({ error: "Account locked" });
+    return badRequest(res, "Account locked");
   }
 
   const valid = await bcrypt.compare(password, user.password_hash);
@@ -92,7 +83,7 @@ router.post("/admin-login", loginLimiter, async (req, res) => {
       [attempts, lockedUntil, user.id]
     );
 
-    return res.status(401).json({ error: "Invalid credentials" });
+    return badRequest(res, "Invalid credentials");
   }
 
   await pool.query(
@@ -118,10 +109,8 @@ router.post("/admin-login", loginLimiter, async (req, res) => {
     html: `<h2>${code}</h2><p>Valid for 10 minutes.</p>`
   });
 
-  res.json({ step: "otp_required" });
+  return ok(res, { step: "otp_required" });
 });
-
-/* ---------------- OTP VERIFY ---------------- */
 
 router.post("/admin-verify-otp", async (req, res) => {
   const { email, code } = req.body;
@@ -137,7 +126,7 @@ router.post("/admin-verify-otp", async (req, res) => {
   );
 
   if (result.rows.length === 0) {
-    return res.status(401).json({ error: "Invalid or expired code" });
+    return badRequest(res, "Invalid or expired code");
   }
 
   await pool.query(
@@ -156,10 +145,8 @@ router.post("/admin-verify-otp", async (req, res) => {
     { expiresIn: "8h" }
   );
 
-  res.json({ token });
+  return ok(res, { token });
 });
-
-/* ---------------- ANALYTICS ---------------- */
 
 router.get(
   "/maya-analytics",
@@ -172,14 +159,12 @@ router.get(
        WHERE created_at >= CURRENT_DATE`
     );
 
-    res.json({
+    return ok(res, {
       total: Number(total.rows[0].count),
       today: Number(today.rows[0].count)
     });
   }
 );
-
-/* ---------------- SUPER ADMIN ONLY ---------------- */
 
 router.get(
   "/admin-users",
@@ -189,7 +174,7 @@ router.get(
     const users = await pool.query(
       `SELECT id,email,role,is_active FROM admin_users`
     );
-    res.json(users.rows);
+    return ok(res, users.rows);
   }
 );
 

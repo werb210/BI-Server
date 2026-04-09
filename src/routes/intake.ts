@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { pool } from "../db";
+import { logger } from "../platform/logger";
+import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
 
@@ -19,7 +21,7 @@ router.post("/pgi-intake", async (req, res) => {
     } = req.body;
 
     if (!email || !businessName) {
-      return res.status(400).json({ error: "Missing required fields" });
+      return badRequest(res, "Missing required fields");
     }
 
     await pool.query(
@@ -52,10 +54,10 @@ router.post("/pgi-intake", async (req, res) => {
       ]
     );
 
-    return res.status(200).json({ success: true });
+    return ok(res, { success: true });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ error: "Server error" });
+    logger.error({ err: error }, "PGI intake failed");
+    return badRequest(res, "Server error");
   }
 });
 

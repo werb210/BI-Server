@@ -26,6 +26,7 @@ import biUnderwritingRoutes from "./routes/biUnderwritingRoutes";
 import chatRoutes from "./routes/chat";
 import intakeRoutes from "./routes/intake";
 import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
+import pgiWebhookRoutes from "./routes/pgiWebhookRoutes";
 import { requireAuth } from "./platform/auth";
 import { env } from "./platform/env";
 import { errorHandler } from "./platform/errorHandler";
@@ -41,6 +42,7 @@ const app = express();
 
 app.use(requestId);
 app.use(idempotency);
+app.use(pgiWebhookRoutes);
 app.use(express.json({ limit: "10mb" }));
 app.use(httpLogger);
 
@@ -115,7 +117,7 @@ export async function bootstrap() {
     new Promise((_, reject) => setTimeout(() => reject(new Error("DB timeout")), 5000))
   ])
     .then(() => {
-      console.log("✅ BI DB connected");
+      logger.info("BI DB connected");
     })
     .catch((err) => {
       const message = err instanceof Error ? err.message : "Unknown DB error";
