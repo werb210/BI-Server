@@ -1,15 +1,16 @@
 import app, { bootstrap } from "./server";
+import { env } from "./platform/env";
+import { logger } from "./platform/logger";
 
-console.log("🔥 BI PROCESS START");
-console.log("⏳ BI INIT START");
+logger.info("BI process start");
+logger.info("BI init start");
 
 bootstrap().catch((err) => {
-  console.error("❌ BI DB failed (non-blocking)", err);
+  logger.error({ err }, "BI DB failed (non-blocking)");
 });
 
-const port = process.env.PORT || 8080;
+const port = Number(env.PORT || "8080");
 
 app.listen(port, () => {
-  console.log(`🚀 BI SERVER RUNNING ON ${port}`);
-  console.log("✅ BI SERVER READY");
+  logger.info({ port }, "BI server running");
 });
