@@ -1,74 +1,34 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
-
 name: Build and deploy Node.js app to Azure Web App - BI-Server
-
 on:
   push:
     branches:
       - main
   workflow_dispatch:
-
 env:
   AZURE_WEBAPP_NAME: BI-Server
   NODE_VERSION: '20.x'
-
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-
       - name: Install dependencies
-        run: npm install
-
+        run: npm ci
       - name: Build app
         run: npm run build --if-present
-
-      - name: Prepare deployment package
+      - name: Verify build output
         run: |
-          zip -r release.zip . -x "node_modules/*" ".git/*"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: node-app
-          path: release.zip
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: node-app
-
-      - name: Unzip artifact
-        run: unzip release.zip
-
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_877A781FB52F4717B67FD409D864B469 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_16AEA543F9634AC3ABE0442122A28E9A }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_4A981ACDF1754AA19C93ABC042D77B10 }}
-
+          ls -la
+          ls -la dist || true
+      # 🔴 CRITICAL: deploy built output, not repo root
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          slot-name: Production
-          package: .
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: ./dist
