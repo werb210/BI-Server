@@ -1,34 +1,49 @@
 name: Build and deploy Node.js app to Azure Web App - BI-Server
+
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+
 env:
   AZURE_WEBAPP_NAME: BI-Server
   NODE_VERSION: '20.x'
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Build app
-        run: npm run build --if-present
-      - name: Verify build output
+        run: npm run build
+
+      - name: Verify package contents
         run: |
+          test -f package.json
+          test -f package-lock.json
+          test -f dist/index.js
           ls -la
-          ls -la dist || true
-      # 🔴 CRITICAL: deploy built output, not repo root
+          ls -la dist
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: ./dist
+          package: .
