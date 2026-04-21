@@ -9,6 +9,7 @@ import swaggerUi from "swagger-ui-express";
 import { openApiSpec } from "./docs/openapi";
 import { pool, runMigrations } from "./db";
 import { startPremiumAccrualJob } from "./jobs/premiumAccrualJob";
+import { startPurgeJob } from "./jobs/purgeJob";
 import { biRateLimiter } from "./middleware/biRateLimit";
 import { enforceBIPrefix } from "./middleware/biIsolation";
 import biApplicationRoutes from "./routes/biApplicationRoutes";
@@ -28,7 +29,6 @@ import intakeRoutes from "./routes/intake";
 import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
 import pgiWebhookRoutes from "./routes/pgiWebhookRoutes";
 import pgiApiRoutes from "./routes/pgiApiRoutes";
-import pgiRoutes from "./routes/pgiRoutes";
 import { requireAuth } from "./platform/auth";
 import { env } from "./platform/env";
 import { errorHandler } from "./platform/errorHandler";
@@ -84,11 +84,14 @@ app.use("/api/v1", (req, res, next) => {
   return next();
 });
 
-app.use("/api/pgi", pgiRoutes);
 app.use("/api/v1", pgiApiRoutes);
 app.use("/api/v1", intakeRoutes);
 app.use("/api/v1", chatRoutes);
 app.use("/api/v1", mayaAnalyticsRoutes);
+
+// Public BI endpoints for applicant resume/draft/submit and auth
+app.use("/api/v1", biAuthRoutes);
+app.use("/api/v1", biApplicationRoutes);
 
 app.use(
   "/api/v1/bi",
@@ -98,8 +101,8 @@ app.use(
   }),
   biRateLimiter,
   enforceBIPrefix,
+  requireAuth,
   biRoutes,
-  biAuthRoutes,
   biApplicationRoutes,
   biEventsRoutes
 );
@@ -193,6 +196,7 @@ export async function bootstrap() {
 
     await pool.query("ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB");
     startPremiumAccrualJob();
+    startPurgeJob();
   } catch (error) {
     logger.error({ err: error }, "Database initialization failed (non-blocking)");
   }

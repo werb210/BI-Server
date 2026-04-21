@@ -1,8 +1,10 @@
 import { Router } from "express";
+import bcrypt from "bcrypt";
 import { pool } from "../db";
 import { sendOtp, verifyOtp } from "../services/otpService";
 import { calculatePremium } from "../services/premiumService";
 import { badRequest, ok } from "../utils/apiResponse";
+import { signStaffToken } from "../platform/auth";
 
 const router = Router();
 
@@ -54,11 +56,36 @@ router.post("/otp/verify", async (req, res) => {
       );
     }
 
-    return ok(res, { success: true, userId: user.rows[0].id });
+    const token = signStaffToken({ staffUserId: user.rows[0].id, role: userType || "applicant" });
+    return ok(res, { success: true, userId: user.rows[0].id, token });
   } catch (error) {
     console.error("OTP verification failed", error);
     return badRequest(res, "Failed to verify OTP");
   }
+});
+
+
+router.post("/staff/login", async (req, res) => {
+  const { email, password } = req.body as { email?: string; password?: string };
+
+  if (!email || !password) {
+    return badRequest(res, "Email and password are required");
+  }
+
+  if (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD_HASH) {
+    return badRequest(res, "Staff login is not configured");
+  }
+
+  const emailMatches = email.toLowerCase() === process.env.ADMIN_EMAIL.toLowerCase();
+  const passwordMatches = await bcrypt.compare(password, process.env.ADMIN_PASSWORD_HASH);
+
+  if (!emailMatches || !passwordMatches) {
+    return badRequest(res, "Invalid staff credentials");
+  }
+
+  const token = signStaffToken({ staffUserId: process.env.ADMIN_EMAIL, role: "staff" });
+
+  return ok(res, { token, tokenType: "Bearer", expiresIn: 28800 });
 });
 
 router.post("/application/draft", async (req, res) => {

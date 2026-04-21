@@ -16,6 +16,10 @@ const envSchema = z.object({
   PGI_BASE_URL: z.string().optional(),
   PGI_WEBHOOK_SECRET: z.string().optional(),
   CORS_ALLOWED_ORIGINS: z.string().optional(),
-  CORS_ALLOW_CREDENTIALS: z.string().optional()
+  CORS_ALLOW_CREDENTIALS: z.string().optional(),
+  SENDGRID_API_KEY: z.string().optional(),
+  SENDGRID_FROM: z.string().optional(),
+  USE_PGI_STUB: z.string().optional(),
+  BI_STAFF_JWT_SECRET: z.string().optional()
 });
 export const env = envSchema.parse(process.env);

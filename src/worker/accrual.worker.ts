@@ -48,7 +48,10 @@ export async function runPremiumAccrual() {
        LEFT JOIN bi_applications a ON a.id = p.application_id
        LEFT JOIN bi_leads l ON l.id = a.lead_id
        LEFT JOIN bi_referrers r ON r.id = l.referrer_id
-       WHERE s.due_date <= NOW() AND s.paid = false`
+       WHERE s.due_date <= NOW()
+         AND s.paid = false
+         AND p.status = 'active'
+         AND a.stage = ANY(ARRAY['policy_issued','bound']::bi_pipeline_stage[])`
     );
 
     for (const row of due.rows) {

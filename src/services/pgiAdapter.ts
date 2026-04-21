@@ -1,16 +1,25 @@
 import axios, { AxiosInstance } from "axios";
 
-const PGI_BASE_URL = process.env.PGI_BASE_URL || "https://api.pgicover.com";
-const PGI_API_KEY = process.env.PGI_API_KEY || "";
+const PGI_BASE_URL = process.env.PGI_BASE_URL || "https://api.pgicover.com/api/v2/";
 
-const client = axios.create({
-  baseURL: PGI_BASE_URL,
-  headers: {
-    Authorization: `Bearer ${PGI_API_KEY}`,
-    "Content-Type": "application/json"
-  },
-  timeout: 15000
-});
+function getApiKey() {
+  const key = process.env.PGI_API_KEY;
+  if (!key) {
+    throw new Error("PGI_API_KEY is required for PGI API calls");
+  }
+  return key;
+}
+
+function makeClient(): AxiosInstance {
+  return axios.create({
+    baseURL: PGI_BASE_URL,
+    headers: {
+      Authorization: `Bearer ${getApiKey()}`,
+      "Content-Type": "application/json"
+    },
+    timeout: 15000
+  });
+}
 
 export interface BIApplication {
   id: string;
@@ -25,6 +34,9 @@ export interface BIApplication {
   loanType: "secured" | "unsecured";
   lender?: string;
   coveragePercent: number;
+  guarantorName?: string;
+  guarantorEmail?: string;
+  scoringAnswers?: Record<string, string | number | boolean | null>;
   documents?: {
     type: string;
     base64: string;
@@ -33,6 +45,10 @@ export interface BIApplication {
 
 export function buildPGIPayload(app: BIApplication) {
   return {
+    guarantor_name: app.guarantorName || `${app.firstName} ${app.lastName}`.trim(),
+    guarantor_email: app.guarantorEmail || app.email,
+    business_name: app.businessName,
+    lender_name: app.lender || "Unknown lender",
     business: {
       name: app.businessName,
       registrationNumber: app.registrationNumber || "",
@@ -54,6 +70,13 @@ export function buildPGIPayload(app: BIApplication) {
       coveragePercent: app.coveragePercent,
       guaranteeAmount: Math.round((app.loanAmount * app.coveragePercent) / 100)
     },
+    form_data: {
+      has_bankruptcy: app.scoringAnswers?.has_bankruptcy ?? false,
+      years_in_business: app.scoringAnswers?.years_in_business ?? null,
+      annual_revenue: app.scoringAnswers?.annual_revenue ?? null,
+      prior_default: app.scoringAnswers?.prior_default ?? false,
+      existing_guarantee_exposure: app.scoringAnswers?.existing_guarantee_exposure ?? null
+    },
     documents: (app.documents || []).map((d) => ({
       type: d.type,
       file: d.base64
@@ -61,9 +84,10 @@ export function buildPGIPayload(app: BIApplication) {
   };
 }
 
-export async function submitToPGI(app: BIApplication, axiosClient: AxiosInstance = client) {
+export async function submitToPGI(app: BIApplication, axiosClient?: AxiosInstance) {
   const payload = buildPGIPayload(app);
-  const response = await axiosClient.post("/applications", payload);
+  const client = axiosClient ?? makeClient();
+  const response = await client.post("/applications/", payload);
 
   return {
     externalId: response.data.id as string,
@@ -71,7 +95,8 @@ export async function submitToPGI(app: BIApplication, axiosClient: AxiosInstance
   };
 }
 
-export async function getPGIStatus(externalId: string, axiosClient: AxiosInstance = client) {
-  const res = await axiosClient.get(`/applications/${externalId}`);
+export async function getPGIStatus(externalId: string, axiosClient?: AxiosInstance) {
+  const client = axiosClient ?? makeClient();
+  const res = await client.get(`/applications/${externalId}`);
   return res.data;
 }
