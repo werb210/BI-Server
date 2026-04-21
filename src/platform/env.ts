@@ -13,6 +13,7 @@ const envSchema = z.object({
   TWILIO_VERIFY_SERVICE_SID: z.string().optional(),
   ALERT_SMS_TO: z.string().optional(),
   PGI_API_KEY: z.string().optional(),
+  PGI_BASE_URL: z.string().optional(),
   PGI_WEBHOOK_SECRET: z.string().optional(),
   CORS_ALLOWED_ORIGINS: z.string().optional(),
   CORS_ALLOW_CREDENTIALS: z.string().optional()

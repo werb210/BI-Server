@@ -61,7 +61,7 @@ const PIPELINE_STAGES = [
   "Quote Created",
   "Application Started",
   "Application Submitted",
-  "Under Review (Purbeck underwriting)",
+  "Under Review",
   "Approved",
   "Policy Issued",
   "Declined"
