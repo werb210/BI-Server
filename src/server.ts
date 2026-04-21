@@ -27,6 +27,7 @@ import chatRoutes from "./routes/chat";
 import intakeRoutes from "./routes/intake";
 import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
 import pgiWebhookRoutes from "./routes/pgiWebhookRoutes";
+import pgiApiRoutes from "./routes/pgiApiRoutes";
 import { requireAuth } from "./platform/auth";
 import { env } from "./platform/env";
 import { errorHandler } from "./platform/errorHandler";
@@ -82,6 +83,7 @@ app.use("/api/v1", (req, res, next) => {
   return next();
 });
 
+app.use("/api/v1", pgiApiRoutes);
 app.use("/api/v1", intakeRoutes);
 app.use("/api/v1", chatRoutes);
 app.use("/api/v1", mayaAnalyticsRoutes);
