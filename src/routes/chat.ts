@@ -10,25 +10,26 @@ import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
 
-const openai = new OpenAI({
-  apiKey: env.OPENAI_API_KEY
-});
+const openai = env.OPENAI_API_KEY
+  ? new OpenAI({
+      apiKey: env.OPENAI_API_KEY
+    })
+  : null;
 
 const pool = new Pool({
   connectionString: env.DATABASE_URL
 });
 
-const twilioClient = twilio(
-  env.TWILIO_ACCOUNT_SID,
-  env.TWILIO_AUTH_TOKEN
-);
+const twilioClient = env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN
+  ? twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN)
+  : null;
 
-sgMail.setApiKey(env.SENDGRID_API_KEY);
+if (env.SENDGRID_API_KEY) {
+  sgMail.setApiKey(env.SENDGRID_API_KEY);
+}
 
 function extractEmail(text: string): string | null {
-  const match = text.match(
-    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i
-  );
+  const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
   return match ? match[0] : null;
 }
 
@@ -59,54 +60,56 @@ router.post("/maya-chat", async (req, res) => {
 
       const leadId = insert.rows[0].id;
 
-      // CRM Webhook
       try {
-        await fetch(env.CRM_WEBHOOK_URL || "", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            leadId,
-            email,
-            referral,
-            utm_source,
-            utm_medium,
-            utm_campaign,
-            source: "Maya Chat"
-          })
-        });
+        if (env.CRM_WEBHOOK_URL) {
+          await fetch(env.CRM_WEBHOOK_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              leadId,
+              email,
+              referral,
+              utm_source,
+              utm_medium,
+              utm_campaign,
+              source: "Maya Chat"
+            })
+          });
+        }
 
-        await pool.query(
-          `UPDATE maya_leads SET crm_status='sent' WHERE id=$1`,
-          [leadId]
-        );
+        await pool.query(`UPDATE maya_leads SET crm_status='sent' WHERE id=$1`, [leadId]);
       } catch {
-        await pool.query(
-          `UPDATE maya_leads SET crm_status='failed' WHERE id=$1`,
-          [leadId]
-        );
+        await pool.query(`UPDATE maya_leads SET crm_status='failed' WHERE id=$1`, [leadId]);
       }
 
-      // SMS Alert
-      await twilioClient.messages.create({
-        body: `New Maya Lead: ${email}`,
-        from: env.TWILIO_FROM,
-        to: env.ALERT_SMS_TO
-      });
+      if (twilioClient && env.TWILIO_FROM && env.ALERT_SMS_TO) {
+        await twilioClient.messages.create({
+          body: `New Maya Lead: ${email}`,
+          from: env.TWILIO_FROM,
+          to: env.ALERT_SMS_TO
+        });
+      }
 
-      // Confirmation Email
-      await sgMail.send({
-        to: email,
-        from: env.SENDGRID_FROM,
-        subject: "We Received Your PGI Inquiry",
-        html: `
+      if (env.SENDGRID_API_KEY && env.SENDGRID_FROM) {
+        await sgMail.send({
+          to: email,
+          from: env.SENDGRID_FROM,
+          subject: "We Received Your PGI Inquiry",
+          html: `
           <p>Thanks for contacting Boreal Insurance.</p>
           <p>A PGI specialist will contact you shortly.</p>
         `
-      });
+        });
+      }
 
       return ok(res, {
-        reply:
-          "Thanks. I've captured your details. A specialist will contact you shortly."
+        reply: "Thanks. I've captured your details. A specialist will contact you shortly."
+      });
+    }
+
+    if (!openai) {
+      return ok(res, {
+        reply: "Thanks for reaching out. Please include your email and our team will follow up shortly."
       });
     }
 
@@ -115,8 +118,7 @@ router.post("/maya-chat", async (req, res) => {
       messages: [
         {
           role: "system",
-          content:
-            "You are Maya for Boreal Insurance. Keep answers short and PGI focused."
+          content: "You are Maya for Boreal Insurance. Keep answers short and PGI focused."
         },
         { role: "user", content: message }
       ],
@@ -124,11 +126,8 @@ router.post("/maya-chat", async (req, res) => {
     });
 
     return ok(res, {
-      reply:
-        response.choices[0]?.message?.content ||
-        "I'm sorry, I couldn't process that."
+      reply: response.choices[0]?.message?.content || "I'm sorry, I couldn't process that."
     });
-
   } catch (err) {
     logger.error({ err }, "Maya error");
     return badRequest(res, "Chat failure");
