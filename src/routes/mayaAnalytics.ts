@@ -11,8 +11,8 @@ import { badRequest, ok } from "../utils/apiResponse";
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
 
-if (env.SENDGRID_API_KEY) {
-  sgMail.setApiKey(env.SENDGRID_API_KEY);
+if (process.env.SENDGRID_API_KEY) {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 }
 
 const loginLimiter = rateLimit({
@@ -21,34 +21,28 @@ const loginLimiter = rateLimit({
 });
 
 function authenticateAdmin(
-  req: Request & { admin?: unknown },
+  req: Request & { admin?: { role?: string; email?: string } },
   res: Response,
   next: NextFunction
 ) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return badRequest(res, "Missing token");
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized" });
   }
 
-  const token = authHeader.split(" ")[1];
-
   try {
-    if (!env.ADMIN_JWT_SECRET) {
-      return badRequest(res, "Admin auth is not configured");
-    }
-
-    const decoded = jwt.verify(token, env.ADMIN_JWT_SECRET) as unknown as { role: string; email: string };
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as { role?: string; email?: string };
     req.admin = decoded;
     return next();
   } catch {
-    return badRequest(res, "Invalid token");
+    return res.status(401).json({ error: "Invalid token" });
   }
 }
 
 function requireRole(roles: string[]) {
   return (req: Request & { admin?: { role?: string } }, res: Response, next: NextFunction) => {
     if (!req.admin?.role || !roles.includes(req.admin.role)) {
-      return badRequest(res, "Insufficient privileges");
+      return res.status(403).json({ error: "Forbidden" });
     }
     return next();
   };
@@ -108,10 +102,10 @@ router.post("/admin-login", loginLimiter, async (req, res) => {
     [email, code, expires]
   );
 
-  if (env.SENDGRID_API_KEY && env.SENDGRID_FROM) {
+  if (process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM) {
     await sgMail.send({
       to: email,
-      from: env.SENDGRID_FROM,
+      from: process.env.SENDGRID_FROM,
       subject: "Your Admin Login Code",
       html: `<h2>${code}</h2><p>Valid for 10 minutes.</p>`
     });
@@ -147,13 +141,9 @@ router.post("/admin-verify-otp", async (req, res) => {
     [email]
   );
 
-  if (!env.ADMIN_JWT_SECRET) {
-    return badRequest(res, "Admin auth is not configured");
-  }
-
   const token = jwt.sign(
     { role: user.rows[0].role, email },
-    env.ADMIN_JWT_SECRET,
+    process.env.JWT_SECRET as string,
     { expiresIn: "8h" }
   );
 

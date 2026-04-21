@@ -89,7 +89,7 @@ app.use("/api/v1", mayaAnalyticsRoutes);
 app.use(
   "/api/v1/bi",
   cors({
-    origin: (process.env.CORS_ALLOWED_ORIGINS || env.CORS_ALLOWED_ORIGINS).split(",").map((v) => v.trim()),
+    origin: (process.env.CORS_ALLOWED_ORIGINS || env.CORS_ALLOWED_ORIGINS || "").split(",").map((v) => v.trim()).filter(Boolean),
     credentials: true
   }),
   biRateLimiter,

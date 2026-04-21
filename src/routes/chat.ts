@@ -24,8 +24,8 @@ const twilioClient = env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN
   ? twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN)
   : null;
 
-if (env.SENDGRID_API_KEY) {
-  sgMail.setApiKey(env.SENDGRID_API_KEY);
+if (process.env.SENDGRID_API_KEY) {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 }
 
 function extractEmail(text: string): string | null {
@@ -61,8 +61,8 @@ router.post("/maya-chat", async (req, res) => {
       const leadId = insert.rows[0].id;
 
       try {
-        if (env.CRM_WEBHOOK_URL) {
-          await fetch(env.CRM_WEBHOOK_URL, {
+        if (process.env.CRM_WEBHOOK_URL) {
+          await fetch(process.env.CRM_WEBHOOK_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -90,10 +90,10 @@ router.post("/maya-chat", async (req, res) => {
         });
       }
 
-      if (env.SENDGRID_API_KEY && env.SENDGRID_FROM) {
+      if (process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM) {
         await sgMail.send({
           to: email,
-          from: env.SENDGRID_FROM,
+          from: process.env.SENDGRID_FROM,
           subject: "We Received Your PGI Inquiry",
           html: `
           <p>Thanks for contacting Boreal Insurance.</p>

@@ -195,7 +195,7 @@ router.post("/applications/:id/stage", async (req, res) => {
   );
 
   if (["approved", "declined", "policy_issued"].includes(stage)) {
-    const bufferDays = Number(env.PURGE_BUFFER_DAYS || "30");
+    const bufferDays = Number(process.env.PURGE_BUFFER_DAYS || "30");
 
     await pool.query(
       `

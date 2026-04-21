@@ -3,7 +3,7 @@ import { env } from "./env";
 
 export const logger = pino({
   name: "bi-server",
-  level: env.LOG_LEVEL || "info",
+  level: process.env.LOG_LEVEL || "info",
   transport:
     env.NODE_ENV === "development"
       ? {
