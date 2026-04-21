@@ -23,6 +23,10 @@ function verifySignature(rawBody: Buffer, signatureHeader: string | undefined): 
     return false;
   }
 
+  if (!env.PGI_WEBHOOK_SECRET) {
+    return false;
+  }
+
   const digest = crypto
     .createHmac("sha256", env.PGI_WEBHOOK_SECRET)
     .update(rawBody)

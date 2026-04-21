@@ -6,7 +6,9 @@ import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
 
-sgMail.setApiKey(ENV.SENDGRID_API_KEY);
+if (ENV.SENDGRID_API_KEY) {
+  sgMail.setApiKey(ENV.SENDGRID_API_KEY);
+}
 
 router.post("/contact", async (req, res) => {
   try {
@@ -117,12 +119,14 @@ router.post("/pgi-application", async (req, res) => {
       );
     }
 
-    await sgMail.send({
-      to: data.personal.email,
-      from: ENV.SENDGRID_FROM,
-      subject: "PGI Application Received",
-      html: `<h2>Application Received</h2><p>Thank you ${data.personal.firstName}, your application has been submitted.</p>`
-    });
+    if (ENV.SENDGRID_API_KEY && ENV.SENDGRID_FROM) {
+      await sgMail.send({
+        to: data.personal.email,
+        from: ENV.SENDGRID_FROM,
+        subject: "PGI Application Received",
+        html: `<h2>Application Received</h2><p>Thank you ${data.personal.firstName}, your application has been submitted.</p>`
+      });
+    }
 
     return ok(res, { success: true });
   } catch (error) {

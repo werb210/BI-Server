@@ -11,7 +11,9 @@ import { badRequest, ok } from "../utils/apiResponse";
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
 
-sgMail.setApiKey(env.SENDGRID_API_KEY);
+if (env.SENDGRID_API_KEY) {
+  sgMail.setApiKey(env.SENDGRID_API_KEY);
+}
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -31,7 +33,11 @@ function authenticateAdmin(
   const token = authHeader.split(" ")[1];
 
   try {
-    const decoded = jwt.verify(token, env.ADMIN_JWT_SECRET) as { role: string; email: string };
+    if (!env.ADMIN_JWT_SECRET) {
+      return badRequest(res, "Admin auth is not configured");
+    }
+
+    const decoded = jwt.verify(token, env.ADMIN_JWT_SECRET) as unknown as { role: string; email: string };
     req.admin = decoded;
     return next();
   } catch {
@@ -102,12 +108,14 @@ router.post("/admin-login", loginLimiter, async (req, res) => {
     [email, code, expires]
   );
 
-  await sgMail.send({
-    to: email,
-    from: env.SENDGRID_FROM,
-    subject: "Your Admin Login Code",
-    html: `<h2>${code}</h2><p>Valid for 10 minutes.</p>`
-  });
+  if (env.SENDGRID_API_KEY && env.SENDGRID_FROM) {
+    await sgMail.send({
+      to: email,
+      from: env.SENDGRID_FROM,
+      subject: "Your Admin Login Code",
+      html: `<h2>${code}</h2><p>Valid for 10 minutes.</p>`
+    });
+  }
 
   return ok(res, { step: "otp_required" });
 });
@@ -138,6 +146,10 @@ router.post("/admin-verify-otp", async (req, res) => {
     `SELECT role FROM admin_users WHERE email=$1`,
     [email]
   );
+
+  if (!env.ADMIN_JWT_SECRET) {
+    return badRequest(res, "Admin auth is not configured");
+  }
 
   const token = jwt.sign(
     { role: user.rows[0].role, email },
