@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { env } from "../platform/env";
 import { pool } from "../db";
 import { badRequest, ok } from "../utils/apiResponse";
 
@@ -7,13 +6,8 @@ const router = Router();
 
 router.get("/applications", async (_req, res) => {
   const result = await pool.query(`
-    SELECT
-      a.id,
-      a.stage,
-      a.bankruptcy_flag,
-      a.premium_calc,
-      a.created_by_lender_id,
-      c.full_name AS primary_contact_name
+    SELECT a.id, a.stage, a.bankruptcy_flag, a.premium_calc, a.created_by_lender_id,
+           c.full_name AS primary_contact_name
     FROM bi_applications a
     LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
     ORDER BY a.created_at DESC
@@ -22,23 +16,52 @@ router.get("/applications", async (_req, res) => {
   return ok(res, result.rows);
 });
 
-/* =========================
-   GET APPLICATION DETAIL
-========================= */
+router.get("/pipeline", async (req, res) => {
+  const stage = String(req.query.stage || "").trim();
+  if (!stage) {
+    return badRequest(res, "stage is required");
+  }
+
+  const result = await pool.query(
+    `SELECT id, stage, created_at, updated_at, applicant_phone_e164, premium_calc
+     FROM bi_applications
+     WHERE stage = $1
+     ORDER BY updated_at DESC`,
+    [stage]
+  );
+
+  return ok(res, result.rows);
+});
+
+router.patch("/pipeline/:id/stage", async (req, res) => {
+  const { id } = req.params;
+  const { stage } = req.body as { stage?: string };
+  const actor = (req.user as { staffUserId?: string } | undefined)?.staffUserId || null;
+
+  if (!stage) {
+    return badRequest(res, "stage is required");
+  }
+
+  await pool.query(`UPDATE bi_applications SET stage=$2, updated_at=NOW() WHERE id=$1`, [id, stage]);
+
+  await pool.query(
+    `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
+     VALUES($1, 'staff', $2, 'stage_change', $3, $4::jsonb)`,
+    [id, actor, `Stage changed to ${stage}`, JSON.stringify({ stage })]
+  );
+
+  return ok(res, { success: true });
+});
+
 router.get("/applications/:id", async (req, res) => {
   const { id } = req.params;
 
   const result = await pool.query(
-    `
-    SELECT
-      a.*,
-      c.full_name AS primary_contact_name,
-      co.legal_name AS company_name
-    FROM bi_applications a
-    LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
-    LEFT JOIN bi_companies co ON co.id = a.company_id
-    WHERE a.id=$1
-    `,
+    `SELECT a.*, c.full_name AS primary_contact_name, co.legal_name AS company_name
+     FROM bi_applications a
+     LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
+     LEFT JOIN bi_companies co ON co.id = a.company_id
+     WHERE a.id=$1`,
     [id]
   );
 
@@ -49,165 +72,62 @@ router.get("/applications/:id", async (req, res) => {
   return ok(res, result.rows[0]);
 });
 
-/* =========================
-   GET APPLICATION BY PHONE (RESUME)
-========================= */
-router.get("/application/by-phone", async (req, res) => {
-  const { phone } = req.query;
-
-  const result = await pool.query(
-    `
-    SELECT *
-    FROM bi_applications
-    WHERE applicant_phone_e164=$1
-    AND stage IN ('new_application','documents_pending')
-    ORDER BY created_at DESC
-    LIMIT 1
-    `,
-    [phone]
-  );
-
-  if (result.rows.length === 0) {
-    return ok(res, null);
-  }
-
-  return ok(res, result.rows[0]);
-});
-
-/* =========================
-   LENDER – VIEW OWN APPLICATIONS
-========================= */
-router.get("/lender/applications", async (req, res) => {
-  const { lenderUserId } = req.query;
-
-  const lenderUser = await pool.query(
-    `SELECT id FROM bi_users WHERE phone_e164=$1 AND user_type='lender'`,
-    [lenderUserId]
-  );
-
-  if (lenderUser.rows.length === 0) {
-    return ok(res, []);
-  }
-
-  const lender = await pool.query(`SELECT id FROM bi_lenders WHERE user_id=$1`, [lenderUser.rows[0].id]);
-
-  if (lender.rows.length === 0) {
-    return ok(res, []);
-  }
-
-  const apps = await pool.query(
-    `
-    SELECT 
-      a.id,
-      a.stage,
-      a.bankruptcy_flag,
-      a.premium_calc,
-      c.full_name AS primary_contact_name
-    FROM bi_applications a
-    LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
-    WHERE a.created_by_lender_id=$1
-    ORDER BY a.created_at DESC
-    `,
-    [lender.rows[0].id]
-  );
-
-  return ok(res, apps.rows);
-});
-
 router.get("/applications/:id/activity", async (req, res) => {
   const { id } = req.params;
+  const result = await pool.query(`SELECT * FROM bi_activity WHERE application_id=$1 ORDER BY created_at DESC`, [id]);
+  return ok(res, result.rows);
+});
 
+router.get("/applications/:id/requirements", async (req, res) => {
+  const { id } = req.params;
   const result = await pool.query(
-    `
-    SELECT *
-    FROM bi_activity
-    WHERE application_id=$1
-    ORDER BY created_at DESC
-  `,
+    `SELECT id, application_id, label, status, created_at, updated_at
+     FROM bi_requirements
+     WHERE application_id=$1
+     ORDER BY created_at DESC`,
     [id]
   );
 
   return ok(res, result.rows);
 });
 
-/* =========================
-   GET APPLICATION DOCUMENTS
-========================= */
-router.get("/applications/:id/documents", async (req, res) => {
-  const { id } = req.params;
+router.patch("/applications/:id/requirements/:reqId", async (req, res) => {
+  const { id, reqId } = req.params;
+  const { status } = req.body as { status?: "received" | "waived" | "rejected" | "pending" };
 
-  const docs = await pool.query(
-    `
-    SELECT id,
-           original_filename,
-           mime_type,
-           bytes,
-           created_at
-    FROM bi_documents
-    WHERE application_id=$1
-      AND purged_at IS NULL
-    ORDER BY created_at DESC
-    `,
-    [id]
+  if (!status) {
+    return badRequest(res, "status is required");
+  }
+
+  const updated = await pool.query(
+    `UPDATE bi_requirements
+     SET status=$3, updated_at=NOW()
+     WHERE id=$2 AND application_id=$1
+     RETURNING *`,
+    [id, reqId, status]
   );
 
-  return ok(res, docs.rows);
+  await pool.query(
+    `INSERT INTO bi_requirements_history(requirement_id, application_id, old_status, new_status)
+     VALUES($1, $2, NULL, $3)`,
+    [reqId, id, status]
+  );
+
+  return ok(res, updated.rows[0] ?? null);
 });
 
-router.post("/applications/:id/stage", async (req, res) => {
-  const { id } = req.params;
-  const { stage, actorType, actorUserId } = req.body;
-
-  // Optional lender ownership check
-  if (actorType === "lender") {
-    const lender = await pool.query(`SELECT id FROM bi_lenders WHERE user_id=$1`, [actorUserId]);
-
-    if (lender.rows.length === 0) {
-      return badRequest(res, "Not authorized");
-    }
-
-    const ownership = await pool.query(
-      `SELECT id FROM bi_applications
-       WHERE id=$1 AND created_by_lender_id=$2`,
-      [id, lender.rows[0].id]
-    );
-
-    if (ownership.rows.length === 0) {
-      return badRequest(res, "Forbidden");
-    }
-  }
-
-  await pool.query(
-    `
-    UPDATE bi_applications
-    SET stage=$2
-    WHERE id=$1
-  `,
-    [id, stage]
+router.get("/application/by-phone", async (req, res) => {
+  const { phone } = req.query;
+  const result = await pool.query(
+    `SELECT * FROM bi_applications
+     WHERE applicant_phone_e164=$1
+       AND stage IN ('new_application','documents_pending','under_review')
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [phone]
   );
 
-  await pool.query(
-    `
-    INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary)
-    VALUES($1,$2,$3,'stage_change',$4)
-  `,
-    [id, actorType || "staff", actorUserId || null, `Stage changed to ${stage}`]
-  );
-
-  if (["approved", "declined", "policy_issued"].includes(stage)) {
-    const bufferDays = Number(process.env.PURGE_BUFFER_DAYS || "30");
-
-    await pool.query(
-      `
-      INSERT INTO bi_purge_queue(application_id, eligible_at)
-      VALUES($1, NOW() + ($2::text || ' days')::interval)
-      ON CONFLICT (application_id) DO NOTHING
-    `,
-      [id, bufferDays]
-    );
-  }
-
-  return ok(res, { success: true });
+  return ok(res, result.rows[0] ?? null);
 });
 
 export default router;
