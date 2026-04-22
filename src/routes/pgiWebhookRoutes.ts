@@ -95,7 +95,29 @@ router.post("/api/v1/bi/webhooks/pgi", express.raw({ type: "application/json" })
 
     switch (event.type) {
       case "application.quoted":
-        if (applicationId) await pool.query(`UPDATE bi_applications SET stage='quoted' WHERE id=$1`, [applicationId]);
+        if (applicationId) {
+          await pool.query(
+            `UPDATE bi_applications
+             SET stage='quoted',
+                 quote_summary=$2::jsonb,
+                 quote_expiry_at=COALESCE(($3)::timestamp, quote_expiry_at),
+                 underwriter_ref=COALESCE($4, underwriter_ref),
+                 coverage_amount=COALESCE(($5)::numeric, coverage_amount),
+                 annual_premium=COALESCE(($6)::numeric, annual_premium),
+                 core_score=COALESCE(($7)::numeric, core_score),
+                 updated_at=NOW()
+             WHERE id=$1`,
+            [
+              applicationId,
+              JSON.stringify(event.data ?? {}),
+              (event.data?.quote_expiry_at as string | undefined) ?? null,
+              (event.data?.underwriter_ref as string | undefined) ?? null,
+              (event.data?.coverage_amount as string | number | undefined) ?? null,
+              (event.data?.annual_premium as string | number | undefined) ?? null,
+              (event.data?.core_score as string | number | undefined) ?? null
+            ]
+          );
+        }
         await writeActivity(applicationId, event.type, "Application quoted", event.data ?? {});
         break;
       case "application.declined":
@@ -107,8 +129,8 @@ router.post("/api/v1/bi/webhooks/pgi", express.raw({ type: "application/json" })
         await writeActivity(applicationId, event.type, "Application under review", event.data ?? {});
         break;
       case "policy.bound":
-        if (applicationId) await pool.query(`UPDATE bi_applications SET stage='bound' WHERE id=$1`, [applicationId]);
-        await writeActivity(applicationId, event.type, "Policy bound", event.data ?? {});
+        if (applicationId) await pool.query(`UPDATE bi_applications SET stage='approved' WHERE id=$1`, [applicationId]);
+        await writeActivity(applicationId, event.type, "Policy bound (approved)", event.data ?? {});
         break;
       case "policy.issued":
         if (applicationId) await pool.query(`UPDATE bi_applications SET stage='policy_issued' WHERE id=$1`, [applicationId]);

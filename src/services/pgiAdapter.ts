@@ -43,7 +43,28 @@ export interface BIApplication {
   }[];
 }
 
+function numOrNull(value: string | number | boolean | null | undefined): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 export function buildPGIPayload(app: BIApplication) {
+  const scoring = app.scoringAnswers || {};
+  const country = typeof scoring.country === "string" && scoring.country ? scoring.country : "CA";
+  const missingFields: string[] = [];
+
+  if (!numOrNull(scoring.loan_amount) && !app.loanAmount) {
+    missingFields.push("loan_amount");
+  }
+
+  if (missingFields.length) {
+    throw new Error(`Missing required form_data fields: ${missingFields.join(", ")}`);
+  }
+
   return {
     guarantor_name: app.guarantorName || `${app.firstName} ${app.lastName}`.trim(),
     guarantor_email: app.guarantorEmail || app.email,
@@ -71,11 +92,24 @@ export function buildPGIPayload(app: BIApplication) {
       guaranteeAmount: Math.round((app.loanAmount * app.coveragePercent) / 100)
     },
     form_data: {
-      has_bankruptcy: app.scoringAnswers?.has_bankruptcy ?? false,
-      years_in_business: app.scoringAnswers?.years_in_business ?? null,
-      annual_revenue: app.scoringAnswers?.annual_revenue ?? null,
-      prior_default: app.scoringAnswers?.prior_default ?? false,
-      existing_guarantee_exposure: app.scoringAnswers?.existing_guarantee_exposure ?? null
+      has_bankruptcy: scoring.has_bankruptcy ?? false,
+      years_in_business: numOrNull(scoring.years_in_business),
+      annual_revenue: numOrNull(scoring.annual_revenue),
+      prior_default: scoring.prior_default ?? false,
+      existing_guarantee_exposure: numOrNull(scoring.existing_guarantee_exposure),
+      country,
+      naics_code: typeof scoring.naics_code === "string" ? scoring.naics_code : "",
+      formation_date: typeof scoring.formation_date === "string" ? scoring.formation_date : null,
+      loan_amount: numOrNull(scoring.loan_amount) ?? app.loanAmount,
+      pgi_limit: numOrNull(scoring.pgi_limit),
+      ebitda: numOrNull(scoring.ebitda),
+      total_debt: numOrNull(scoring.total_debt),
+      monthly_debt_service: numOrNull(scoring.monthly_debt_service),
+      collateral_value: numOrNull(scoring.collateral_value),
+      enterprise_value: numOrNull(scoring.enterprise_value),
+      bankruptcy_history: Boolean(scoring.bankruptcy_history ?? scoring.has_bankruptcy ?? false),
+      insolvency_history: Boolean(scoring.insolvency_history ?? false),
+      judgment_history: Boolean(scoring.judgment_history ?? false)
     },
     documents: (app.documents || []).map((d) => ({
       type: d.type,

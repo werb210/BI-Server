@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db";
+import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
 import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
@@ -57,10 +58,14 @@ router.get("/applications/:id", async (req, res) => {
   const { id } = req.params;
 
   const result = await pool.query(
-    `SELECT a.*, c.full_name AS primary_contact_name, co.legal_name AS company_name
+    `SELECT a.*,
+            c.full_name AS primary_contact_name,
+            co.legal_name AS company_name,
+            COALESCE(pa.data->>'status', a.stage::text) AS pgi_status
      FROM bi_applications a
      LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
      LEFT JOIN bi_companies co ON co.id = a.company_id
+     LEFT JOIN pgi_applications pa ON pa.id = a.id OR pa.data->>'externalId' = a.pgi_external_id
      WHERE a.id=$1`,
     [id]
   );
@@ -69,7 +74,46 @@ router.get("/applications/:id", async (req, res) => {
     return badRequest(res, "Not found");
   }
 
-  return ok(res, result.rows[0]);
+  const payload = {
+    ...result.rows[0],
+    pgiStatus: result.rows[0].pgi_status
+  };
+  delete payload.pgi_status;
+  return ok(res, payload);
+});
+
+router.get("/applications/:id/documents", async (req, res) => {
+  const { id } = req.params;
+  const baseUrl = `${req.protocol}://${req.get("host")}`;
+
+  const result = await pool.query(
+    `SELECT id, original_filename, created_at
+     FROM bi_documents
+     WHERE application_id=$1
+       AND purged_at IS NULL
+     ORDER BY created_at DESC`,
+    [id]
+  );
+
+  const documents = result.rows.map((row) => ({
+    id: row.id,
+    file_name: row.original_filename,
+    url: `${baseUrl}/api/v1/bi/documents/${row.id}`,
+    uploaded_at: row.created_at
+  }));
+
+  return ok(res, documents);
+});
+
+router.post("/application/:id/submit-pgi", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await submitApplicationToPGI(id);
+    return ok(res, { success: true, ...result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to submit to PGI";
+    return badRequest(res, message);
+  }
 });
 
 router.get("/applications/:id/activity", async (req, res) => {
