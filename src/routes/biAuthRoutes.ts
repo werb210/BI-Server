@@ -2,6 +2,7 @@ import { Router } from "express";
 import bcrypt from "bcrypt";
 import { pool } from "../db";
 import { sendOtp, verifyOtp } from "../services/otpService";
+import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
 import { calculatePremium } from "../services/premiumService";
 import { badRequest, ok } from "../utils/apiResponse";
 import { signStaffToken } from "../platform/auth";
@@ -193,15 +194,20 @@ router.post("/application/submit", async (req, res) => {
   try {
     const premium = calculatePremium({ facilityType, loanAmount });
 
-    await pool.query(
+    const updatedApplication = await pool.query(
       `UPDATE bi_applications
        SET stage='documents_pending',
            bankruptcy_flag=$2,
            premium_calc=$3,
            updated_at=NOW()
-       WHERE id=$1`,
+       WHERE id=$1
+       RETURNING *`,
       [applicationId, bankruptcy || false, premium]
     );
+
+    if (!updatedApplication.rows.length) {
+      return badRequest(res, "Application not found");
+    }
 
     await pool.query(
       `
@@ -230,7 +236,8 @@ router.post("/application/submit", async (req, res) => {
       );
     }
 
-    return ok(res, { success: true, premium });
+    const pgiResult = await submitApplicationToPGI(applicationId);
+    return ok(res, { success: true, premium, pgi: pgiResult });
   } catch (error) {
     console.error("Application submit failed", error);
     return badRequest(res, "Failed to submit application");

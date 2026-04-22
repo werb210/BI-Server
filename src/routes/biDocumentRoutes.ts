@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import path from "path";
 import fs from "fs";
 import { env } from "../platform/env";
+import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
 import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
@@ -22,17 +23,20 @@ const upload = multer({ storage });
 router.post("/application/:id/documents", upload.array("files"), async (req, res) => {
   const { id } = req.params;
   const files = (req.files as Express.Multer.File[]) ?? [];
+  const docTypesRaw = req.body?.doc_types;
+  const docTypes = Array.isArray(docTypesRaw) ? docTypesRaw : typeof docTypesRaw === "string" ? [docTypesRaw] : [];
   const baseUrl = `${req.protocol}://${req.get("host")}`;
 
   const created: Array<{ id: string; fileUrl: string }> = [];
 
-  for (const file of files) {
+  for (const [idx, file] of files.entries()) {
+    const docType = typeof docTypes[idx] === "string" && docTypes[idx].trim() ? docTypes[idx].trim() : "other";
     const inserted = await pool.query(
       `INSERT INTO bi_documents
       (application_id, doc_type, original_filename, storage_key, mime_type, bytes, uploaded_by_actor)
-      VALUES($1,'loan_agreement_signed',$2,$3,$4,$5,'applicant')
+      VALUES($1,$2,$3,$4,$5,$6,'applicant')
       RETURNING id`,
-      [id, file.originalname, file.filename, file.mimetype, file.size]
+      [id, docType, file.originalname, file.filename, file.mimetype, file.size]
     );
 
     const docId = inserted.rows[0].id as string;
@@ -45,7 +49,14 @@ router.post("/application/:id/documents", upload.array("files"), async (req, res
     );
   }
 
-  ok(res, { success: true, files: created });
+  let pgiResult: { externalId: string; status: string; alreadySubmitted: boolean } | null = null;
+  try {
+    pgiResult = await submitApplicationToPGI(id);
+  } catch {
+    pgiResult = null;
+  }
+
+  ok(res, { success: true, files: created, pgi: pgiResult });
 });
 
 router.get("/:id", async (req, res) => {
