@@ -3,9 +3,11 @@ import multer from "multer";
 import { Pool } from "pg";
 import path from "path";
 import fs from "fs";
-import { env } from "../platform/env";
 import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
 import { badRequest, ok } from "../utils/apiResponse";
+import { sendDocumentRejectedSms } from "../services/smsService";
+import { requireAuth } from "../platform/auth";
+import { env } from "../platform/env";
 
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
@@ -76,6 +78,103 @@ router.get("/:id", async (req, res) => {
   res.setHeader("Content-Disposition", `inline; filename="${row.original_filename}"`);
 
   return fs.createReadStream(fullPath).pipe(res);
+});
+
+
+router.post("/:id/accept", requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const userId = (req.user as { staffUserId?: string } | undefined)?.staffUserId ?? null;
+
+  const docResult = await pool.query(
+    `SELECT application_id, doc_type FROM bi_documents WHERE id=$1 LIMIT 1`,
+    [id]
+  );
+  if (!docResult.rows.length) return badRequest(res, "Document not found");
+  const doc = docResult.rows[0];
+
+  await pool.query(
+    `UPDATE bi_documents
+        SET review_status='accepted', reviewed_by=$2, reviewed_at=NOW()
+      WHERE id=$1`,
+    [id, userId]
+  );
+
+  await pool.query(
+    `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
+     VALUES($1, 'staff', $2, 'document_accepted', $3, $4::jsonb)`,
+    [doc.application_id, userId, `Document accepted: ${doc.doc_type}`, JSON.stringify({ docId: id })]
+  );
+
+  return ok(res, { success: true });
+});
+
+router.post("/:id/reject", requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body as { reason?: string };
+  const userId = (req.user as { staffUserId?: string } | undefined)?.staffUserId ?? null;
+
+  if (!reason || !reason.trim()) {
+    return badRequest(res, "Rejection reason is required");
+  }
+
+  const docResult = await pool.query(
+    `SELECT d.application_id, d.doc_type,
+            c.full_name AS contact_name,
+            a.applicant_phone_e164 AS contact_phone
+       FROM bi_documents d
+       JOIN bi_applications a ON a.id = d.application_id
+  LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
+      WHERE d.id=$1
+      LIMIT 1`,
+    [id]
+  );
+  if (!docResult.rows.length) return badRequest(res, "Document not found");
+  const doc = docResult.rows[0];
+
+  await pool.query(
+    `UPDATE bi_documents
+        SET review_status='rejected', reviewed_by=$2, reviewed_at=NOW(), rejection_reason=$3
+      WHERE id=$1`,
+    [id, userId, reason.trim()]
+  );
+
+  await pool.query(
+    `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
+     VALUES($1, 'staff', $2, 'document_rejected', $3, $4::jsonb)`,
+    [
+      doc.application_id,
+      userId,
+      `Document rejected: ${doc.doc_type}`,
+      JSON.stringify({ docId: id, reason: reason.trim() })
+    ]
+  );
+
+  if (doc.contact_phone) {
+    const portalBase = process.env.APPLICANT_PORTAL_URL || "https://borealinsurance.ca";
+    const link = `${portalBase}/application/documents?app=${doc.application_id}`;
+    try {
+      const smsResult = await sendDocumentRejectedSms(doc.contact_phone, {
+        name: doc.contact_name || "there",
+        docType: doc.doc_type,
+        reason: reason.trim(),
+        link
+      });
+      await pool.query(
+        `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
+         VALUES($1, 'system', $2, 'sms_sent', $3, $4::jsonb)`,
+        [
+          doc.application_id,
+          userId,
+          `SMS sent for rejected doc ${doc.doc_type}`,
+          JSON.stringify({ template: "document_rejected", to: doc.contact_phone, sid: (smsResult as { sid?: string }).sid ?? null })
+        ]
+      );
+    } catch (smsErr) {
+      console.error("SMS send failed for doc reject", smsErr);
+    }
+  }
+
+  return ok(res, { success: true });
 });
 
 export default router;
