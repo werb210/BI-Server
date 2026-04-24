@@ -10,19 +10,45 @@ import { signStaffToken } from "../platform/auth";
 const router = Router();
 
 router.post("/otp/request", async (req, res) => {
-  const { phone } = req.body;
+  const { phone, name, email, userType } = req.body as {
+    phone?: string;
+    name?: string;
+    email?: string;
+    userType?: string;
+  };
 
-  if (!phone) {
-    return badRequest(res, "Phone required");
+  if (!phone || !name || !email) {
+    return badRequest(res, "Name, email, and phone are required");
+  }
+
+  const recent = await pool.query(
+    `SELECT COUNT(*)::int AS n
+       FROM bi_otp_sessions
+      WHERE phone_e164 = $1
+        AND requested_at > NOW() - INTERVAL '10 minutes'`,
+    [phone]
+  );
+
+  if (recent.rows[0].n >= 3) {
+    return badRequest(res, "Too many requests. Please wait a few minutes.");
   }
 
   try {
     await sendOtp(phone);
 
     await pool.query(
-      `INSERT INTO bi_otp_sessions(phone_e164,purpose)
-       VALUES($1,'login')`,
-      [phone]
+      `INSERT INTO bi_otp_sessions(phone_e164, purpose, name, email, user_type)
+       VALUES($1, 'login', $2, $3, $4)`,
+      [phone, name, email, userType || "applicant"]
+    );
+
+    await pool.query(
+      `INSERT INTO bi_activity(application_id, actor_type, event_type, summary, meta)
+       VALUES(NULL, 'system', 'otp_requested', $1, $2::jsonb)`,
+      [
+        `OTP requested by ${name} <${email}>`,
+        JSON.stringify({ phone, name, email, userType: userType || "applicant" })
+      ]
     );
 
     return ok(res, { success: true });
@@ -33,7 +59,7 @@ router.post("/otp/request", async (req, res) => {
 });
 
 router.post("/otp/verify", async (req, res) => {
-  const { phone, code, userType } = req.body;
+  const { phone, code } = req.body as { phone?: string; code?: string };
 
   if (!phone || !code) {
     return badRequest(res, "Phone and code required");
@@ -46,19 +72,66 @@ router.post("/otp/verify", async (req, res) => {
       return badRequest(res, "Invalid code");
     }
 
-    let user = await pool.query(`SELECT * FROM bi_users WHERE phone_e164=$1`, [phone]);
+    const sessionResult = await pool.query(
+      `SELECT name, email, user_type FROM bi_otp_sessions
+        WHERE phone_e164 = $1
+        ORDER BY requested_at DESC NULLS LAST
+        LIMIT 1`,
+      [phone]
+    );
 
-    if (user.rows.length === 0) {
-      user = await pool.query(
-        `INSERT INTO bi_users(phone_e164,user_type)
-         VALUES($1,$2)
+    const session = sessionResult.rows[0] ?? {};
+    const name = (session.name as string | undefined) ?? null;
+    const email = (session.email as string | undefined) ?? null;
+    const resolvedUserType = (session.user_type as string | undefined) || "applicant";
+
+    let userResult = await pool.query(`SELECT * FROM bi_users WHERE phone_e164=$1`, [phone]);
+
+    if (userResult.rows.length === 0) {
+      userResult = await pool.query(
+        `INSERT INTO bi_users(phone_e164, user_type)
+         VALUES($1, $2)
          RETURNING *`,
-        [phone, userType || "applicant"]
+        [phone, resolvedUserType]
       );
     }
 
-    const token = signStaffToken({ staffUserId: user.rows[0].id, role: userType || "applicant" });
-    return ok(res, { success: true, userId: user.rows[0].id, token });
+    const user = userResult.rows[0];
+
+    let profileComplete = true;
+    if (resolvedUserType === "referrer") {
+      const ref = await pool.query(`SELECT id FROM bi_referrers WHERE user_id=$1`, [user.id]);
+      profileComplete = ref.rows.length > 0;
+    } else if (resolvedUserType === "lender") {
+      const lend = await pool.query(`SELECT id FROM bi_lenders WHERE user_id=$1`, [user.id]);
+      profileComplete = lend.rows.length > 0;
+    }
+
+    await pool.query(
+      `INSERT INTO bi_activity(application_id, actor_type, event_type, summary, meta)
+       VALUES(NULL, 'system', 'otp_verified', $1, $2::jsonb)`,
+      [
+        `OTP verified for ${email || phone}`,
+        JSON.stringify({ phone, name, email, userType: resolvedUserType, userId: user.id })
+      ]
+    );
+
+    const token = signStaffToken({ staffUserId: user.id, role: resolvedUserType });
+
+    return ok(res, {
+      success: true,
+      token,
+      tokenType: "Bearer",
+      expiresIn: 28800,
+      user: {
+        id: user.id,
+        name,
+        email,
+        phone,
+        userType: resolvedUserType
+      },
+      profileComplete
+    });
   } catch (error) {
     console.error("OTP verification failed", error);
     return badRequest(res, "Failed to verify OTP");

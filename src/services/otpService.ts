@@ -11,6 +11,9 @@ const serviceSid = env.TWILIO_VERIFY_SERVICE_SID;
 
 export async function sendOtp(phone: string) {
   if (!client || !serviceSid) {
+    if (env.NODE_ENV === "production") {
+      throw new Error("OTP service not configured in production");
+    }
     return { sid: "mock-otp", to: phone, status: "pending" };
   }
 
@@ -19,6 +22,9 @@ export async function sendOtp(phone: string) {
 
 export async function verifyOtp(phone: string, code: string) {
   if (!client || !serviceSid) {
+    if (env.NODE_ENV === "production") {
+      throw new Error("OTP service not configured in production");
+    }
     return code === "000000";
   }
 
