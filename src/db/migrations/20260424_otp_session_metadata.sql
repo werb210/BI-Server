@@ -1,0 +1,4 @@
+ALTER TABLE bi_otp_sessions
+  ADD COLUMN IF NOT EXISTS name TEXT,
+  ADD COLUMN IF NOT EXISTS email TEXT,
+  ADD COLUMN IF NOT EXISTS user_type TEXT DEFAULT 'applicant';
