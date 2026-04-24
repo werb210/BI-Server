@@ -54,15 +54,29 @@ function numOrNull(value: string | number | boolean | null | undefined): number 
 
 export function buildPGIPayload(app: BIApplication) {
   const scoring = app.scoringAnswers || {};
-  const country = typeof scoring.country === "string" && scoring.country ? scoring.country : "CA";
-  const missingFields: string[] = [];
+  const country =
+    typeof scoring.country === "string" && scoring.country ? scoring.country : null;
 
-  if (!numOrNull(scoring.loan_amount) && !app.loanAmount) {
-    missingFields.push("loan_amount");
-  }
+  const required: Record<string, unknown> = {
+    country,
+    naics_code: typeof scoring.naics_code === "string" ? scoring.naics_code : null,
+    formation_date: typeof scoring.formation_date === "string" ? scoring.formation_date : null,
+    loan_amount: numOrNull(scoring.loan_amount) ?? app.loanAmount ?? null,
+    pgi_limit: numOrNull(scoring.pgi_limit),
+    annual_revenue: numOrNull(scoring.annual_revenue),
+    ebitda: numOrNull(scoring.ebitda),
+    total_debt: numOrNull(scoring.total_debt),
+    monthly_debt_service: numOrNull(scoring.monthly_debt_service),
+    collateral_value: numOrNull(scoring.collateral_value),
+    enterprise_value: numOrNull(scoring.enterprise_value)
+  };
 
-  if (missingFields.length) {
-    throw new Error(`Missing required form_data fields: ${missingFields.join(", ")}`);
+  const missing = Object.entries(required)
+    .filter(([, v]) => v === null || v === undefined || v === "")
+    .map(([k]) => k);
+
+  if (missing.length) {
+    throw new Error(`Missing required form_data fields: ${missing.join(", ")}`);
   }
 
   return {
@@ -70,51 +84,24 @@ export function buildPGIPayload(app: BIApplication) {
     guarantor_email: app.guarantorEmail || app.email,
     business_name: app.businessName,
     lender_name: app.lender || "Unknown lender",
-    business: {
-      name: app.businessName,
-      registrationNumber: app.registrationNumber || "",
-      country: "CA",
-      industry: app.industry || ""
-    },
-    applicant: {
-      firstName: app.firstName,
-      lastName: app.lastName,
-      email: app.email,
-      phone: app.phone
-    },
-    loan: {
-      amount: app.loanAmount,
-      type: app.loanType,
-      lender: app.lender || ""
-    },
-    guarantee: {
-      coveragePercent: app.coveragePercent,
-      guaranteeAmount: Math.round((app.loanAmount * app.coveragePercent) / 100)
-    },
     form_data: {
-      has_bankruptcy: scoring.has_bankruptcy ?? false,
-      years_in_business: numOrNull(scoring.years_in_business),
-      annual_revenue: numOrNull(scoring.annual_revenue),
-      prior_default: scoring.prior_default ?? false,
-      existing_guarantee_exposure: numOrNull(scoring.existing_guarantee_exposure),
-      country,
-      naics_code: typeof scoring.naics_code === "string" ? scoring.naics_code : "",
-      formation_date: typeof scoring.formation_date === "string" ? scoring.formation_date : null,
-      loan_amount: numOrNull(scoring.loan_amount) ?? app.loanAmount,
-      pgi_limit: numOrNull(scoring.pgi_limit),
-      ebitda: numOrNull(scoring.ebitda),
-      total_debt: numOrNull(scoring.total_debt),
-      monthly_debt_service: numOrNull(scoring.monthly_debt_service),
-      collateral_value: numOrNull(scoring.collateral_value),
-      enterprise_value: numOrNull(scoring.enterprise_value),
-      bankruptcy_history: Boolean(scoring.bankruptcy_history ?? scoring.has_bankruptcy ?? false),
+      country: required.country,
+      naics_code: required.naics_code,
+      formation_date: required.formation_date,
+      loan_amount: required.loan_amount,
+      pgi_limit: required.pgi_limit,
+      annual_revenue: required.annual_revenue,
+      ebitda: required.ebitda,
+      total_debt: required.total_debt,
+      monthly_debt_service: required.monthly_debt_service,
+      collateral_value: required.collateral_value,
+      enterprise_value: required.enterprise_value,
+      bankruptcy_history: Boolean(
+        scoring.bankruptcy_history ?? scoring.has_bankruptcy ?? false
+      ),
       insolvency_history: Boolean(scoring.insolvency_history ?? false),
-      judgment_history: Boolean(scoring.judgment_history ?? false)
-    },
-    documents: (app.documents || []).map((d) => ({
-      type: d.type,
-      file: d.base64
-    }))
+      judgment_history: Boolean(scoring.judgment_history ?? scoring.prior_default ?? false)
+    }
   };
 }
 
@@ -124,13 +111,19 @@ export async function submitToPGI(app: BIApplication, axiosClient?: AxiosInstanc
   const response = await client.post("/applications/", payload);
 
   return {
-    externalId: response.data.id as string,
+    externalId: (response.data.application_id ?? response.data.id) as string,
     status: response.data.status as string
   };
 }
 
-export async function getPGIStatus(externalId: string, axiosClient?: AxiosInstance) {
+export async function getPGIQuote(quoteId: string, axiosClient?: AxiosInstance) {
   const client = axiosClient ?? makeClient();
-  const res = await client.get(`/applications/${externalId}`);
+  const res = await client.get(`/quotes/${quoteId}/`);
+  return res.data;
+}
+
+export async function scorePGI(payload: Record<string, unknown>, axiosClient?: AxiosInstance) {
+  const client = axiosClient ?? makeClient();
+  const res = await client.post("/score/", payload);
   return res.data;
 }

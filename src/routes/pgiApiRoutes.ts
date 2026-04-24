@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { randomUUID } from "crypto";
 
-import { getPGIStatus, submitToPGI, type BIApplication } from "../services/pgiAdapter";
+import { pool } from "../db";
+import { getPGIQuote, submitToPGI, type BIApplication } from "../services/pgiAdapter";
 import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
@@ -37,7 +38,15 @@ router.get("/bi/pgi/applications/:id", async (req, res) => {
     return ok(res, { mode: "stub", ...app });
   }
 
-  const result = await getPGIStatus(id);
+  const quoteResult = await pool.query<{ quote_id: string | null; underwriter_ref: string | null }>(
+    `SELECT quote_id, underwriter_ref
+     FROM bi_applications
+     WHERE id::text = $1 OR pgi_external_id = $1
+     LIMIT 1`,
+    [id]
+  );
+  const quoteId = quoteResult.rows[0]?.quote_id ?? quoteResult.rows[0]?.underwriter_ref ?? id;
+  const result = await getPGIQuote(quoteId);
   return ok(res, { mode: "pgi", ...result });
 });
 
