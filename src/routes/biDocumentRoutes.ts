@@ -22,7 +22,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-router.post("/application/:id/documents", upload.array("files"), async (req, res) => {
+router.post("/:id/documents", upload.array("files"), async (req, res) => {
   const { id } = req.params;
   const files = (req.files as Express.Multer.File[]) ?? [];
   const docTypesRaw = req.body?.doc_types;

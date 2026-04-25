@@ -7,6 +7,8 @@ import pgiRoutes from "../routes/pgiRoutes";
 import pgiApiRoutes from "../routes/pgiApiRoutes";
 import { pool } from "../db";
 import { resetPGISubmitterForTests, setPGISubmitterForTests } from "../controllers/pgiController";
+import app from "../server";
+import { signStaffToken } from "../platform/auth";
 
 const originalQuery = pool.query.bind(pool);
 
@@ -159,4 +161,35 @@ test("E2E flow: quote -> application -> submit -> webhook -> pipeline", async ()
   const pipelineRes = await request(app).get("/api/v1/pipeline/lender/lender-1");
   assert.equal(pipelineRes.status, 200);
   assert.equal(pipelineRes.body.data[0].stage, "Approved");
+});
+
+
+test("Smoke: public BI applications index is not mounted", async () => {
+  const res = await request(app).get("/api/v1/applications");
+  assert.equal(res.status, 404);
+});
+
+test("Smoke: quote estimate requires auth", async () => {
+  const res = await request(app).post("/api/v1/bi/quote/estimate").send({
+    facilityType: "secured",
+    loanAmount: 100000
+  });
+
+  assert.equal(res.status, 401);
+});
+
+test("Smoke: quote estimate succeeds with auth", async () => {
+  const token = signStaffToken({
+    staffUserId: "test-user",
+    role: "applicant",
+    phone: "+15555550000",
+    userType: "applicant"
+  });
+
+  const res = await request(app)
+    .post("/api/v1/bi/quote/estimate")
+    .set("Authorization", `Bearer ${token}`)
+    .send({ facilityType: "secured", loanAmount: 100000 });
+
+  assert.equal(res.status, 200);
 });

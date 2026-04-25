@@ -2,7 +2,7 @@ import { Router } from "express";
 import { Pool } from "pg";
 import { env } from "../platform/env";
 
-import { badRequest, ok } from "../utils/apiResponse";
+import { ok } from "../utils/apiResponse";
 
 const router = Router();
 const db = new Pool({ connectionString: env.DATABASE_URL });
@@ -12,13 +12,27 @@ router.post("/:id/activate", async (req, res) => {
 
   const result = await db.query(
     `UPDATE bi_applications
-     SET stage='active'
+     SET stage='policy_issued',
+         updated_at=NOW()
      WHERE id=$1
      RETURNING *`,
     [id]
   );
 
-  ok(res, result.rows[0]);
+  await db.query(
+    `INSERT INTO bi_policies(application_id, status)
+     VALUES($1, 'active')
+     ON CONFLICT DO NOTHING`,
+    [id]
+  );
+
+  await db.query(
+    `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
+     VALUES($1,'system','policy_activated','Policy activated')`,
+    [id]
+  );
+
+  ok(res, result.rows[0] ?? null);
 });
 
 router.post("/:id/cancel", async (req, res) => {
