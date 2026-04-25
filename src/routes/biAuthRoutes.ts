@@ -1,15 +1,16 @@
 import { Router } from "express";
 import bcrypt from "bcrypt";
 import { pool } from "../db";
-import { sendOtp, verifyOtp } from "../services/otpService";
+import { signStaffToken } from "../platform/auth";
 import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
+import { sendOtp, verifyOtp } from "../services/otpService";
 import { calculatePremium } from "../services/premiumService";
 import { badRequest, ok } from "../utils/apiResponse";
-import { signStaffToken } from "../platform/auth";
 
-const router = Router();
+const publicRouter = Router();
+export const biAppApplicantRoutes = Router();
 
-router.post("/otp/request", async (req, res) => {
+publicRouter.post("/otp/request", async (req, res) => {
   const { phone, name, email, userType } = req.body as {
     phone?: string;
     name?: string;
@@ -21,25 +22,38 @@ router.post("/otp/request", async (req, res) => {
     return badRequest(res, "Name, email, and phone are required");
   }
 
-  const recent = await pool.query(
-    `SELECT COUNT(*)::int AS n
-       FROM bi_otp_sessions
-      WHERE phone_e164 = $1
-        AND requested_at > NOW() - INTERVAL '10 minutes'`,
-    [phone]
-  );
+  const [phoneRecent, ipRecent] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(*)::int AS n
+         FROM bi_otp_sessions
+        WHERE phone_e164 = $1
+          AND requested_at > NOW() - INTERVAL '10 minutes'`,
+      [phone]
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS n
+         FROM bi_otp_sessions
+        WHERE requested_ip = $1
+          AND requested_at > NOW() - INTERVAL '10 minutes'`,
+      [req.ip]
+    )
+  ]);
 
-  if (recent.rows[0].n >= 3) {
-    return badRequest(res, "Too many requests. Please wait a few minutes.");
+  if (phoneRecent.rows[0].n >= 2) {
+    return badRequest(res, "Too many requests for this phone. Please wait a few minutes.");
+  }
+
+  if (ipRecent.rows[0].n >= 10) {
+    return badRequest(res, "Too many OTP requests from this IP. Please wait a few minutes.");
   }
 
   try {
     await sendOtp(phone);
 
     await pool.query(
-      `INSERT INTO bi_otp_sessions(phone_e164, purpose, name, email, user_type)
-       VALUES($1, 'login', $2, $3, $4)`,
-      [phone, name, email, userType || "applicant"]
+      `INSERT INTO bi_otp_sessions(phone_e164, purpose, name, email, user_type, requested_ip)
+       VALUES($1, 'login', $2, $3, $4, $5)`,
+      [phone, name, email, userType || "applicant", req.ip]
     );
 
     await pool.query(
@@ -47,7 +61,7 @@ router.post("/otp/request", async (req, res) => {
        VALUES(NULL, 'system', 'otp_requested', $1, $2::jsonb)`,
       [
         `OTP requested by ${name} <${email}>`,
-        JSON.stringify({ phone, name, email, userType: userType || "applicant" })
+        JSON.stringify({ phone, name, email, userType: userType || "applicant", requestedIp: req.ip })
       ]
     );
 
@@ -58,7 +72,7 @@ router.post("/otp/request", async (req, res) => {
   }
 });
 
-router.post("/otp/verify", async (req, res) => {
+publicRouter.post("/otp/verify", async (req, res) => {
   const { phone, code } = req.body as { phone?: string; code?: string };
 
   if (!phone || !code) {
@@ -85,7 +99,7 @@ router.post("/otp/verify", async (req, res) => {
     const email = (session.email as string | undefined) ?? null;
     const resolvedUserType = (session.user_type as string | undefined) || "applicant";
 
-    let userResult = await pool.query(`SELECT * FROM bi_users WHERE phone_e164=$1`, [phone]);
+    let userResult = await pool.query("SELECT * FROM bi_users WHERE phone_e164=$1", [phone]);
 
     if (userResult.rows.length === 0) {
       userResult = await pool.query(
@@ -100,10 +114,10 @@ router.post("/otp/verify", async (req, res) => {
 
     let profileComplete = true;
     if (resolvedUserType === "referrer") {
-      const ref = await pool.query(`SELECT id FROM bi_referrers WHERE user_id=$1`, [user.id]);
+      const ref = await pool.query("SELECT id FROM bi_referrers WHERE user_id=$1", [user.id]);
       profileComplete = ref.rows.length > 0;
     } else if (resolvedUserType === "lender") {
-      const lend = await pool.query(`SELECT id FROM bi_lenders WHERE user_id=$1`, [user.id]);
+      const lend = await pool.query("SELECT id FROM bi_lenders WHERE user_id=$1", [user.id]);
       profileComplete = lend.rows.length > 0;
     }
 
@@ -116,7 +130,12 @@ router.post("/otp/verify", async (req, res) => {
       ]
     );
 
-    const token = signStaffToken({ staffUserId: user.id, role: resolvedUserType });
+    const token = signStaffToken({
+      staffUserId: user.id,
+      role: resolvedUserType,
+      phone,
+      userType: resolvedUserType
+    });
 
     return ok(res, {
       success: true,
@@ -138,8 +157,7 @@ router.post("/otp/verify", async (req, res) => {
   }
 });
 
-
-router.post("/staff/login", async (req, res) => {
+publicRouter.post("/staff/login", async (req, res) => {
   const { email, password } = req.body as { email?: string; password?: string };
 
   if (!email || !password) {
@@ -157,30 +175,37 @@ router.post("/staff/login", async (req, res) => {
     return badRequest(res, "Invalid staff credentials");
   }
 
-  const token = signStaffToken({ staffUserId: process.env.ADMIN_EMAIL, role: "staff" });
+  const token = signStaffToken({
+    staffUserId: process.env.ADMIN_EMAIL,
+    role: "staff",
+    userType: "staff"
+  });
 
   return ok(res, { token, tokenType: "Bearer", expiresIn: 28800 });
 });
 
-router.post("/application/draft", async (req, res) => {
-  const { phone, data, createdBy } = req.body;
+biAppApplicantRoutes.post("/application/draft", async (req, res) => {
+  const userPhone = (req.user as { phone?: string } | undefined)?.phone;
+  const { data, createdBy } = req.body;
+
+  if (!userPhone) {
+    return badRequest(res, "Token phone claim is required");
+  }
 
   let createdByActor = "applicant";
   let createdByLenderId = null;
 
-  // If created by lender
   if (createdBy === "lender") {
-    // find lender user
     const lenderUser = await pool.query(
-      `SELECT id FROM bi_users WHERE phone_e164=$1 AND user_type='lender'`,
-      [phone]
+      "SELECT id FROM bi_users WHERE phone_e164=$1 AND user_type='lender'",
+      [userPhone]
     );
 
     if (lenderUser.rows.length === 0) {
       return badRequest(res, "Lender not found");
     }
 
-    const lender = await pool.query(`SELECT id FROM bi_lenders WHERE user_id=$1`, [lenderUser.rows[0].id]);
+    const lender = await pool.query("SELECT id FROM bi_lenders WHERE user_id=$1", [lenderUser.rows[0].id]);
 
     if (lender.rows.length === 0) {
       return badRequest(res, "Lender profile not found");
@@ -190,47 +215,38 @@ router.post("/application/draft", async (req, res) => {
     createdByLenderId = lender.rows[0].id;
   }
 
-  // Create company record (if client provided name)
   let companyId = null;
   if (data.client_name) {
     const companyInsert = await pool.query(
-      `
-      INSERT INTO bi_companies(legal_name)
-      VALUES($1)
-      RETURNING id
-      `,
+      `INSERT INTO bi_companies(legal_name)
+       VALUES($1)
+       RETURNING id`,
       [data.client_name]
     );
     companyId = companyInsert.rows[0].id;
   }
 
-  // Create contact
   let contactId = null;
   if (data.client_name) {
     const contactInsert = await pool.query(
-      `
-      INSERT INTO bi_contacts(full_name,phone_e164,company_id)
-      VALUES($1,$2,$3)
-      RETURNING id
-      `,
-      [data.client_name, data.client_phone || phone, companyId]
+      `INSERT INTO bi_contacts(full_name, phone_e164, company_id)
+       VALUES($1, $2, $3)
+       RETURNING id`,
+      [data.client_name, data.client_phone || userPhone, companyId]
     );
     contactId = contactInsert.rows[0].id;
   }
 
-  // Calculate premium immediately if loanAmount exists
   let premiumSnapshot = {};
   if (data.loanAmount && data.facilityType) {
-    const { calculatePremium: calculateDraftPremium } = await import("../services/premiumService");
-    premiumSnapshot = calculateDraftPremium({
+    premiumSnapshot = calculatePremium({
       loanAmount: data.loanAmount,
       facilityType: data.facilityType,
     });
   }
 
   const created = await pool.query(
-    `
-    INSERT INTO bi_applications
+    `INSERT INTO bi_applications
     (
       created_by_actor,
       created_by_lender_id,
@@ -241,23 +257,20 @@ router.post("/application/draft", async (req, res) => {
       premium_calc
     )
     VALUES($1,$2,$3,$4,$5,$6,$7)
-    RETURNING *
-    `,
-    [createdByActor, createdByLenderId, data.client_phone || phone, companyId, contactId, data, premiumSnapshot]
+    RETURNING *`,
+    [createdByActor, createdByLenderId, data.client_phone || userPhone, companyId, contactId, data, premiumSnapshot]
   );
 
   await pool.query(
-    `
-    INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
-    VALUES($1,$2,'application_created',$3)
-    `,
+    `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
+    VALUES($1,$2,'application_created',$3)`,
     [created.rows[0].id, createdByActor, `Application created by ${createdByActor}`]
   );
 
   return ok(res, created.rows[0]);
 });
 
-router.post("/application/submit", async (req, res) => {
+biAppApplicantRoutes.post("/application/submit", async (req, res) => {
   const { applicationId, facilityType, loanAmount, bankruptcy } = req.body;
 
   if (!applicationId || !facilityType || typeof loanAmount !== "number") {
@@ -283,28 +296,22 @@ router.post("/application/submit", async (req, res) => {
     }
 
     await pool.query(
-      `
-      INSERT INTO bi_commissions(application_id,annual_premium_amount,commission_amount,status)
+      `INSERT INTO bi_commissions(application_id,annual_premium_amount,commission_amount,status)
       VALUES($1,$2,$3,'estimated')
-      ON CONFLICT (application_id) DO NOTHING
-      `,
+      ON CONFLICT (application_id) DO NOTHING`,
       [applicationId, premium.annualPremium, premium.annualPremium * 0.1]
     );
 
     await pool.query(
-      `
-      INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
-      VALUES($1,'applicant','application_submitted','Application submitted and moved to Documents Pending')
-    `,
+      `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
+      VALUES($1,'applicant','application_submitted','Application submitted and moved to Documents Pending')`,
       [applicationId]
     );
 
     if (bankruptcy) {
       await pool.query(
-        `
-        INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
-        VALUES($1,'system','red_flag','Bankruptcy flag triggered')
-      `,
+        `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
+        VALUES($1,'system','red_flag','Bankruptcy flag triggered')`,
         [applicationId]
       );
     }
@@ -317,4 +324,4 @@ router.post("/application/submit", async (req, res) => {
   }
 });
 
-export default router;
+export default publicRouter;

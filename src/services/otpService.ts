@@ -25,7 +25,7 @@ export async function verifyOtp(phone: string, code: string) {
     if (env.NODE_ENV === "production") {
       throw new Error("OTP service not configured in production");
     }
-    return code === "000000";
+    return env.ALLOW_DEV_OTP === "true" && code === "000000";
   }
 
   const result = await client.verify.v2

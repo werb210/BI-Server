@@ -48,6 +48,45 @@ export const openApiSpec = {
         }
       }
     },
+    "/api/v1/bi/application/draft": {
+      post: { tags: ["Application"], summary: "Create or update application draft", responses: { 200: { description: "Draft saved" } } }
+    },
+    "/api/v1/bi/application/submit": {
+      post: { tags: ["Application"], summary: "Submit BI application", responses: { 200: { description: "Submitted" } } }
+    },
+    "/api/v1/bi/application/by-phone": {
+      get: { tags: ["Application"], summary: "Get latest application by phone", responses: { 200: { description: "Application" } } }
+    },
+    "/api/v1/bi/applications/:id/documents": {
+      post: {
+        tags: ["Documents"],
+        summary: "Upload application document",
+        requestBody: {
+          required: true,
+          content: {
+            "multipart/form-data": {
+              schema: {
+                type: "object",
+                properties: {
+                  files: { type: "array", items: { type: "string", format: "binary" } },
+                  doc_types: { type: "array", items: { type: "string" } }
+                }
+              }
+            }
+          }
+        },
+        responses: { 200: { description: "Uploaded" } }
+      }
+    },
+    "/api/v1/bi/pipeline/:id/stage": {
+      patch: { tags: ["Pipeline"], summary: "Update pipeline stage", responses: { 200: { description: "Updated" } } }
+    },
+    "/api/v1/bi/quote/estimate": {
+      post: { tags: ["Quote"], summary: "Estimate premium", responses: { 200: { description: "Estimated" } } }
+    },
+    "/api/v1/bi/commissions/by-application/:id": {
+      get: { tags: ["Pipeline"], summary: "Get commission by application", responses: { 200: { description: "Commission" } } }
+    },
     "/quote": {
       post: {
         tags: ["Quote"],

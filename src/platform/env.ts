@@ -20,6 +20,7 @@ const envSchema = z.object({
   SENDGRID_API_KEY: z.string().optional(),
   SENDGRID_FROM: z.string().optional(),
   USE_PGI_STUB: z.string().optional(),
-  BI_STAFF_JWT_SECRET: z.string().optional()
+  BI_STAFF_JWT_SECRET: z.string().optional(),
+  ALLOW_DEV_OTP: z.string().optional()
 });
 export const env = envSchema.parse(process.env);

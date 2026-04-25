@@ -13,15 +13,16 @@ import { startPurgeJob } from "./jobs/purgeJob";
 import { biRateLimiter } from "./middleware/biRateLimit";
 import { enforceBIPrefix } from "./middleware/biIsolation";
 import biApplicationRoutes from "./routes/biApplicationRoutes";
-import biAuthRoutes from "./routes/biAuthRoutes";
+import biAuthRoutes, { biAppApplicantRoutes } from "./routes/biAuthRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
 import biDocumentRoutes from "./routes/biDocumentRoutes";
 import biEventsRoutes from "./routes/biEvents";
+import biLenderRoutes from "./routes/biLenderRoutes";
 import biPayoutRoutes from "./routes/biPayoutRoutes";
 import biPolicyRoutes from "./routes/biPolicyRoutes";
+import biQuoteRoutes from "./routes/biQuoteRoutes";
 import biReferrerRoutes from "./routes/biReferrerRoutes";
-import biLenderRoutes from "./routes/biLenderRoutes";
 import biReportRoutes from "./routes/biReportRoutes";
 import biRoutes from "./routes/biRoutes";
 import biUnderwritingRoutes from "./routes/biUnderwritingRoutes";
@@ -29,7 +30,6 @@ import chatRoutes from "./routes/chat";
 import intakeRoutes from "./routes/intake";
 import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
 import pgiWebhookRoutes from "./routes/pgiWebhookRoutes";
-import pgiApiRoutes from "./routes/pgiApiRoutes";
 import { requireAuth } from "./platform/auth";
 import { env } from "./platform/env";
 import { errorHandler } from "./platform/errorHandler";
@@ -45,29 +45,47 @@ const app = express();
 
 app.use(requestId);
 app.use(idempotency);
-app.use(pgiWebhookRoutes);
-app.use(express.json({ limit: "10mb" }));
-app.use(httpLogger);
 
 const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: 100
 });
 
-app.use(limiter);
-
 const spamThrottle = new Map<string, number>();
 
+const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || env.CORS_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((v) => v.trim())
+  .filter(Boolean);
+
+const corsOrigins = configuredOrigins.length
+  ? configuredOrigins
+  : env.NODE_ENV === "production"
+    ? []
+    : ["http://localhost:5173", "http://localhost:3000"];
+
+if (env.NODE_ENV === "production" && corsOrigins.length === 0) {
+  logger.error("CORS_ALLOWED_ORIGINS is empty in production; browser requests with credentials will be blocked.");
+}
+
+const biCors = cors({
+  origin: corsOrigins,
+  credentials: true,
+});
+
+// Webhook (raw body) — must be before express.json
+app.use(pgiWebhookRoutes);
+app.use(express.json({ limit: "10mb" }));
+app.use(httpLogger);
+app.use(limiter);
 app.use(helmet());
 app.use(compression());
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
 app.use("/health", healthRoutes);
 app.use(metricsRoutes);
+if (env.NODE_ENV !== "production") app.use(morgan("dev"));
 
-if (env.NODE_ENV !== "production") {
-  app.use(morgan("dev"));
-}
-
+// Spam throttle for /pgi-intake
 app.use("/api/v1", (req, res, next) => {
   if (req.path !== "/pgi-intake" || req.method !== "POST") {
     return next();
@@ -85,29 +103,18 @@ app.use("/api/v1", (req, res, next) => {
   return next();
 });
 
-app.use("/api/v1", pgiApiRoutes);
-app.use("/api/v1", intakeRoutes);
+// Public, unauthenticated BI endpoints
 app.use("/api/v1", chatRoutes);
 app.use("/api/v1", mayaAnalyticsRoutes);
-
-// Public BI endpoints for applicant resume/draft/submit and auth
+app.use("/api/v1", intakeRoutes);
 app.use("/api/v1", biAuthRoutes);
-app.use("/api/v1", biApplicationRoutes);
 
-app.use(
-  "/api/v1/bi",
-  cors({
-    origin: (process.env.CORS_ALLOWED_ORIGINS || env.CORS_ALLOWED_ORIGINS || "").split(",").map((v) => v.trim()).filter(Boolean),
-    credentials: true
-  }),
-  biRateLimiter,
-  enforceBIPrefix,
-  requireAuth,
-  biRoutes,
-  biApplicationRoutes,
-  biEventsRoutes
-);
-
+// Authenticated BI endpoints — every BI route lives under /api/v1/bi
+app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biRoutes);
+app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biApplicationRoutes);
+app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biEventsRoutes);
+app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biAppApplicantRoutes);
+app.use("/api/v1/bi/applications", requireAuth, biDocumentRoutes);
 app.use("/api/v1/bi/documents", requireAuth, biDocumentRoutes);
 app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
 app.use("/api/v1/bi/crm", requireAuth, biCrmRoutes);
@@ -117,6 +124,9 @@ app.use("/api/v1/bi/reports", requireAuth, biReportRoutes);
 app.use("/api/v1/bi/policies", requireAuth, biPolicyRoutes);
 app.use("/api/v1/bi/payouts", requireAuth, biPayoutRoutes);
 app.use("/api/v1/bi/underwriting", requireAuth, biUnderwritingRoutes);
+
+// Quote estimate endpoint
+app.use("/api/v1/bi/quote", requireAuth, biQuoteRoutes);
 
 app.use(errorHandler);
 

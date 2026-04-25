@@ -7,51 +7,26 @@ const router = Router();
 
 router.post("/pgi-intake", async (req, res) => {
   try {
-    const {
-      firstName,
-      lastName,
-      email,
-      phone,
-      businessName,
-      loanAmount,
-      referralCode,
-      utm_source,
-      utm_medium,
-      utm_campaign
-    } = req.body;
-
-    if (!email || !businessName) {
+    const body = req.body ?? {};
+    if (!body.email || !body.businessName) {
       return badRequest(res, "Missing required fields");
     }
 
     await pool.query(
-      `
-      INSERT INTO pgi_applications (
-        first_name,
-        last_name,
-        email,
-        phone,
-        business_name,
-        loan_amount,
-        referral_code,
-        utm_source,
-        utm_medium,
-        utm_campaign
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-      `,
-      [
-        firstName ?? null,
-        lastName ?? null,
-        email,
-        phone ?? null,
-        businessName,
-        loanAmount ?? null,
-        referralCode ?? null,
-        utm_source ?? null,
-        utm_medium ?? null,
-        utm_campaign ?? null
-      ]
+      "INSERT INTO pgi_applications(data) VALUES ($1::jsonb)",
+      [JSON.stringify({
+        firstName: body.firstName ?? null,
+        lastName: body.lastName ?? null,
+        email: body.email,
+        phone: body.phone ?? null,
+        businessName: body.businessName,
+        loanAmount: body.loanAmount ?? null,
+        referralCode: body.referralCode ?? null,
+        utm_source: body.utm_source ?? null,
+        utm_medium: body.utm_medium ?? null,
+        utm_campaign: body.utm_campaign ?? null,
+        submittedAt: new Date().toISOString(),
+      })]
     );
 
     return ok(res, { success: true });
