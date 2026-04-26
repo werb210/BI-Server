@@ -37,27 +37,34 @@ router.post("/:id/activate", async (req, res) => {
 
 router.post("/:id/cancel", async (req, res) => {
   const { id } = req.params;
-
   await db.query(
-    `UPDATE bi_applications
-     SET stage='cancelled'
-     WHERE id=$1`,
+    "UPDATE bi_policies SET status='cancelled' WHERE id=$1",
     [id]
   );
-
+  await db.query(
+    `INSERT INTO bi_activity(application_id, actor_type, event_type, summary, meta)
+     SELECT application_id, 'staff', 'policy_cancelled', 'Policy cancelled', '{}'::jsonb
+       FROM bi_policies WHERE id=$1`,
+    [id]
+  );
   ok(res, { success: true });
 });
 
 router.post("/:id/renew", async (req, res) => {
   const { id } = req.params;
-
   await db.query(
-    `UPDATE bi_applications
-     SET stage='renewed'
-     WHERE id=$1`,
+    `UPDATE bi_policies
+        SET start_date = end_date,
+            end_date   = end_date + INTERVAL '1 year'
+      WHERE id=$1`,
     [id]
   );
-
+  await db.query(
+    `INSERT INTO bi_activity(application_id, actor_type, event_type, summary, meta)
+     SELECT application_id, 'staff', 'policy_renewed', 'Policy renewed', '{}'::jsonb
+       FROM bi_policies WHERE id=$1`,
+    [id]
+  );
   ok(res, { success: true });
 });
 
