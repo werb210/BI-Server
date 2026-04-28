@@ -23,7 +23,21 @@ router.post("/bi/pgi/applications", async (req, res) => {
     return ok(res, { mode: "stub", externalId: id, status: "under_review" });
   }
 
-  const result = await submitToPGI(payload);
+  // BI_HARDENING_v44 — surface PgiValidationError as 400 with field list.
+  let result: Awaited<ReturnType<typeof submitToPGI>>;
+  try {
+    result = await submitToPGI(payload);
+  } catch (err) {
+    const { isPgiValidationError } = await import("../lib/errors/pgiErrors");
+    if (isPgiValidationError(err)) {
+      return res.status(400).json({
+        ok: false,
+        error: "PGI_VALIDATION_FAILED",
+        missing_fields: err.missingFields,
+      });
+    }
+    throw err;
+  }
   return ok(res, { mode: "pgi", ...result });
 });
 

@@ -1,4 +1,6 @@
 import axios, { AxiosInstance } from "axios";
+// BI_HARDENING_v44 — structured PGI validation error
+import { PgiValidationError } from "../lib/errors/pgiErrors";
 
 const PGI_BASE_URL = process.env.PGI_BASE_URL || "https://api.pgicover.com/api/v2/";
 
@@ -76,7 +78,8 @@ export function buildPGIPayload(app: BIApplication) {
     .map(([k]) => k);
 
   if (missing.length) {
-    throw new Error(`Missing required form_data fields: ${missing.join(", ")}`);
+    // BI_HARDENING_v44 — structured 400 error so callers can surface field list.
+    throw new PgiValidationError(missing);
   }
 
   return {

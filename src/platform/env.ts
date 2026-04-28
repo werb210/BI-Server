@@ -14,7 +14,13 @@ const envSchema = z.object({
   ALERT_SMS_TO: z.string().optional(),
   PGI_API_KEY: z.string().optional(),
   PGI_BASE_URL: z.string().optional(),
-  PGI_WEBHOOK_SECRET: z.string().optional(),
+  // BI_HARDENING_v44 — PGI_WEBHOOK_SECRET is now REQUIRED. Server refuses to
+  // start without it so signature verification cannot silently no-op.
+  PGI_WEBHOOK_SECRET: z.string().min(16, "PGI_WEBHOOK_SECRET must be at least 16 chars"),
+  // BI_HARDENING_v44 — Azure Blob is required in production. In test/dev the
+  // storage factory falls back to LocalBackend if absent.
+  AZURE_STORAGE_CONNECTION_STRING: z.string().optional(),
+  AZURE_STORAGE_CONTAINER_BI: z.string().optional(),
   CORS_ALLOWED_ORIGINS: z.string().optional(),
   CORS_ALLOW_CREDENTIALS: z.string().optional(),
   SENDGRID_API_KEY: z.string().optional(),
