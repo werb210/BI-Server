@@ -125,8 +125,9 @@ app.use("/api/v1/bi/policies", requireAuth, biPolicyRoutes);
 app.use("/api/v1/bi/payouts", requireAuth, biPayoutRoutes);
 app.use("/api/v1/bi/underwriting", requireAuth, biUnderwritingRoutes);
 
-// Quote estimate endpoint
-app.use("/api/v1/bi/quote", requireAuth, biQuoteRoutes);
+// BI_HARDENING_v44 — Quote estimate endpoint is PUBLIC per BI-1 (ruling 7).
+// No requireAuth — the calculator must work for unauthenticated visitors.
+app.use("/api/v1/bi/quote", biQuoteRoutes);
 
 app.use(errorHandler);
 

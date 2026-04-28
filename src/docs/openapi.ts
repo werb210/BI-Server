@@ -5,10 +5,15 @@ export const openApiSpec = {
     version: "1.1.0",
     description: "Boreal Insurance PGI backend API surface"
   },
+  // BI_HARDENING_v44 — point at the BI-Server URL, not BF-Server.
   servers: [
     {
-      url: "https://server.boreal.financial/api/v1",
+      url: "https://bi-server-cse0apamgkheb9d5.canadacentral-01.azurewebsites.net/api/v1",
       description: "Production"
+    },
+    {
+      url: "http://localhost:8080/api/v1",
+      description: "Local"
     }
   ],
   tags: [
