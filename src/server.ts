@@ -40,6 +40,9 @@ import metricsRoutes from "./platform/metricsRoutes";
 import { requestId } from "./platform/requestId";
 import { badRequest } from "./utils/apiResponse";
 import { httpLogger } from "./utils/httpLogger";
+// BI_V1_FINAL_v47 — lender direct API + bi_notes
+import biLenderApiRoutes from "./routes/biLenderApiRoutes";
+import biNotesRoutes from "./routes/biNotesRoutes";
 
 const app = express();
 
@@ -128,6 +131,12 @@ app.use("/api/v1/bi/underwriting", requireAuth, biUnderwritingRoutes);
 // BI_HARDENING_v44 — Quote estimate endpoint is PUBLIC per BI-1 (ruling 7).
 // No requireAuth — the calculator must work for unauthenticated visitors.
 app.use("/api/v1/bi/quote", biQuoteRoutes);
+
+// BI_V1_FINAL_v47 — lender direct API. Admin endpoints inside require staff auth;
+// the public submission endpoint authenticates via X-API-Key header.
+app.use("/api/v1/bi", biLenderApiRoutes);
+// BI_V1_FINAL_v47 — application-scoped notes (BI silo).
+app.use("/api/v1/bi/applications/:id/notes", requireAuth, biNotesRoutes);
 
 app.use(errorHandler);
 
