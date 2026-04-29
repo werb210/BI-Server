@@ -27,6 +27,9 @@ const envSchema = z.object({
   SENDGRID_FROM: z.string().optional(),
   USE_PGI_STUB: z.string().optional(),
   BI_STAFF_JWT_SECRET: z.string().optional(),
-  ALLOW_DEV_OTP: z.string().optional()
+  ALLOW_DEV_OTP: z.string().optional(),
+  APOLLO_API_KEY: z.string().optional(),
+  APOLLO_SYNC_ENABLED: z.string().optional(),
+  APOLLO_SEQUENCE_FILTER_ONLY: z.string().optional()
 });
 export const env = envSchema.parse(process.env);

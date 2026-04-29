@@ -43,6 +43,7 @@ import { httpLogger } from "./utils/httpLogger";
 // BI_V1_FINAL_v47 — lender direct API + bi_notes
 import biLenderApiRoutes from "./routes/biLenderApiRoutes";
 import biNotesRoutes from "./routes/biNotesRoutes";
+import biApolloRoutes from "./routes/biApolloRoutes";
 
 const app = express();
 
@@ -137,6 +138,7 @@ app.use("/api/v1/bi/quote", biQuoteRoutes);
 app.use("/api/v1/bi", biLenderApiRoutes);
 // BI_V1_FINAL_v47 — application-scoped notes (BI silo).
 app.use("/api/v1/bi/applications/:id/notes", requireAuth, biNotesRoutes);
+app.use("/api/v1/bi", requireAuth, biApolloRoutes);
 
 app.use(errorHandler);
 
