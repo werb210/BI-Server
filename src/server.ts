@@ -10,6 +10,8 @@ import { openApiSpec } from "./docs/openapi";
 import { pool, runMigrations } from "./db";
 import { startPremiumAccrualJob } from "./jobs/premiumAccrualJob";
 import { startPurgeJob } from "./jobs/purgeJob";
+// BI_APOLLO_SYNC_v54_PHASE2
+import { startApolloSyncJob } from "./jobs/apolloSyncJob";
 import { biRateLimiter } from "./middleware/biRateLimit";
 import { enforceBIPrefix } from "./middleware/biIsolation";
 import biApplicationRoutes from "./routes/biApplicationRoutes";
@@ -221,6 +223,8 @@ export async function bootstrap() {
     await pool.query("ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB");
     startPremiumAccrualJob();
     startPurgeJob();
+    // BI_APOLLO_SYNC_v54_PHASE2 — gated on APOLLO_SYNC_ENABLED + APOLLO_API_KEY
+    startApolloSyncJob();
   } catch (error) {
     logger.error({ err: error }, "Database initialization failed (non-blocking)");
   }
