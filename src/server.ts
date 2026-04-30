@@ -46,6 +46,9 @@ import { httpLogger } from "./utils/httpLogger";
 import biLenderApiRoutes from "./routes/biLenderApiRoutes";
 import biNotesRoutes from "./routes/biNotesRoutes";
 import biApolloRoutes from "./routes/biApolloRoutes";
+// BI_PGI_ALIGNMENT_v56
+import biAdminLenderRoutes from "./routes/biAdminLenderRoutes";
+import biContactFormRoutes from "./routes/biContactFormRoutes";
 
 const app = express();
 
@@ -141,6 +144,9 @@ app.use("/api/v1/bi", biLenderApiRoutes);
 // BI_V1_FINAL_v47 — application-scoped notes (BI silo).
 app.use("/api/v1/bi/applications/:id/notes", requireAuth, biNotesRoutes);
 app.use("/api/v1/bi", requireAuth, biApolloRoutes);
+// BI_PGI_ALIGNMENT_v56
+app.use("/api/v1/bi", requireAuth, biAdminLenderRoutes);
+app.use("/api/v1", biContactFormRoutes);  // public — no auth
 
 app.use(errorHandler);
 
