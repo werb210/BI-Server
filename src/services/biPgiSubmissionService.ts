@@ -1,5 +1,6 @@
 import { pool } from "../db";
 import { submitToPGI, type BIApplication } from "./pgiAdapter";
+// BI_PGI_ALIGNMENT_v56 — reads from bi_applications.data which now contains the full PGI form_data shape.
 
 type ApplicationRow = {
   id: string;
