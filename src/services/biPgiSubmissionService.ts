@@ -1,4 +1,5 @@
 import { pool } from "../db";
+import { buildCarrierPayloadFromRow } from "./pgiCarrierMapper"; // PGI_API_ALIGN_v57
 import { submitToPGI, type BIApplication } from "./pgiAdapter";
 // BI_PGI_ALIGNMENT_v56 — reads from bi_applications.data which now contains the full PGI form_data shape.
 
@@ -129,4 +130,17 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
   );
 
   return { ...result, alreadySubmitted: false };
+}
+
+
+// PGI_API_ALIGN_v57 — strict carrier payload builder, single source of truth.
+// Any code path forwarding to PGI MUST go through this function so the
+// 18-field contract is enforced at exactly one place.
+export function buildPgiPayload(row: {
+  guarantor_name: string;
+  guarantor_email: string;
+  lender_name: string | null;
+  data: Record<string, unknown>;
+}) {
+  return buildCarrierPayloadFromRow(row);
 }
