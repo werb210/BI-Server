@@ -187,3 +187,14 @@ export async function listEmailerMessages(args: {
     pagination: res?.pagination ?? { page: 1, per_page: 100, total_entries: 0, total_pages: 0 },
   };
 }
+
+
+// BI_APOLLO_RUN_v55_PHASE3 — lead-gen + sequence + email-account endpoints.
+export type PeopleSearchFilters = { page?: number; per_page?: number; person_titles?: string[]; person_seniorities?: string[]; organization_industry_tag_ids?: string[]; organization_industries?: string[]; organization_num_employees_ranges?: string[]; person_locations?: string[]; organization_locations?: string[]; };
+export async function searchPeople(filters: PeopleSearchFilters){ const body: Record<string, unknown> = { page: filters.page ?? 1, per_page: Math.min(filters.per_page ?? 25, 100)}; for (const [k,v] of Object.entries(filters)){ if(k!=="page"&&k!=="per_page"&&Array.isArray(v)&&v.length) body[k]=v;} const res = await apolloRequest<any>("/mixed_people/search", {method:"POST", body}); return { people: res?.people ?? [], pagination: res?.pagination ?? {page:1, per_page:25,total_entries:0,total_pages:0}};}
+export async function addContactsToSequence(sequenceId:string, contactIds:string[], emailAccountId?:string){ if(!contactIds.length) return {enrolled:0, raw:null}; const res=await apolloRequest<unknown>(`/emailer_campaigns/${encodeURIComponent(sequenceId)}/add_contact_ids`, {method:"POST", body:{contact_ids:contactIds, send_email_from_email_account_id:emailAccountId}}); return {enrolled:contactIds.length, raw:res}; }
+export type ApolloEmailAccount={id:string; email?:string; send_limit_per_day?:number; emails_sent_today?:number; bounce_rate?:number; reply_rate?:number; status?:string};
+export async function listEmailAccounts(){ const res=await apolloRequest<any>("/email_accounts", {method:"GET"}); return {email_accounts: res?.email_accounts ?? []}; }
+export type ApolloSequence={id:string; name?:string; active?:boolean; archived?:boolean; num_steps?:number};
+export async function listSequences(args:{page?:number; per_page?:number}={}){ const res=await apolloRequest<any>("/emailer_campaigns/search", {method:"POST", body:{page:args.page??1, per_page:Math.min(args.per_page??100,100)}}); return {sequences:res?.emailer_campaigns??[], pagination:res?.pagination ?? {page:1, per_page:100,total_entries:0,total_pages:0}};}
+export async function createApolloContact(p:{ first_name?: string; last_name?: string; email?: string; title?: string; organization_name?: string; phone?: string; }){ const res=await apolloRequest<any>("/contacts", {method:"POST", body:p as any}); return res?.contact ?? null; }
