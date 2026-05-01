@@ -113,7 +113,7 @@ app.use("/api/v1", (req, res, next) => {
   return next();
 });
 
-// Public, unauthenticated BI endpoints — BI_AUDIT_FIX_v58b: must carry biCors.
+// Public, unauthenticated BI endpoints — BI_HARD_ISOLATION_v59: must carry biCors.
 // /api/v1/otp/{request,verify} live in biAuthRoutes and are called cross-origin
 // from the public website + the OTP-gated lender/referrer portals. Without
 // biCors the preflight returns no Access-Control-Allow-Origin and Chrome
