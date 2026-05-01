@@ -11,7 +11,6 @@
     "test:migrations": "tsx src/tests/migrations.smoke.ts"
   },
   "dependencies": {
-    "@azure-rest/ai-vision-image-analysis": "^1.0.0-beta.3",
     "@azure/core-auth": "^1.10.1",
     "@azure/storage-blob": "^12.27.0",
     "@sendgrid/mail": "^8.1.6",
@@ -49,7 +48,8 @@
     "twilio": "^5.12.2",
     "uuid": "^9.0.1",
     "xlsx": "^0.18.5",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "@azure-rest/ai-document-intelligence": "^1.0.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

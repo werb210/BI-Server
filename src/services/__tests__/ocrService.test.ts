@@ -1,30 +1,53 @@
-import { describe, expect, it } from "vitest";
-import { extractText, getAzureClient } from "../ocrService";
+// BI_SERVER_BLOCK_1_29_DOC_INTEL_SWAP
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { extractText } from "../ocrService";
 
-describe("ocrService", () => {
-  it("returns utf-8 text for native text MIME", async () => {
-    const result = await extractText({
-      buffer: Buffer.from("hello world", "utf-8"),
+beforeEach(() => {
+  vi.resetModules();
+  delete process.env.AZURE_DOC_INTEL_ENDPOINT;
+  delete process.env.AZURE_DOC_INTEL_KEY;
+  delete process.env.AZURE_VISION_ENDPOINT;
+  delete process.env.AZURE_VISION_KEY;
+});
+
+describe("BI_SERVER_BLOCK_1_29_DOC_INTEL_SWAP — extractText", () => {
+  it("returns native text for text/plain without calling Azure", async () => {
+    const r = await extractText({
+      buffer: Buffer.from("hello world", "utf8"),
       mimeType: "text/plain",
-      filename: "note.txt",
+      filename: "x.txt",
     });
-    expect(result.status).toBe("complete");
-    expect(result.extractedText).toBe("hello world");
+    expect(r.status).toBe("complete");
+    expect(r.extractedText).toBe("hello world");
   });
 
-  it("returns skipped for unsupported MIME", async () => {
-    const result = await extractText({
-      buffer: Buffer.from("x"),
-      mimeType: "application/octet-stream",
-      filename: "blob.bin",
+  it("returns CSV-shaped text for xlsx without calling Azure", async () => {
+    const XLSX = await import("xlsx");
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["a", "b"],
+      ["1", "2"],
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+    const r = await extractText({
+      buffer: buf,
+      mimeType:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      filename: "x.xlsx",
     });
-    expect(result.status).toBe("skipped");
-    expect(result.extractedText).toBeNull();
+    expect(r.status).toBe("complete");
+    expect(r.extractedText).toContain("Sheet: Sheet1");
+    expect(r.extractedText).toContain("a,b");
   });
 
-  it("throws when Azure Vision env vars are missing", () => {
-    delete process.env.AZURE_VISION_ENDPOINT;
-    delete process.env.AZURE_VISION_KEY;
-    expect(() => getAzureClient()).toThrow(/Azure Vision is not configured/i);
+  it("returns skipped for unsupported MIME and never throws", async () => {
+    const r = await extractText({
+      buffer: Buffer.alloc(4),
+      mimeType: "application/x-weird",
+      filename: "x.bin",
+    });
+    expect(r.status).toBe("skipped");
+    expect(r.extractedText).toBeNull();
   });
 });
