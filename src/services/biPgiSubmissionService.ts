@@ -3,6 +3,7 @@ import { buildCarrierPayloadFromRow } from "./pgiCarrierMapper"; // PGI_API_ALIG
 import { submitToPGI, type BIApplication } from "./pgiAdapter";
 import { requiredSlotsFor, type BiDocSlot } from "../lib/biDocumentRequirements";
 // BI_PGI_ALIGNMENT_v56 — reads from bi_applications.data which now contains the full PGI form_data shape.
+// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — adds documents_text bundle to PGI submission.
 
 type ApplicationRow = {
   id: string;
@@ -105,6 +106,13 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
   }
 
   const payload = buildBIApplicationFromRow(app);
+
+  // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — assemble OCR'd document bundle.
+  const documentsText = await assembleDocumentsTextBundle(applicationId);
+  if (documentsText) {
+    (payload as any).documents_text = documentsText;
+  }
+
   const result = await submitToPGI(payload);
 
   await pool.query(
@@ -133,6 +141,59 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
   return { ...result, alreadySubmitted: false };
 }
 
+
+
+
+// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — bundles all OCR'd documents for an
+// application into a single markdown text blob with metadata headers per
+// document. Skips documents still pending or failed (notes them in the
+// bundle so PGI sees what was attempted).
+async function assembleDocumentsTextBundle(applicationId: string): Promise<string | null> {
+  const docs = await pool.query<{
+    id: string;
+    doc_type: string;
+    original_filename: string | null;
+    mime_type: string | null;
+    ocr_status: string;
+    extracted_text: string | null;
+    ocr_error: string | null;
+    created_at: string;
+  }>(
+    `SELECT id, doc_type, original_filename, mime_type, ocr_status, extracted_text, ocr_error, created_at
+     FROM bi_documents
+     WHERE application_id = $1 AND purged_at IS NULL
+     ORDER BY created_at ASC`,
+    [applicationId]
+  );
+
+  if (!docs.rows.length) return null;
+
+  const typeLabels = await pool.query<{ doc_type: string; display_label: string }>(
+    `SELECT doc_type, display_label FROM bi_required_doc_catalog WHERE active = TRUE`
+  );
+  const labelByType = new Map(typeLabels.rows.map((r) => [r.doc_type, r.display_label]));
+
+  const sections: string[] = [
+    `# Document Bundle for Application ${applicationId}`,
+    `Generated ${new Date().toISOString()}. OCR engine: Azure AI Vision.`,
+    `Total documents: ${docs.rows.length}.`,
+    "",
+  ];
+
+  for (const doc of docs.rows) {
+    const label = labelByType.get(doc.doc_type) ?? doc.doc_type;
+    sections.push(`## ${label}`);
+    sections.push(`[Filename: ${doc.original_filename ?? "(unknown)"} | MIME: ${doc.mime_type ?? "(unknown)"} | Uploaded: ${doc.created_at} | OCR status: ${doc.ocr_status}]`);
+    sections.push("");
+    if (doc.ocr_status === "complete" && doc.extracted_text) sections.push(doc.extracted_text);
+    else if (doc.ocr_status === "failed") sections.push(`[OCR FAILED: ${doc.ocr_error ?? "unknown error"}]`);
+    else if (doc.ocr_status === "skipped") sections.push(`[OCR SKIPPED: unsupported MIME type ${doc.mime_type ?? "(unknown)"}]`);
+    else sections.push(`[OCR ${doc.ocr_status} — extraction not yet complete]`);
+    sections.push("", "---", "");
+  }
+
+  return sections.join("\n");
+}
 
 // PGI_API_ALIGN_v57 — strict carrier payload builder, single source of truth.
 // Any code path forwarding to PGI MUST go through this function so the

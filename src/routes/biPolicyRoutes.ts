@@ -20,6 +20,11 @@ router.post("/:id/activate", async (req, res) => {
   );
 
   await db.query(
+    `INSERT INTO bi_purge_queue(application_id, eligible_at) VALUES($1, NOW()) ON CONFLICT (application_id) DO NOTHING`,
+    [id]
+  );
+
+  await db.query(
     `INSERT INTO bi_policies(application_id, status)
      VALUES($1, 'active')
      ON CONFLICT DO NOTHING`,

@@ -5,6 +5,19 @@ import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
 
+const TERMINAL_STAGES = new Set(["declined", "policy_issued", "bound", "claim"]);
+
+async function enqueuePurgeIfTerminal(applicationId: string, stage: string) {
+  if (!TERMINAL_STAGES.has(stage)) return;
+  await pool.query(
+    `INSERT INTO bi_purge_queue(application_id, eligible_at)
+     VALUES($1, NOW())
+     ON CONFLICT (application_id) DO NOTHING`,
+    [applicationId]
+  );
+}
+
+
 router.get("/applications", async (_req, res) => {
   const result = await pool.query(`
     SELECT a.id, a.stage, a.bankruptcy_flag, a.premium_calc, a.created_by_lender_id,
@@ -44,6 +57,7 @@ router.patch("/pipeline/:id/stage", async (req, res) => {
   }
 
   await pool.query(`UPDATE bi_applications SET stage=$2, updated_at=NOW() WHERE id=$1`, [id, stage]);
+  await enqueuePurgeIfTerminal(id, stage);
 
   await pool.query(
     `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)

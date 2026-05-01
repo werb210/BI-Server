@@ -88,6 +88,9 @@ export function buildPGIPayload(app: BIApplication) {
     business_name: app.businessName,
     lender_name: app.lender || "Unknown lender",
     form_data: {
+      // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — passthrough of the OCR'd
+      // document bundle. Optional; omitted when no documents present.
+      ...(("documents_text" in (app as any) && (app as any).documents_text) ? { documents_text: (app as any).documents_text } : {}),
       country: required.country,
       naics_code: required.naics_code,
       formation_date: required.formation_date,
