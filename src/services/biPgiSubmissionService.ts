@@ -1,6 +1,7 @@
 import { pool } from "../db";
 import { buildCarrierPayloadFromRow } from "./pgiCarrierMapper"; // PGI_API_ALIGN_v57
 import { submitToPGI, type BIApplication } from "./pgiAdapter";
+import { requiredSlotsFor, type BiDocSlot } from "../lib/biDocumentRequirements";
 // BI_PGI_ALIGNMENT_v56 — reads from bi_applications.data which now contains the full PGI form_data shape.
 
 type ApplicationRow = {
@@ -143,4 +144,46 @@ export function buildPgiPayload(row: {
   data: Record<string, unknown>;
 }) {
   return buildCarrierPayloadFromRow(row);
+}
+
+
+// BI_DOC_LIST_v61 — every required slot must be present AND accepted before
+// we forward the dossier to PGI. This is intentionally redundant with the
+// route-level stage gate: routes can be added carelessly; this gate is the
+// last thing checked before the outbound HTTP call.
+
+export type CarrierDocReadiness =
+  | { ready: true }
+  | { ready: false; missing: BiDocSlot[]; rejected: BiDocSlot[]; pending: BiDocSlot[] };
+
+export async function assertDocsReadyForCarrier(applicationId: string, formationDate: string | null): Promise<CarrierDocReadiness> {
+  const required = new Set(requiredSlotsFor(formationDate ?? null));
+  if (required.size === 0) return { ready: true };
+
+  const r = await pool.query<{ doc_slot: string | null; status: string }>(
+    `SELECT doc_slot, status FROM bi_documents WHERE application_id = $1`,
+    [applicationId],
+  );
+
+  // For each required slot, find the latest version's status.
+  const latest = new Map<string, string>();
+  for (const row of r.rows) {
+    if (!row.doc_slot) continue;
+    if (!latest.has(row.doc_slot)) latest.set(row.doc_slot, row.status);
+  }
+
+  const missing: BiDocSlot[] = [];
+  const rejected: BiDocSlot[] = [];
+  const pending: BiDocSlot[] = [];
+  for (const slot of required) {
+    const st = latest.get(slot);
+    if (!st) { missing.push(slot); continue; }
+    if (st === "rejected") { rejected.push(slot); continue; }
+    if (st !== "accepted") { pending.push(slot); continue; }
+  }
+
+  if (missing.length === 0 && rejected.length === 0 && pending.length === 0) {
+    return { ready: true };
+  }
+  return { ready: false, missing, rejected, pending };
 }

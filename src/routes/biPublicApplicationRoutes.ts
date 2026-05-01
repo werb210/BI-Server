@@ -113,21 +113,29 @@ router.post("/applications/:id/documents", upload.array("files"), async (req, re
   const files = (req.files as Express.Multer.File[]) ?? [];
   if (!files.length) return badRequest(res, "No files");
 
-  const docTypesRaw = req.body?.doc_types as unknown;
-  const docTypes: string[] = Array.isArray(docTypesRaw)
-    ? (docTypesRaw as string[])
-    : typeof docTypesRaw === "string"
-    ? [docTypesRaw]
+  // BI_DOC_LIST_v61 — front-end now sends doc_slots[] + period_ends[] aligned
+  // with files[]. Legacy doc_types[] is still accepted for back-compat but
+  // treated as doc_slot.
+  const docSlotsRaw = (req.body?.doc_slots ?? req.body?.doc_types) as unknown;
+  const docSlots: string[] = Array.isArray(docSlotsRaw)
+    ? (docSlotsRaw as string[])
+    : typeof docSlotsRaw === "string"
+    ? [docSlotsRaw]
+    : [];
+  const periodEndsRaw = req.body?.period_ends as unknown;
+  const periodEnds: (string | null)[] = Array.isArray(periodEndsRaw)
+    ? (periodEndsRaw as string[]).map((v) => (typeof v === "string" && v ? v : null))
     : [];
 
   const store = getStorage();
   const created: Array<{ id: string }> = [];
 
   for (const [idx, file] of files.entries()) {
-    const docType =
-      typeof docTypes[idx] === "string" && docTypes[idx]!.trim()
-        ? docTypes[idx]!.trim()
+    const slot =
+      typeof docSlots[idx] === "string" && docSlots[idx]!.trim()
+        ? docSlots[idx]!.trim()
         : "other";
+    const periodEnd = periodEnds[idx] ?? null;
     const put = await store.put({
       buffer: file.buffer,
       filename: file.originalname,
@@ -136,11 +144,12 @@ router.post("/applications/:id/documents", upload.array("files"), async (req, re
     });
     const inserted = await pool.query<{ id: string }>(
       `INSERT INTO bi_documents
-         (application_id, doc_type, original_filename, storage_key, blob_name,
+         (application_id, doc_type, doc_slot, period_end,
+          original_filename, storage_key, blob_name,
           blob_url, sha256_hash, mime_type, bytes, uploaded_by_actor)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'applicant')
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'applicant')
        RETURNING id`,
-      [id, docType, file.originalname, put.blobName, put.blobName, put.url, put.hash, file.mimetype, put.sizeBytes]
+      [id, slot, slot, periodEnd, file.originalname, put.blobName, put.blobName, put.url, put.hash, file.mimetype, put.sizeBytes]
     );
     created.push({ id: inserted.rows[0]!.id });
 
