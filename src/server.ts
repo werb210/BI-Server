@@ -113,11 +113,15 @@ app.use("/api/v1", (req, res, next) => {
   return next();
 });
 
-// Public, unauthenticated BI endpoints
-app.use("/api/v1", chatRoutes);
-app.use("/api/v1", mayaAnalyticsRoutes);
-app.use("/api/v1", intakeRoutes);
-app.use("/api/v1", biAuthRoutes);
+// Public, unauthenticated BI endpoints — BI_AUDIT_FIX_v58b: must carry biCors.
+// /api/v1/otp/{request,verify} live in biAuthRoutes and are called cross-origin
+// from the public website + the OTP-gated lender/referrer portals. Without
+// biCors the preflight returns no Access-Control-Allow-Origin and Chrome
+// blocks every call.
+app.use("/api/v1", biCors, chatRoutes);
+app.use("/api/v1", biCors, mayaAnalyticsRoutes);
+app.use("/api/v1", biCors, intakeRoutes);
+app.use("/api/v1", biCors, biAuthRoutes);
 
 // Authenticated BI endpoints — every BI route lives under /api/v1/bi
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biRoutes);
