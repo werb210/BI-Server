@@ -148,7 +148,11 @@ app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biPublicApplicatio
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biApplicationRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biEventsRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biAppApplicantRoutes);
+// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — biDocumentRoutes serves both per-
+// application document handlers (under /applications/:id/...) AND the
+// required-doc catalog (under /required-documents). Mount both places.
 app.use("/api/v1/bi/applications", requireAuth, biDocumentRoutes);
+app.use("/api/v1/bi", requireAuth, biDocumentRoutes);
 app.use("/api/v1/bi/documents", requireAuth, biDocumentRoutes);
 app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
 app.use("/api/v1/bi/crm", requireAuth, biCrmRoutes);

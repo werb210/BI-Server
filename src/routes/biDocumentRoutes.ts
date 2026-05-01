@@ -11,6 +11,8 @@ import { env } from "../platform/env";
 // BI_HARDENING_v44 — switch BI document storage from local disk to the Azure
 // Blob abstraction. Memory storage so multer doesn't write to disk first.
 import { getStorage } from "../lib/storage";
+// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — OCR pipeline.
+import { extractText } from "../services/ocrService";
 
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
@@ -21,9 +23,12 @@ const pool = new Pool({ connectionString: env.DATABASE_URL });
 const legacyUploadDir = path.join(__dirname, "../../uploads/bi");
 if (!fs.existsSync(legacyUploadDir)) fs.mkdirSync(legacyUploadDir, { recursive: true });
 
+// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — 5 MB per file per PGI carrier policy.
+// Image / PDF / Excel / Word / screenshots all accepted. Per user: do not
+// reject by MIME — store everything, OCR figures out what to do.
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: 5 * 1024 * 1024 },
 });
 
 router.post("/:id/documents", upload.array("files"), async (req, res) => {
@@ -63,9 +68,24 @@ router.post("/:id/documents", upload.array("files"), async (req, res) => {
        VALUES($1,'applicant','document_uploaded',$2)`,
       [id, `Document uploaded: ${file.originalname}`]
     );
+
+    // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — fire-and-forget OCR.
+    void runOcrForDocument(docId, file).catch(() => { /* logged inside */ });
   }
 
   ok(res, { success: true, files: created });
+});
+
+// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — required-doc catalog endpoint.
+// Mounted at /api/v1/bi/required-documents (see OP 5 for the secondary mount).
+router.get("/required-documents", async (_req, res) => {
+  const result = await pool.query(
+    `SELECT doc_type, display_label, description, if_startup, sort_order
+     FROM bi_required_doc_catalog
+     WHERE active = TRUE
+     ORDER BY sort_order ASC`
+  );
+  ok(res, { documents: result.rows });
 });
 
 router.get("/:id", async (req, res) => {
@@ -236,5 +256,37 @@ router.post("/:id/reject", requireAuth, async (req, res) => {
 
   return ok(res, { success: true });
 });
+
+
+// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — background OCR runner.
+async function runOcrForDocument(docId: string, file: Express.Multer.File): Promise<void> {
+  try {
+    await pool.query(`UPDATE bi_documents SET ocr_status='processing' WHERE id=$1`, [docId]);
+    const result = await extractText({
+      buffer: file.buffer,
+      mimeType: file.mimetype,
+      filename: file.originalname,
+    });
+    await pool.query(
+      `UPDATE bi_documents
+       SET ocr_status=$2,
+           extracted_text=$3,
+           ocr_error=$4,
+           ocr_completed_at=NOW()
+       WHERE id=$1`,
+      [docId, result.status, result.extractedText, result.error ?? null]
+    );
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    await pool.query(
+      `UPDATE bi_documents
+       SET ocr_status='failed',
+           ocr_error=$2,
+           ocr_completed_at=NOW()
+       WHERE id=$1`,
+      [docId, error]
+    ).catch(() => { /* swallow nested DB error */ });
+  }
+}
 
 export default router;

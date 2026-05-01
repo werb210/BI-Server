@@ -19,6 +19,12 @@ type PgiWebhookEvent = {
 
 const router = express.Router();
 
+const TERMINAL_STAGES = new Set(["declined", "policy_issued", "bound", "claim"]);
+async function enqueuePurgeIfTerminal(applicationId: string, stage: string) {
+  if (!TERMINAL_STAGES.has(stage)) return;
+  await pool.query(`INSERT INTO bi_purge_queue(application_id, eligible_at) VALUES($1, NOW()) ON CONFLICT (application_id) DO NOTHING`, [applicationId]);
+}
+
 function verifySignature(rawBody: Buffer, signatureHeader: string | undefined): boolean {
   if (!env.PGI_WEBHOOK_SECRET || !signatureHeader) {
     return false;
@@ -147,6 +153,7 @@ router.post(
               `UPDATE bi_applications SET stage='declined', updated_at=NOW() WHERE id=$1`,
               [appRowId]
             );
+            await enqueuePurgeIfTerminal(appRowId, 'declined');
           }
           await writeActivity(appRowId, eventType, "Application declined", data);
           break;
@@ -157,6 +164,7 @@ router.post(
               `UPDATE bi_applications SET stage='bound', updated_at=NOW() WHERE id=$1`,
               [appRowId]
             );
+            await enqueuePurgeIfTerminal(appRowId, 'bound');
           }
           await writeActivity(appRowId, eventType, "Policy bound", data);
           break;
@@ -169,6 +177,7 @@ router.post(
               `UPDATE bi_applications SET stage='claim', updated_at=NOW() WHERE id=$1`,
               [appRowId]
             );
+            await enqueuePurgeIfTerminal(appRowId, 'claim');
           }
           await writeActivity(appRowId, eventType, "Claim activity", data);
           break;
