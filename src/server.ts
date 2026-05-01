@@ -15,6 +15,7 @@ import { startApolloSyncJob } from "./jobs/apolloSyncJob";
 import { biRateLimiter } from "./middleware/biRateLimit";
 import { enforceBIPrefix } from "./middleware/biIsolation";
 import biApplicationRoutes from "./routes/biApplicationRoutes";
+import biPublicApplicationRoutes from "./routes/biPublicApplicationRoutes"; // BI_AUDIT_FIX_v58
 import biAuthRoutes, { biAppApplicantRoutes } from "./routes/biAuthRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
@@ -120,6 +121,8 @@ app.use("/api/v1", biAuthRoutes);
 
 // Authenticated BI endpoints — every BI route lives under /api/v1/bi
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biRoutes);
+// BI_AUDIT_FIX_v58 — public PGI flow (no auth). Must be mounted BEFORE
+app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biPublicApplicationRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biApplicationRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biEventsRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biAppApplicantRoutes);

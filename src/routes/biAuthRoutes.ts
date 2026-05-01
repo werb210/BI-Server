@@ -22,6 +22,13 @@ publicRouter.post("/otp/request", async (req, res) => {
     return badRequest(res, "Name, email, and phone are required");
   }
 
+  // BI_AUDIT_FIX_v58 — userType MUST be on the allowlist.
+  const ALLOWED_USER_TYPES_v58 = ["applicant", "referrer", "lender"] as const;
+  const requestedUserType_v58 = typeof userType === "string" && userType ? userType : "applicant";
+  if (!(ALLOWED_USER_TYPES_v58 as readonly string[]).includes(requestedUserType_v58)) {
+    return badRequest(res, "Invalid userType");
+  }
+
   const [phoneRecent, ipRecent] = await Promise.all([
     pool.query(
       `SELECT COUNT(*)::int AS n
