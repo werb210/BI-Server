@@ -52,16 +52,31 @@ import biAdminLenderRoutes from "./routes/biAdminLenderRoutes";
 import biContactFormRoutes from "./routes/biContactFormRoutes";
 
 const app = express();
+// BI_BOOT_FIX_v60 — Azure App Service is behind a reverse proxy. Without
+// this, req.ip resolves to the proxy and rate limiting / IP throttling
+// collapse all clients into one bucket.
+app.set("trust proxy", 1);
 
 app.use(requestId);
 app.use(idempotency);
 
 const limiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 100
+  max: 100,
+  // BI_BOOT_FIX_v60 — Azure health probes are aggressive. Without skipping
+  // /health and /metrics they consume the global 100/min budget and Azure's
+  // own probes return 429, triggering App Service to mark the instance
+  // unhealthy. Real clients also get 429s during health-check storms.
+  skip: (req) => req.path === "/health" || req.path === "/" || req.path.startsWith("/metrics"),
 });
 
 const spamThrottle = new Map<string, number>();
+// BI_BOOT_FIX_v60 — prune entries older than 60s every 60s so the Map can't
+// grow unbounded. Was a slow memory leak proportional to unique submitter IPs.
+setInterval(() => {
+  const cutoff = Date.now() - 60_000;
+  for (const [k, ts] of spamThrottle) if (ts < cutoff) spamThrottle.delete(k);
+}, 60_000).unref();
 
 const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || env.CORS_ALLOWED_ORIGINS || "")
   .split(",")
@@ -83,10 +98,13 @@ const biCors = cors({
   credentials: true,
 });
 
+// BI_BOOT_FIX_v60 — log every request, including PGI webhooks (raw body).
+// Logger must come before pgiWebhookRoutes so its req.id is available to the
+// webhook handler's logs.
+app.use(httpLogger);
 // Webhook (raw body) — must be before express.json
 app.use(pgiWebhookRoutes);
 app.use(express.json({ limit: "10mb" }));
-app.use(httpLogger);
 app.use(limiter);
 app.use(helmet());
 app.use(compression());
@@ -157,7 +175,31 @@ app.use("/api/v1", biContactFormRoutes);  // public — no auth
 
 app.use(errorHandler);
 
+// BI_BOOT_FIX_v60 — outer 30-second hard timeout on the entire bootstrap.
+// Previously, if pg.Pool hung on TCP connect (no DATABASE_URL, wrong host,
+// firewall block) every step of bootstrap would wait forever, the log stream
+// went silent, and Azure showed "No new trace in past N min(s)" for 20+ min.
+const BOOTSTRAP_TIMEOUT_MS = 30_000;
+function bootstrapDeadline<T>(work: Promise<T>): Promise<T> {
+  return Promise.race([
+    work,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error("bootstrap deadline exceeded")), BOOTSTRAP_TIMEOUT_MS),
+    ),
+  ]);
+}
+
 export async function bootstrap() {
+  logger.info("BI bootstrap start");
+  try {
+    await bootstrapDeadline(bootstrapInner());
+    logger.info("BI bootstrap complete");
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : err }, "BI bootstrap aborted (non-blocking)");
+  }
+}
+
+async function bootstrapInner() {
   await Promise.race([
     pool.query("SELECT 1"),
     new Promise((_, reject) => setTimeout(() => reject(new Error("DB timeout")), 5000))
