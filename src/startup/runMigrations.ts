@@ -62,6 +62,27 @@ export async function runMigrations(pool: Pool): Promise<{ applied: string[]; sk
       logger.info({ file }, "runMigrations: applied");
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
+      // BI_MIGRATION_FIX_v60b — Treat object-already-exists errors as
+      // "this migration's effect is already in the schema; skip and move on."
+      // Postgres error codes:
+      //   42P07 duplicate_table          (CREATE TABLE without IF NOT EXISTS)
+      //   42710 duplicate_object         (CREATE TYPE / extension etc)
+      //   42701 duplicate_column         (ALTER TABLE ... ADD COLUMN dup)
+      //   42P06 duplicate_schema
+      //   42723 duplicate_function
+      //   42P16 invalid_table_definition (occasionally raised on column dup)
+      const code = (err as { code?: string } | null)?.code;
+      const ALREADY_APPLIED = new Set(["42P07", "42710", "42701", "42P06", "42723", "42P16"]);
+      if (code && ALREADY_APPLIED.has(code)) {
+        // Mark as applied so future cold-starts don't re-attempt it.
+        await pool.query(
+          `INSERT INTO bi_migrations_applied (filename) VALUES ($1) ON CONFLICT DO NOTHING`,
+          [file],
+        );
+        skipped.push(file);
+        logger.warn({ file, code }, "runMigrations: object already exists; marking applied and continuing");
+        continue;
+      }
       logger.error({ err, file }, "runMigrations: failed; rolling back this migration");
       throw err;
     } finally {
