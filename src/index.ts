@@ -1,3 +1,15 @@
+// BI_BOOT_FIX_v62_FIRST_LINE — first thing logged, before any import
+// has a chance to throw. Confirms the Node process started at all.
+// eslint-disable-next-line no-console
+console.log(JSON.stringify({
+  level: "info",
+  msg: "BI process start (pre-import)",
+  ts: new Date().toISOString(),
+  build: process.env.BUILD_TAG || "unknown",
+  node: process.version,
+  cwd: process.cwd(),
+}));
+
 // BI_BOOT_FIX_v61 — boot fingerprint + heartbeat + fast DB probe.
 // Why every line:
 // - First console.log fires before pino is wired so an Azure log stream that
