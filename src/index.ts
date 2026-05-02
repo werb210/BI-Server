@@ -1,61 +1,52 @@
-// BI_BOOT_FIX_v62_FIRST_LINE — first thing logged, before any import
-// has a chance to throw. Confirms the Node process started at all.
+// BI_BOOT_FIX_v63_INDEX — first line BEFORE imports. Anything that
+// throws during import after this still leaves a record proving the
+// process started. If this line never appears in Azure logs, Azure
+// is not running this file at all (check startup-command).
+
 // eslint-disable-next-line no-console
 console.log(JSON.stringify({
   level: "info",
-  msg: "BI process start (pre-import)",
+  msg: "[BI_BOOT_FIX_v63] node entered dist/index.js",
   ts: new Date().toISOString(),
   build: process.env.BUILD_TAG || "unknown",
+  sha: (process.env.COMMIT_SHA || "unknown").slice(0, 8),
   node: process.version,
+  pid: process.pid,
   cwd: process.cwd(),
+  port_env: process.env.PORT || "(unset, default 8080)",
 }));
 
-// BI_BOOT_FIX_v61 — boot fingerprint + heartbeat + fast DB probe.
-// Why every line:
-// - First console.log fires before pino is wired so an Azure log stream that
-//   is silent for >30s definitely indicates the process never started.
-// - Build fingerprint (BUILD_TAG + commit short sha) lets us confirm at a
-//   glance which version is running. The 51-min silence on 2026-05-02 was
-//   actually an old binary, and we had no way to tell from the logs.
-// - Heartbeat every 60s prevents Azure App Service from showing
-//   "No new trace in past N min(s)" on a healthy idle box. Worth the noise.
-// - SIGTERM / SIGINT handlers drain pg.Pool and wait for HTTP close before
-//   exit so in-flight transactions aren't killed mid-flight on deploy.
 import app, { bootstrap } from "./server";
 import { env } from "./platform/env";
 import { logger } from "./platform/logger";
 import { pool } from "./db";
 
-const BUILD_TAG = process.env.BUILD_TAG || "v61-local";
-const COMMIT_SHA = (process.env.COMMIT_SHA || "unknown").slice(0, 8);
-const BOOT_AT = new Date().toISOString();
-
 // eslint-disable-next-line no-console
-console.log(`BI process start build=${BUILD_TAG} sha=${COMMIT_SHA} at=${BOOT_AT}`);
-logger.info({ build: BUILD_TAG, sha: COMMIT_SHA, bootAt: BOOT_AT }, "BI process start");
+console.log("BI process start", new Date().toISOString());
+logger.info("BI process start");
+logger.info("BI init start");
 
+// Fire and forget — bootstrap is internally bounded by a 30s deadline.
 bootstrap().catch((err) => {
-  logger.error({ err: err instanceof Error ? err.message : err }, "BI bootstrap rejected (non-blocking)");
+  logger.error({ err }, "BI DB failed (non-blocking)");
 });
 
 const port = Number(env.PORT || "8080");
+
 const server = app.listen(port, () => {
-  logger.info({ port, build: BUILD_TAG, sha: COMMIT_SHA }, "BI server running");
+  logger.info({ port }, "BI server running");
   // eslint-disable-next-line no-console
-  console.log(`BI server listening on ${port} (build=${BUILD_TAG} sha=${COMMIT_SHA})`);
+  console.log(`[BI_BOOT_FIX_v63] BI server listening on ${port}`);
 });
 
-// Heartbeat — emit a single line every 60s so the Azure log stream never
-// shows "No new trace in past N min(s)" on a healthy idle process.
+// Heartbeat so Azure's log stream proves the process is alive even
+// when no requests are coming in.
 const heartbeat = setInterval(() => {
-  logger.info({ build: BUILD_TAG, sha: COMMIT_SHA, uptimeSec: Math.round(process.uptime()) }, "BI heartbeat");
+  logger.info({ uptime_s: Math.round(process.uptime()) }, "BI heartbeat");
 }, 60_000);
 heartbeat.unref();
 
-let shuttingDown = false;
 function shutdown(signal: string) {
-  if (shuttingDown) return;
-  shuttingDown = true;
   logger.info({ signal }, "BI shutdown initiated");
   clearInterval(heartbeat);
   server.close(() => {
@@ -65,7 +56,6 @@ function shutdown(signal: string) {
       .catch((err) => logger.error({ err }, "BI pg pool drain error"))
       .finally(() => process.exit(0));
   });
-  // Hard exit after 10s so a stuck listener doesn't block deploy.
   setTimeout(() => {
     logger.warn("BI shutdown hard-exit after 10s");
     process.exit(1);
@@ -76,8 +66,8 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT",  () => shutdown("SIGINT"));
 
 process.on("unhandledRejection", (reason) => {
-  logger.error({ err: reason instanceof Error ? reason.message : reason }, "BI unhandledRejection");
+  logger.error({ err: reason }, "BI unhandledRejection");
 });
 process.on("uncaughtException", (err) => {
-  logger.error({ err: err instanceof Error ? err.message : String(err) }, "BI uncaughtException");
+  logger.error({ err }, "BI uncaughtException");
 });
