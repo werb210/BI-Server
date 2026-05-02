@@ -1,5 +1,7 @@
-# BI_BOOT_FIX_v63_WORKFLOW — explicit startup-command, pruned deploy
-# package, version stamping so deploys are visible in logs.
+# BI_BOOT_FIX_v64_WORKFLOW — pruned package, build metadata, /health
+# probe, and Windows iisnode config (server.js + web.config). NO
+# startup-command — that's incompatible with publish-profile auth and
+# Windows web apps.
 name: Build and deploy Node.js app to Azure Web App - BI-Server
 
 on:
@@ -39,13 +41,10 @@ jobs:
         run: |
           test -f dist/index.js || { echo "::error::dist/index.js missing"; exit 1; }
           test -f dist/server.js || { echo "::error::dist/server.js missing"; exit 1; }
-          test -f startup.sh || { echo "::error::startup.sh missing"; exit 1; }
+          test -f server.js     || { echo "::error::server.js (iisnode shim) missing at root"; exit 1; }
+          test -f web.config    || { echo "::error::web.config missing at root"; exit 1; }
           echo "dist/ contents:" && ls -la dist | head -30
 
-      # BI_BOOT_FIX_v63_WORKFLOW — copy migrations folder into dist so the
-      # runtime path matches even if process.cwd is set to the dist/ folder
-      # by some Azure-side wrapping. Keeping the original src/db/migrations/
-      # path also keeps current behavior working.
       - name: Copy SQL migrations into dist
         run: |
           mkdir -p dist/db/migrations
@@ -54,7 +53,7 @@ jobs:
 
       - name: Stamp build metadata
         run: |
-          BUILD_TAG="v63-$(date -u +%Y%m%d%H%M%S)"
+          BUILD_TAG="v64-$(date -u +%Y%m%d%H%M%S)"
           COMMIT_SHA="${GITHUB_SHA:0:8}"
           echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
           echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_ENV
@@ -68,11 +67,11 @@ jobs:
       - name: Stage deploy package (slim)
         run: |
           mkdir -p _deploy
-          cp -R dist _deploy/dist
-          cp -R node_modules _deploy/node_modules
+          cp -R dist          _deploy/dist
+          cp -R node_modules  _deploy/node_modules
           cp package.json package-lock.json _deploy/
-          cp startup.sh _deploy/
-          chmod +x _deploy/startup.sh
+          cp server.js   _deploy/   # iisnode entrypoint shim
+          cp web.config  _deploy/   # iisnode rewrite rules
           [ -f BUILD_META ] && cp BUILD_META _deploy/
           du -sh _deploy
 
@@ -82,11 +81,9 @@ jobs:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: _deploy
-          startup-command: 'bash /home/site/wwwroot/startup.sh'
+          # NOTE: NO startup-command. Windows web apps + publish-profile
+          # auth reject this input. iisnode finds server.js automatically.
 
-      # Sanity check: hit /health once Azure says it's running. This
-      # turns a silent failed-to-start into a loud "deploy step ok but
-      # app never responded" — much easier to diagnose.
       - name: Post-deploy /health probe
         run: |
           for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
