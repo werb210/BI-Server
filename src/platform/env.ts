@@ -47,6 +47,8 @@ const envSchema = z.object({
   APOLLO_API_KEY: z.string().optional(),
   APOLLO_SYNC_ENABLED: z.string().optional(),
   APOLLO_SEQUENCE_FILTER_ONLY: z.string().optional(),
+  MAYA_URL: z.string().optional(),
+  MAYA_SERVICE_TOKEN: z.string().optional(),
 });
 
 type Env = z.infer<typeof envSchema>;
