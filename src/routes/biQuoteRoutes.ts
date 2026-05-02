@@ -1,38 +1,13 @@
-// BI_HARDENING_v44 — public quote estimate endpoint.
-// IMPORTANT: this router is mounted at /api/v1/bi/quote in server.ts and that
-// mount is wrapped with requireAuth. Quote is supposed to be public (BI-1).
-// We defer the de-gating decision to server.ts — see the BI_HARDENING_v44
-// patch there. The handler itself does no auth lookups.
 import { Router } from "express";
-import { calculatePremium, MAX_COVERAGE_RATIO, MAX_LOAN_AMOUNT } from "../services/premiumService";
-import { badRequest, ok } from "../utils/apiResponse";
-
 const router = Router();
-
-router.post("/estimate", async (req, res) => {
-  const { facilityType, loanAmount, coverage } = req.body ?? {};
-
-  if (typeof loanAmount !== "number" || !Number.isFinite(loanAmount) || loanAmount <= 0) {
-    return badRequest(res, "loanAmount must be a positive number");
-  }
-  if (facilityType !== "secured" && facilityType !== "unsecured") {
-    return badRequest(res, "facilityType must be 'secured' or 'unsecured'");
-  }
-  if (coverage !== undefined) {
-    if (typeof coverage !== "number" || !Number.isFinite(coverage)) {
-      return badRequest(res, "coverage must be a number between 0 and 0.8");
-    }
-    if (coverage < 0 || coverage > MAX_COVERAGE_RATIO) {
-      return badRequest(res, `coverage must be between 0 and ${MAX_COVERAGE_RATIO}`);
-    }
-  }
-
-  const result = calculatePremium({ facilityType, loanAmount, coverage });
-  return ok(res, {
-    ...result,
-    maxLoanAmount: MAX_LOAN_AMOUNT,
-    maxCoverageRatio: MAX_COVERAGE_RATIO,
-  });
+router.get("/quote/calculate", (req, res) => {
+  const loan = Math.min(Number(req.query.loan ?? 0), 1_000_000);
+  const cov = Math.min(Math.max(Number(req.query.coverage ?? 0), 0), 0.80);
+  const type = String(req.query.type ?? "secured");
+  if (loan <= 0 || cov <= 0) return res.status(400).json({ error: "invalid" });
+  const rate = type === "unsecured" ? 0.040 : 0.016;
+  const coverageAmount = +(loan * cov).toFixed(2);
+  const annualPremium = +(coverageAmount * rate).toFixed(2);
+  res.json({ loan_amount: loan, coverage_percentage: cov, coverage_amount: coverageAmount, facility_type: type === "unsecured" ? "unsecured" : "secured", rate, annual_premium: annualPremium });
 });
-
 export default router;
