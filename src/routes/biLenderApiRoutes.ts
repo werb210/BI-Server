@@ -1,8 +1,11 @@
 import { Router } from "express";
 import crypto from "node:crypto";
 import { pool } from "../db";
+import { pgiScore } from "../services/pgiAdapter";
+import { generatePublicId } from "../util/publicId";
 
 const router = Router();
+const EBITDA_MIN = 50_000;
 
 async function authLender(req: any, res: any, next: any) {
   const auth = String(req.headers.authorization ?? "");
@@ -19,29 +22,60 @@ async function authLender(req: any, res: any, next: any) {
 
 router.post("/lender/applications", authLender, async (req: any, res) => {
   const b = req.body ?? {};
-  const required = ["guarantor_name","guarantor_email","business_name","country","naics_code","formation_date","loan_amount","pgi_limit","annual_revenue","ebitda","total_debt","monthly_debt_service","collateral_value","enterprise_value","bankruptcy_history","insolvency_history","judgment_history"];
-  const missing = required.filter((k) => b[k] === undefined || b[k] === "");
+  const scoreReq = ["country","naics_code","formation_date","loan_amount","pgi_limit","annual_revenue","ebitda","total_debt","monthly_debt_service","collateral_value","enterprise_value"];
+  const missing = scoreReq.filter((k) => b[k] === undefined || b[k] === "");
   if (missing.length) return res.status(400).json({ error: "missing_fields", fields: missing });
+  if (b.country !== "CA") return res.status(400).json({ error: "country_unsupported", supported: ["CA"] });
+  if (Number(b.ebitda) < EBITDA_MIN) return res.status(400).json({ error: "ebitda_below_min", min: EBITDA_MIN });
+
+  const score = await pgiScore({
+    country: b.country, naics_code: b.naics_code,
+    formation_date: b.formation_date,
+    loan_amount: Number(b.loan_amount), pgi_limit: Number(b.pgi_limit),
+    annual_revenue: Number(b.annual_revenue), ebitda: Number(b.ebitda),
+    total_debt: Number(b.total_debt),
+    monthly_debt_service: Number(b.monthly_debt_service),
+    collateral_value: Number(b.collateral_value),
+    enterprise_value: Number(b.enterprise_value),
+  });
+
+  if (score.decision === "decline") {
+    return res.status(422).json({
+      error: "score_declined",
+      reason: ("reason" in score) ? score.reason : null,
+      score_id: score.score_id,
+    });
+  }
 
   const id = crypto.randomUUID();
+  const publicId = generatePublicId();
   await pool.query(`INSERT INTO bi_applications
-       (id, status, source, lender_id,
+       (id, public_id, status, source, lender_id,
         guarantor_name, guarantor_email, business_name, lender_name,
         country, naics_code, formation_date, loan_amount, pgi_limit,
         annual_revenue, ebitda, total_debt, monthly_debt_service,
         collateral_value, enterprise_value,
         bankruptcy_history, insolvency_history, judgment_history,
-        facility_type, coverage_percentage, form_data,
-        created_at, updated_at)
-     VALUES ($1,'ready_for_submission','lender_api',$2,
-             $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-             $18,$19,$20,$21,$22,$23,NOW(),NOW())`,
-    [id, req.lenderId, b.guarantor_name, b.guarantor_email, b.business_name, b.lender_name ?? null,
-     b.country, b.naics_code, b.formation_date, b.loan_amount, b.pgi_limit, b.annual_revenue, b.ebitda,
-     b.total_debt, b.monthly_debt_service, b.collateral_value, b.enterprise_value,
+        score_id, score_value, score_decision, score_at,
+        form_data, created_at, updated_at)
+     VALUES ($1,$2,'ready_for_submission','lender_api',$3,
+             $4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+             $19,$20,$21,$22,$23,$24,NOW(),$25,NOW(),NOW())`,
+    [id, publicId, req.lenderId,
+     b.guarantor_name, b.guarantor_email, b.business_name, b.lender_name ?? null,
+     b.country, b.naics_code, b.formation_date, b.loan_amount, b.pgi_limit,
+     b.annual_revenue, b.ebitda, b.total_debt, b.monthly_debt_service,
+     b.collateral_value, b.enterprise_value,
      Boolean(b.bankruptcy_history), Boolean(b.insolvency_history), Boolean(b.judgment_history),
-     b.facility_type ?? null, b.coverage_percentage ?? null, b]);
-  return res.status(201).json({ application_id: id, status: "ready_for_submission" });
+     score.score_id, ("score" in score) ? score.score : null, score.decision,
+     b]);
+  return res.status(201).json({
+    public_id: publicId,
+    application_id: id,
+    status: "ready_for_submission",
+    score_id: score.score_id,
+    score: "score" in score ? score.score : null,
+  });
 });
 
 router.get("/lender/applications", authLender, async (req: any, res) => {
