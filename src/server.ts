@@ -204,88 +204,105 @@ export async function bootstrap() {
 }
 
 async function bootstrapInner() {
-  await Promise.race([
-    pool.query("SELECT 1"),
-    new Promise((_, reject) => setTimeout(() => reject(new Error("DB timeout")), 5000))
-  ])
-    .then(() => {
-      logger.info("BI DB connected");
-    })
-    .catch((err) => {
-      const message = err instanceof Error ? err.message : "Unknown DB error";
-      console.error("⚠️ BI DB skipped:", message);
-    });
+  // BI_BOOT_FIX_v61 — fast DB probe. If the DB isn't reachable in 5s, skip
+  // migrations entirely and log loudly. The HTTP server still starts so
+  // /health stays answering 200 from healthRoutes (which doesn't touch DB).
+  let dbUp = false;
+  try {
+    await Promise.race([
+      pool.query("SELECT 1"),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("DB_PROBE_TIMEOUT_5s")), 5000),
+      ),
+    ]);
+    dbUp = true;
+    logger.info("BI DB probe ok");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ err: message }, "BI DB probe failed — migrations + ad-hoc DDL skipped");
+    // eslint-disable-next-line no-console
+    console.error("⚠️ BI DB unreachable on boot:", message);
+  }
+
+  if (!dbUp) {
+    // Skip every step that needs the pool.
+    return;
+  }
 
   try {
     await runMigrations(env.DATABASE_URL);
     await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
 
     await pool.query(`
-    CREATE TABLE IF NOT EXISTS contact_leads (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      company TEXT,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL,
-      phone TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
+      CREATE TABLE IF NOT EXISTS contact_leads (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        company TEXT,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS referrers (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      company TEXT NOT NULL,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL,
-      phone TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS referrers (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        company TEXT NOT NULL,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS referrals (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      referrer_id UUID REFERENCES referrers(id),
-      company TEXT NOT NULL,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL,
-      phone TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS referrals (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        referrer_id UUID REFERENCES referrers(id),
+        company TEXT NOT NULL,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS lenders (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      email TEXT UNIQUE NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS lenders (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email TEXT UNIQUE NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS lender_uploads (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      lender_id UUID REFERENCES lenders(id),
-      filename TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS lender_uploads (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        lender_id UUID REFERENCES lenders(id),
+        filename TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS pgi_applications (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      data JSONB,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pgi_applications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        data JSONB,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
 
     await pool.query("ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB");
+
     startPremiumAccrualJob();
     startPurgeJob();
-    // BI_APOLLO_SYNC_v54_PHASE2 — gated on APOLLO_SYNC_ENABLED + APOLLO_API_KEY
     startApolloSyncJob();
+    logger.info("BI bootstrap migrations + jobs started");
   } catch (error) {
-    logger.error({ err: error }, "Database initialization failed (non-blocking)");
+    logger.error(
+      { err: error instanceof Error ? error.message : String(error) },
+      "BI database initialization failed (non-blocking)",
+    );
   }
 }
 
