@@ -21,7 +21,18 @@ const pool = new Pool({ connectionString: env.DATABASE_URL });
 // pre-blob documents written before this block deployed. New uploads no longer
 // land here.
 const legacyUploadDir = path.join(__dirname, "../../uploads/bi");
-if (!fs.existsSync(legacyUploadDir)) fs.mkdirSync(legacyUploadDir, { recursive: true });
+// BI_BOOT_FIX_v63_DOC_DIR — wwwroot can be read-only on Azure when
+// WEBSITE_RUN_FROM_PACKAGE=1 is set. mkdirSync would throw at module
+// load and crash the entire BI-Server boot. Tolerate the failure;
+// uploads have moved to Azure Blob anyway.
+try {
+  if (!fs.existsSync(legacyUploadDir)) {
+    fs.mkdirSync(legacyUploadDir, { recursive: true });
+  }
+} catch (err) {
+  // eslint-disable-next-line no-console
+  console.warn("[BI_BOOT_FIX_v63_DOC_DIR] legacy upload dir not creatable (ok — Azure Blob is primary):", err instanceof Error ? err.message : err);
+}
 
 // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — 5 MB per file per PGI carrier policy.
 // Image / PDF / Excel / Word / screenshots all accepted. Per user: do not

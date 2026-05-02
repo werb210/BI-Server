@@ -1,3 +1,5 @@
+# BI_BOOT_FIX_v63_WORKFLOW — explicit startup-command, pruned deploy
+# package, version stamping so deploys are visible in logs.
 name: Build and deploy Node.js app to Azure Web App - BI-Server
 
 on:
@@ -24,7 +26,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install dependencies
+      - name: Install all dependencies (build needs devDeps)
         run: npm ci
 
       - name: Typecheck
@@ -33,17 +35,68 @@ jobs:
       - name: Build app
         run: npm run build
 
-      - name: Verify package contents
+      - name: Verify build artifacts
         run: |
-          test -f package.json
-          test -f package-lock.json
-          test -f dist/index.js
-          ls -la
-          ls -la dist
+          test -f dist/index.js || { echo "::error::dist/index.js missing"; exit 1; }
+          test -f dist/server.js || { echo "::error::dist/server.js missing"; exit 1; }
+          test -f startup.sh || { echo "::error::startup.sh missing"; exit 1; }
+          echo "dist/ contents:" && ls -la dist | head -30
+
+      # BI_BOOT_FIX_v63_WORKFLOW — copy migrations folder into dist so the
+      # runtime path matches even if process.cwd is set to the dist/ folder
+      # by some Azure-side wrapping. Keeping the original src/db/migrations/
+      # path also keeps current behavior working.
+      - name: Copy SQL migrations into dist
+        run: |
+          mkdir -p dist/db/migrations
+          cp -R src/db/migrations/. dist/db/migrations/ 2>/dev/null || true
+          ls -la dist/db/migrations | head -10 || true
+
+      - name: Stamp build metadata
+        run: |
+          BUILD_TAG="v63-$(date -u +%Y%m%d%H%M%S)"
+          COMMIT_SHA="${GITHUB_SHA:0:8}"
+          echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
+          echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_ENV
+          echo "build_tag=$BUILD_TAG" > BUILD_META
+          echo "commit_sha=$COMMIT_SHA" >> BUILD_META
+          cat BUILD_META
+
+      - name: Strip dev dependencies for runtime
+        run: npm prune --omit=dev
+
+      - name: Stage deploy package (slim)
+        run: |
+          mkdir -p _deploy
+          cp -R dist _deploy/dist
+          cp -R node_modules _deploy/node_modules
+          cp package.json package-lock.json _deploy/
+          cp startup.sh _deploy/
+          chmod +x _deploy/startup.sh
+          [ -f BUILD_META ] && cp BUILD_META _deploy/
+          du -sh _deploy
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: .
+          package: _deploy
+          startup-command: 'bash /home/site/wwwroot/startup.sh'
+
+      # Sanity check: hit /health once Azure says it's running. This
+      # turns a silent failed-to-start into a loud "deploy step ok but
+      # app never responded" — much easier to diagnose.
+      - name: Post-deploy /health probe
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            sleep 10
+            HTTP=$(curl -s -o /tmp/h.txt -w "%{http_code}" "https://bi-server-cse0apamgkheb9d5.canadacentral-01.azurewebsites.net/health" || echo "000")
+            echo "attempt $i http=$HTTP"
+            if [ "$HTTP" = "200" ]; then
+              cat /tmp/h.txt; echo
+              exit 0
+            fi
+          done
+          echo "::warning::BI-Server /health did not return 200 within 2 minutes after deploy."
+          cat /tmp/h.txt 2>/dev/null
