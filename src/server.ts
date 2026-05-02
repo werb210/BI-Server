@@ -230,7 +230,7 @@ async function bootstrapInner() {
   }
 
   try {
-    await runMigrations(env.DATABASE_URL);
+    await runMigrations(env.DATABASE_URL!);
     await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
 
     await pool.query(`

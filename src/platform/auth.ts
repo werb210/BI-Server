@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { env } from "./env";
 
-const authSecret = process.env.BI_STAFF_JWT_SECRET || env.JWT_SECRET;
+const authSecret = process.env.BI_STAFF_JWT_SECRET || env.JWT_SECRET || "dev-missing-jwt-secret";
 
 export function signStaffToken(payload: { staffUserId: string; role: string; phone?: string; userType?: string }) {
   return jwt.sign(payload, authSecret, { expiresIn: "8h" });
