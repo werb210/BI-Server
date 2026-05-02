@@ -50,6 +50,7 @@ import biApolloRoutes from "./routes/biApolloRoutes";
 // BI_PGI_ALIGNMENT_v56
 import biAdminLenderRoutes from "./routes/biAdminLenderRoutes";
 import biContactFormRoutes from "./routes/biContactFormRoutes";
+import biScoreRoutes from "./routes/biScoreRoutes";
 
 const app = express();
 // BI_BOOT_FIX_v60 — Azure App Service is behind a reverse proxy. Without
@@ -140,6 +141,11 @@ app.use("/api/v1", biCors, chatRoutes);
 app.use("/api/v1", biCors, mayaAnalyticsRoutes);
 app.use("/api/v1", biCors, intakeRoutes);
 app.use("/api/v1", biCors, biAuthRoutes);
+app.use("/api/v1", biCors, biPublicApplicationRoutes);
+app.use("/api/v1", biCors, biQuoteRoutes);
+app.use("/api/v1", biCors, biLenderApiRoutes);
+app.use("/api/v1", biCors, biReferrerRoutes);
+app.use("/api/v1", biCors, requireAuth, biScoreRoutes);
 
 // Authenticated BI endpoints — every BI route lives under /api/v1/bi
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biRoutes);
