@@ -80,6 +80,28 @@ setInterval(() => {
   for (const [k, ts] of spamThrottle) if (ts < cutoff) spamThrottle.delete(k);
 }, 60_000).unref();
 
+// BI_SERVER_BLOCK_v62_CORS_AND_PATCH_ALIGNMENT_v1
+// Hardcoded production fallback so an unset CORS_ALLOWED_ORIGINS env var
+// doesn't silently brick the entire BI silo. Includes:
+//   - staff.boreal.financial          (BF-portal)
+//   - client.boreal.financial         (BF-client; future PGI add-on)
+//   - boreal.financial / www.*        (BF-website)
+//   - delightful-sand-...azurestaticapps.net  (BI-Website production SWA)
+//   - localhost dev origins
+// CORS_ALLOWED_ORIGINS env var still takes precedence and SHOULD be set;
+// this is purely a safety net.
+const PRODUCTION_FALLBACK_ORIGINS = [
+  "https://staff.boreal.financial",
+  "https://client.boreal.financial",
+  "https://boreal.financial",
+  "https://www.boreal.financial",
+  "https://delightful-sand-05a55580f.7.azurestaticapps.net",
+];
+const DEV_FALLBACK_ORIGINS = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+];
+
 const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || env.CORS_ALLOWED_ORIGINS || "")
   .split(",")
   .map((v) => v.trim())
@@ -88,11 +110,14 @@ const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || env.CORS_ALLOWED_
 const corsOrigins = configuredOrigins.length
   ? configuredOrigins
   : env.NODE_ENV === "production"
-    ? []
-    : ["http://localhost:5173", "http://localhost:3000"];
+    ? PRODUCTION_FALLBACK_ORIGINS
+    : DEV_FALLBACK_ORIGINS;
 
-if (env.NODE_ENV === "production" && corsOrigins.length === 0) {
-  logger.error("CORS_ALLOWED_ORIGINS is empty in production; browser requests with credentials will be blocked.");
+if (configuredOrigins.length === 0) {
+  logger.warn(
+    { fallback_count: corsOrigins.length, env: env.NODE_ENV },
+    "CORS_ALLOWED_ORIGINS not set; using hardcoded fallback. Set the env var to override."
+  );
 }
 
 const biCors = cors({

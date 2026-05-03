@@ -103,18 +103,34 @@ router.patch("/applications/:publicId", async (req, res) => {
   if (r.rows[0].score_decision !== "approve") return res.status(403).json({ error: "score_not_approved" });
 
   const b = req.body ?? {};
+  // BI_SERVER_BLOCK_v62_CORS_AND_PATCH_ALIGNMENT_v1
+  // Add the score-time columns to the PATCH whitelist so the applicant
+  // can edit them on the application form after the score check. These
+  // columns ALL exist on bi_applications (populated by /applications/score
+  // INSERT). Without this whitelist they are silently dropped and the
+  // form returns ok:true while the data isn't saved.
+  // Also adds country (it was checked in /score but not editable) and
+  // explicitly maps every PGI_API_ALIGN_v57 client field.
   const cols: Record<string, string> = {
+    // Identity
     guarantor_name: "guarantor_name",
     guarantor_email: "guarantor_email",
     guarantor_dob: "guarantor_dob",
     guarantor_address: "guarantor_address",
     guarantor_phone: "guarantor_phone",
+    // Business
+    country: "country",
     business_name: "business_name",
     business_address: "business_address",
     business_website: "business_website",
     entity_type: "entity_type",
     business_number: "business_number",
+    naics_code: "naics_code",
+    formation_date: "formation_date",
+    // Loan
     lender_name: "lender_name",
+    loan_amount: "loan_amount",
+    pgi_limit: "pgi_limit",
     csbfp_backed: "csbfp_backed",
     loan_has_guaranteed_cap: "loan_has_guaranteed_cap",
     loan_funding_date: "loan_funding_date",
@@ -122,6 +138,14 @@ router.patch("/applications/:publicId", async (req, res) => {
     personally_guaranteeing: "personally_guaranteeing",
     has_other_guarantors: "has_other_guarantors",
     policy_start_date: "policy_start_date",
+    // Financial
+    annual_revenue: "annual_revenue",
+    ebitda: "ebitda",
+    total_debt: "total_debt",
+    monthly_debt_service: "monthly_debt_service",
+    collateral_value: "collateral_value",
+    enterprise_value: "enterprise_value",
+    // Risk
     payables_threatening: "payables_threatening",
     upcoming_adverse_events: "upcoming_adverse_events",
     bankruptcy_history: "bankruptcy_history",
@@ -132,6 +156,7 @@ router.patch("/applications/:publicId", async (req, res) => {
     property_insurance_in_force: "property_insurance_in_force",
     personal_judgments: "personal_judgments",
     business_judgments: "business_judgments",
+    // Consents (jsonb)
     consents: "consents",
   };
 
