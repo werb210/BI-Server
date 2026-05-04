@@ -289,7 +289,7 @@ biAppApplicantRoutes.post("/application/submit", async (req, res) => {
 
     const updatedApplication = await pool.query(
       `UPDATE bi_applications
-       SET stage='documents_pending',
+       SET /* BI_SERVER_BLOCK_v62_STAGE_ALIGNMENT_v1 — column rename + stage rename */ status='document_review',
            bankruptcy_flag=$2,
            premium_calc=$3,
            updated_at=NOW()

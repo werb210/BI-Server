@@ -51,7 +51,9 @@ export async function runPremiumAccrual() {
        WHERE s.due_date <= NOW()
          AND s.paid = false
          AND p.status = 'active'
-         AND a.stage = ANY(ARRAY['policy_issued','bound']::bi_pipeline_stage[])`
+         -- BI_SERVER_BLOCK_v62_STAGE_ALIGNMENT_v1 — col rename + enum drop +
+         -- 'bound' was mapped to 'policy_issued' by 2026_05_03_pgi_alignment_v1
+         AND a.status = 'policy_issued'`
     );
 
     for (const row of due.rows) {
