@@ -23,6 +23,29 @@ const ENSURE_TABLE_SQL = `
   );
 `;
 
+// BI_SERVER_BLOCK_v66_MIGRATION_RUNNER_ENUM_SAFE_v1
+// Extract every standalone ALTER TYPE … ADD VALUE statement from a .sql
+// file body so the runner can pre-commit them OUTSIDE the per-file
+// transaction. Postgres permits ADD VALUE inside a tx, but rejects USING
+// the new value before commit (error 55P04). Pre-committing eliminates the
+// hazard regardless of how the .sql author structured the file.
+//
+// Conservative regex:
+//   - Matches ALTER TYPE <name> ADD VALUE [IF NOT EXISTS] '<value>' [BEFORE/AFTER '<other>']
+//   - Case-insensitive, multiline
+//   - Does NOT strip the matched statement from the file body — Postgres
+//     re-runs ADD VALUE IF NOT EXISTS as a no-op on the second pass inside
+//     the per-file BEGIN…COMMIT, which is safe.
+function extractAddValueStatements_v66(sql: string): string[] {
+  const out: string[] = [];
+  const re = /ALTER\s+TYPE\s+[a-zA-Z0-9_."]+\s+ADD\s+VALUE(?:\s+IF\s+NOT\s+EXISTS)?\s+'[^']+'(?:\s+(?:BEFORE|AFTER)\s+'[^']+')?\s*;/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sql)) !== null) {
+    out.push(m[0].replace(/\s+/g, " ").trim());
+  }
+  return out;
+}
+
 export async function runMigrations(pool: Pool): Promise<{ applied: string[]; skipped: string[] }> {
   const applied: string[] = [];
   const skipped: string[] = [];
@@ -52,6 +75,24 @@ export async function runMigrations(pool: Pool): Promise<{ applied: string[]; sk
       continue;
     }
     const sql = readFileSync(path.join(MIGRATIONS_DIR, file), "utf8");
+
+    // BI_SERVER_BLOCK_v66_MIGRATION_RUNNER_ENUM_SAFE_v1 — pre-commit any
+    // ALTER TYPE ... ADD VALUE statements OUTSIDE the per-file transaction.
+    // Postgres rejects USING a newly-added enum value before its xact has
+    // committed; running them via pool.query (autocommit) ensures any later
+    // statement in the same boot run sees a committed value.
+    const addValueStmts = extractAddValueStatements_v66(sql);
+    for (const stmt of addValueStmts) {
+      try {
+        await pool.query(stmt);
+      } catch (err) {
+        // ADD VALUE IF NOT EXISTS is idempotent; only log if it's an
+        // unexpected failure. Actual schema errors will surface again
+        // below when the per-file transaction tries to use the value.
+        logger.warn({ err, file, stmt }, "runMigrations: pre-commit ADD VALUE skipped");
+      }
+    }
+
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
