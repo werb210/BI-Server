@@ -3,6 +3,9 @@ import crypto from "node:crypto";
 import { pool } from "../db";
 import { pgiScore } from "../services/pgiAdapter";
 import { generatePublicId } from "../util/publicId";
+// BI_SERVER_BLOCK_v66_PUBLIC_DOCS_AND_MIGRATION_SAFE_v1
+import multer from "multer";
+import { getStorage } from "../lib/storage";
 
 const router = Router();
 const EBITDA_MIN = 50_000;
@@ -203,6 +206,89 @@ router.post("/applications/:publicId/submit", async (req, res) => {
 
   await pool.query(`UPDATE bi_applications SET status='document_review', updated_at=NOW() WHERE id=$1`, [app.id]);
   return res.json({ ok: true, status: "document_review" });
+});
+
+
+// BI_SERVER_BLOCK_v66_PUBLIC_DOCS_AND_MIGRATION_SAFE_v1 — public doc upload.
+// Authenticates by public_id only (no JWT). Used by the BI-Website applicant
+// flow after submit. Stores files to Azure Blob via the same storage abstraction
+// as the staff-side upload route. 5MB per file per PGI carrier policy.
+const publicDocUpload_v66 = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+router.post("/applications/:publicId/documents", publicDocUpload_v66.array("files"), async (req, res) => {
+  const r = await pool.query(
+    `SELECT id, score_decision, status FROM bi_applications WHERE public_id=$1`,
+    [req.params.publicId],
+  );
+  if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
+  if (r.rows[0].score_decision !== "approve") return res.status(403).json({ error: "score_not_approved" });
+
+  const files = (req.files as Express.Multer.File[]) ?? [];
+  if (files.length === 0) return res.status(400).json({ error: "no_files" });
+
+  const docTypesRaw = req.body?.doc_types;
+  const docTypes = Array.isArray(docTypesRaw)
+    ? docTypesRaw
+    : typeof docTypesRaw === "string" ? [docTypesRaw] : [];
+
+  const store = getStorage();
+  const created: Array<{ id: string; doc_type: string; filename: string }> = [];
+
+  for (const [idx, file] of files.entries()) {
+    const docType = typeof docTypes[idx] === "string" && docTypes[idx].trim()
+      ? docTypes[idx].trim()
+      : "other";
+    let put;
+    try {
+      put = await store.put({
+        buffer: file.buffer,
+        filename: file.originalname,
+        contentType: file.mimetype,
+        pathPrefix: `applications/${r.rows[0].id}`,
+      });
+    } catch (err) {
+      return res.status(502).json({ error: "storage_failed", detail: String((err as Error)?.message ?? err) });
+    }
+    let inserted;
+    try {
+      inserted = await pool.query(
+        `INSERT INTO bi_documents
+           (application_id, doc_type, original_filename, storage_key, blob_name, blob_url, sha256_hash, mime_type, bytes, uploaded_by_actor)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'applicant')
+         RETURNING id`,
+        [r.rows[0].id, docType, file.originalname, put.blobName, put.blobName, put.url, put.hash, file.mimetype, put.sizeBytes],
+      );
+    } catch (err) {
+      return res.status(400).json({ error: "invalid_doc_type", doc_type: docType, detail: String((err as Error)?.message ?? err) });
+    }
+    created.push({ id: inserted.rows[0].id as string, doc_type: docType, filename: file.originalname });
+    await pool.query(
+      `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
+       VALUES($1,'applicant','document_uploaded',$2)`,
+      [r.rows[0].id, `Document uploaded: ${file.originalname}`],
+    );
+  }
+
+  return res.json({ ok: true, documents: created });
+});
+
+router.get("/applications/:publicId/documents", async (req, res) => {
+  const r = await pool.query(
+    `SELECT id FROM bi_applications WHERE public_id=$1`,
+    [req.params.publicId],
+  );
+  if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
+  const docs = await pool.query(
+    `SELECT id, doc_type, original_filename, bytes, created_at
+       FROM bi_documents
+      WHERE application_id=$1 AND purged_at IS NULL
+      ORDER BY created_at DESC`,
+    [r.rows[0].id],
+  );
+  return res.json({ documents: docs.rows });
 });
 
 export default router;
