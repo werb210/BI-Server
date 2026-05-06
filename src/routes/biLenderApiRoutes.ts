@@ -49,8 +49,11 @@ router.post("/lender/applications", authLender, async (req: any, res) => {
 
   const id = crypto.randomUUID();
   const publicId = generatePublicId();
+  // BI_SERVER_BLOCK_v172_SOURCE_TYPE_NORMALIZE_v1
+  // Set source_type explicitly to 'lender' (not the legacy 'lender_api')
+  // so it matches V1 ruling 5 and stays aligned with the source column.
   await pool.query(`INSERT INTO bi_applications
-       (id, public_id, status, source, lender_id,
+       (id, public_id, status, source, source_type, lender_id,
         guarantor_name, guarantor_email, business_name, lender_name,
         country, naics_code, formation_date, loan_amount, pgi_limit,
         annual_revenue, ebitda, total_debt, monthly_debt_service,
@@ -58,7 +61,7 @@ router.post("/lender/applications", authLender, async (req: any, res) => {
         bankruptcy_history, insolvency_history, judgment_history,
         score_id, score_value, score_decision, score_at,
         form_data, created_at, updated_at)
-     VALUES ($1,$2,'ready_for_submission','lender_api',$3,
+     VALUES ($1,$2,'ready_for_submission','lender','lender',$3,
              $4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
              $19,$20,$21,$22,$23,$24,NOW(),$25,NOW(),NOW())`,
     [id, publicId, req.lenderId,
