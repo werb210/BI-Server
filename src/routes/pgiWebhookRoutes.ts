@@ -34,6 +34,52 @@ router.post("/api/v1/webhooks/pgi", express.raw({ type: "application/json" }), a
     await pool.query(`UPDATE bi_applications SET status='declined', score_reason=$1, updated_at=NOW() WHERE pgi_application_id=$2`, [evt.reason ?? "PGI declined", evt.application_id]);
   } else if (evt.event === "application.information_required") {
     await pool.query(`UPDATE bi_applications SET status='information_required', updated_at=NOW() WHERE pgi_application_id=$1`, [evt.application_id]);
+  } else if (evt.event === "application.approved") {
+    // BI_SERVER_BLOCK_v173_PGI_WEBHOOK_BOUND_HANDLER_v1
+    // Carrier approved the application but the policy is not yet bound.
+    // Stage advances to 'approved'; downstream onApplicationApproved hook
+    // does NOT fire here — that is the binding event below.
+    await pool.query(
+      `UPDATE bi_applications SET status='approved', updated_at=NOW() WHERE pgi_application_id=$1`,
+      [evt.application_id]
+    );
+  } else if (evt.event === "policy.bound" || evt.event === "policy.issued") {
+    // BI_SERVER_BLOCK_v173_PGI_WEBHOOK_BOUND_HANDLER_v1
+    // Carrier bound the policy — actual approval signal per v62 spec.
+    // Advance to policy_issued, create bi_policies row, fire approval
+    // hook for referrals/CRM, and enqueue purge.
+    const appResult = await pool.query<{ id: string }>(
+      `UPDATE bi_applications
+          SET status='policy_issued',
+              policy_id=$1,
+              policy_bound_at=NOW(),
+              updated_at=NOW()
+        WHERE pgi_application_id=$2
+        RETURNING id`,
+      [evt.policy_id ?? null, evt.application_id]
+    );
+    const appId = appResult.rows[0]?.id;
+    if (appId) {
+      await pool.query(
+        `INSERT INTO bi_policies(application_id, status, policy_id)
+         VALUES($1, 'active', $2) ON CONFLICT DO NOTHING`,
+        [appId, evt.policy_id ?? null]
+      ).catch(() => {});
+      await pool.query(
+        `INSERT INTO bi_purge_queue(application_id, eligible_at)
+         VALUES($1, NOW()) ON CONFLICT (application_id) DO NOTHING`,
+        [appId]
+      ).catch(() => {});
+      await pool.query(
+        `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
+         VALUES($1, 'system', 'policy_bound', $2)`,
+        [appId, `Policy bound by carrier (${evt.policy_id ?? "no policy id"})`]
+      ).catch(() => {});
+      await onApplicationApproved(appId).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("[v173] onApplicationApproved failed", err);
+      });
+    }
   }
   res.json({ ok: true });
 });
