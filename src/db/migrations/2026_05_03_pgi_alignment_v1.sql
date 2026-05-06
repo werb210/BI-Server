@@ -1,5 +1,31 @@
 -- BI_BLOCK_PGI_ALIGNMENT_v1 (idempotent, normalize-then-constrain)
 
+-- BI_SERVER_BLOCK_v190_MIGRATION_STATUS_BOOTSTRAP_v1
+-- Some BI deployments have only `stage` (the original enum) and no
+-- `status` column on bi_applications. This migration's first UPDATE
+-- (line ~7-9 below) references `status` and crashes with Postgres 42703
+-- before any of the rest of the migration runs. Worse, runMigrations.ts
+-- treats 42703 as fatal and aborts the entire boot-time migration loop,
+-- leaving every later .sql unapplied. Bootstrap a `status` column here,
+-- seeded from `stage` when present and 'created' otherwise. All three
+-- statements are idempotent: ADD COLUMN IF NOT EXISTS is a no-op when
+-- the column exists, and the UPDATE only writes rows where status IS
+-- NULL.
+ALTER TABLE bi_applications ADD COLUMN IF NOT EXISTS status TEXT;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_name = 'bi_applications' AND column_name = 'stage'
+  ) THEN
+    UPDATE bi_applications SET status = stage::text WHERE status IS NULL;
+  ELSE
+    UPDATE bi_applications SET status = 'created' WHERE status IS NULL;
+  END IF;
+END$$;
+
+
 -- ---------- 1.1 Pipeline stages ----------
 ALTER TABLE bi_applications
   ADD COLUMN IF NOT EXISTS status_legacy TEXT;
