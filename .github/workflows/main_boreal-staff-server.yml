@@ -97,7 +97,7 @@ jobs:
 
       - name: Post-deploy /health probe
         run: |
-          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+          for i in $(seq 1 30); do
             sleep 10
             HTTP=$(curl -s -o /tmp/h.txt -w "%{http_code}" "https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net/health" || echo "000")
             echo "attempt $i http=$HTTP"
@@ -106,5 +106,5 @@ jobs:
               exit 0
             fi
           done
-          echo "::warning::BI-Server /health did not return 200 within 2 minutes after deploy."
+          echo "::warning::BI-Server /health did not return 200 within 5 minutes after deploy."
           cat /tmp/h.txt 2>/dev/null
