@@ -21,6 +21,38 @@ router.post("/applications/score", async (req, res) => {
   const missing = required.filter((k) => b[k] === undefined || b[k] === "");
   if (missing.length) return res.status(400).json({ error: "missing_fields", fields: missing });
 
+  // BI_SERVER_BLOCK_v180_SCORE_VALIDATION_v1
+  // Field-shape validation. Catches malformed numerics (Number("foo") = NaN
+  // would otherwise pass the 80% / EBITDA checks because NaN comparisons
+  // are all false), bad NAICS / dates / phone before the row is INSERTed.
+  const shapeIssues: { field: string; message: string }[] = [];
+  const isFiniteNumber = (v: unknown): boolean => {
+    if (v === null || v === undefined || v === "") return false;
+    const n = Number(v);
+    return Number.isFinite(n);
+  };
+  if (typeof b.naics_code !== "string" || !/^\d{6}$/.test(b.naics_code)) {
+    shapeIssues.push({ field: "naics_code", message: "must be a 6-digit code" });
+  }
+  if (typeof b.formation_date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(b.formation_date) || Number.isNaN(Date.parse(b.formation_date))) {
+    shapeIssues.push({ field: "formation_date", message: "must be YYYY-MM-DD" });
+  }
+  for (const numKey of ["loan_amount", "pgi_limit", "annual_revenue", "ebitda", "total_debt", "monthly_debt_service", "collateral_value", "enterprise_value"] as const) {
+    if (!isFiniteNumber(b[numKey])) {
+      shapeIssues.push({ field: numKey, message: "must be a finite number" });
+    } else if (Number(b[numKey]) < 0) {
+      shapeIssues.push({ field: numKey, message: "must be non-negative" });
+    }
+  }
+  if (b.applicant_phone_e164 !== undefined && b.applicant_phone_e164 !== null && b.applicant_phone_e164 !== "") {
+    if (typeof b.applicant_phone_e164 !== "string" || !/^\+[1-9]\d{6,14}$/.test(b.applicant_phone_e164.trim())) {
+      shapeIssues.push({ field: "applicant_phone_e164", message: "must be E.164 format (e.g. +14165551234)" });
+    }
+  }
+  if (shapeIssues.length) {
+    return res.status(400).json({ error: "validation_failed", issues: shapeIssues });
+  }
+
   if (b.country !== "CA") return res.status(400).json({ error: "country_unsupported", supported: ["CA"] });
   if (Number(b.loan_amount) > LOAN_MAX) return res.status(400).json({ error: "loan_amount_exceeds_max", max: LOAN_MAX });
   if (Number(b.pgi_limit) > Number(b.loan_amount)) return res.status(400).json({ error: "pgi_limit_exceeds_loan" });
