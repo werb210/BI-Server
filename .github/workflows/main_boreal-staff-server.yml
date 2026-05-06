@@ -89,7 +89,7 @@ jobs:
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
-          app-name: bi-server-csc0apamgkheb9d5
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: .
           # NOTE: NO startup-command. Windows web apps + publish-profile
@@ -99,7 +99,7 @@ jobs:
         run: |
           for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
             sleep 10
-            HTTP=$(curl -s -o /tmp/h.txt -w "%{http_code}" "https://bi-server-cse0apamgkheb9d5.canadacentral-01.azurewebsites.net/health" || echo "000")
+            HTTP=$(curl -s -o /tmp/h.txt -w "%{http_code}" "https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net/health" || echo "000")
             echo "attempt $i http=$HTTP"
             if [ "$HTTP" = "200" ]; then
               cat /tmp/h.txt; echo
