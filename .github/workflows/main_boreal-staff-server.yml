@@ -87,15 +87,6 @@ jobs:
         run: sleep 45
 
       - name: Deploy to Azure Web App
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          retry_wait_seconds: 60
-          command: |
-            echo "Starting Azure deployment..."
-
-      - name: Azure Web App Deploy
         uses: azure/webapps-deploy@v3
         with:
           app-name: bi-server-csc0apamgkheb9d5
