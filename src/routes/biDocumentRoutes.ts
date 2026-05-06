@@ -3,7 +3,6 @@ import multer from "multer";
 import { Pool } from "pg";
 import fs from "fs";
 import path from "path";
-import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
 import { badRequest, ok } from "../utils/apiResponse";
 import { sendDocumentRejectedSms } from "../services/smsService";
 import { requireAuth } from "../platform/auth";
@@ -16,6 +15,17 @@ import { extractText } from "../services/ocrService";
 
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
+
+// BI_SERVER_BLOCK_v178_DOC_ACCEPT_HARDENING_v1
+// Inline role gate — biDocumentRoutes does not import a role middleware
+// (auth.ts only exports requireAuth). Reject non-staff/non-admin.
+function requireStaffOrAdmin(req: any, res: any, next: any) {
+  const role = String((req.user as { role?: string } | undefined)?.role ?? "").toLowerCase();
+  if (role !== "admin" && role !== "staff") {
+    return res.status(403).json({ status: "error", error: "STAFF_OR_ADMIN_ONLY" });
+  }
+  next();
+}
 
 // Legacy local-disk fallback path. Kept ONLY so /:id (download) can still serve
 // pre-blob documents written before this block deployed. New uploads no longer
@@ -134,10 +144,7 @@ router.get("/:id", async (req, res) => {
 });
 
 
-router.post("/:id/accept", requireAuth, async (req, res) => {
-  // BI_HARDENING_v44 — BI-7. After marking this doc accepted, check whether all
-  // documents on the application are accepted. If yes (and at least one exists),
-  // auto-forward to PGI. submitApplicationToPGI is idempotent (alreadySubmitted).
+router.post("/:id/accept", requireAuth, requireStaffOrAdmin, async (req, res) => {
   const { id } = req.params;
   const userId = (req.user as { staffUserId?: string } | undefined)?.staffUserId ?? null;
 
@@ -172,34 +179,47 @@ router.post("/:id/accept", requireAuth, async (req, res) => {
   );
   const total = Number(counts.rows[0]?.total ?? 0);
   const pending = Number(counts.rows[0]?.pending ?? 0);
-  let pgiResult: { externalId: string; status: string; alreadySubmitted: boolean } | null = null;
+  // BI_SERVER_BLOCK_v178_DOC_ACCEPT_HARDENING_v1
+  // Auto-PGI removed — v160 Submit-to-Carrier endpoint is now the only
+  // path to carrier. On accept-all we ONLY advance the stage so the
+  // manual button surfaces in the BI portal.
+  let stageAdvanced = false;
+  let nextStage: "document_review" | "ready_for_submission" | null = null;
   if (total > 0 && pending === 0) {
-    try {
-      pgiResult = await submitApplicationToPGI(doc.application_id);
+    const stageRow = await pool.query<{ source_type: string | null; status: string | null }>(
+      `SELECT source_type, status FROM bi_applications WHERE id=$1 LIMIT 1`,
+      [doc.application_id]
+    );
+    const srcType = String(stageRow.rows[0]?.source_type ?? "").toLowerCase();
+    const currentStatus = String(stageRow.rows[0]?.status ?? "").toLowerCase();
+    nextStage = srcType === "lender" ? "ready_for_submission" : "document_review";
+    if (currentStatus === "in_progress") {
+      const updated = await pool.query(
+        `UPDATE bi_applications
+            SET status=$2, updated_at=NOW()
+          WHERE id=$1 AND status='in_progress'`,
+        [doc.application_id, nextStage]
+      );
+      stageAdvanced = (updated.rowCount ?? 0) > 0;
+    }
+    if (stageAdvanced) {
       await pool.query(
         `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-         VALUES($1, 'system', $2, 'pgi_submitted', $3, $4::jsonb)`,
+         VALUES($1, 'system', $2, 'application_stage_changed', $3, $4::jsonb)`,
         [
           doc.application_id,
           userId,
-          `Auto-forwarded to PGI`,
-          JSON.stringify({ trigger: "all_documents_accepted", external_id: pgiResult?.externalId ?? null }),
+          `Application advanced to ${nextStage} after all documents were accepted`,
+          JSON.stringify({ trigger: "all_documents_accepted", from: "in_progress", to: nextStage }),
         ]
-      );
-    } catch (err) {
-      // Don't fail the staff-accept request because PGI is down. Log and move on.
-      await pool.query(
-        `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-         VALUES($1, 'system', $2, 'pgi_submit_failed', $3, $4::jsonb)`,
-        [doc.application_id, userId, "PGI auto-submit failed", JSON.stringify({ error: String(err) })]
       );
     }
   }
 
-  return ok(res, { success: true, pgi: pgiResult, accepted: { total, pending } });
+  return ok(res, { success: true, accepted: { total, pending }, stageAdvanced, nextStage });
 });
 
-router.post("/:id/reject", requireAuth, async (req, res) => {
+router.post("/:id/reject", requireAuth, requireStaffOrAdmin, async (req, res) => {
   const { id } = req.params;
   const { reason } = req.body as { reason?: string };
   const userId = (req.user as { staffUserId?: string } | undefined)?.staffUserId ?? null;
