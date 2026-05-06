@@ -35,20 +35,26 @@ router.post("/applications/score", async (req, res) => {
   // The pipeline card only materializes once the user submits the full
   // 45-question form (which advances created -> in_progress).
   await pool.query(
+    // BI_SERVER_BLOCK_v170_SCORE_PHONE_NOT_NULL_FIX_v1
     `INSERT INTO bi_applications
        (id, public_id, status, source,
         country, naics_code, formation_date, loan_amount, pgi_limit,
         annual_revenue, ebitda, total_debt, monthly_debt_service,
         collateral_value, enterprise_value,
+        applicant_phone_e164,
         data,
         created_at, updated_at)
      VALUES ($1,$2,'created','public',
-             $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, $14::jsonb, NOW(), NOW())`,
+             $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, $14, $15::jsonb, NOW(), NOW())`,
     [
       id, publicId,
       b.country, b.naics_code, b.formation_date, b.loan_amount, b.pgi_limit,
       b.annual_revenue, b.ebitda, b.total_debt, b.monthly_debt_service,
       b.collateral_value, b.enterprise_value,
+      // BI_SERVER_BLOCK_v170_SCORE_PHONE_NOT_NULL_FIX_v1
+      typeof b.applicant_phone_e164 === "string" && b.applicant_phone_e164.trim()
+        ? b.applicant_phone_e164.trim()
+        : null,
       // BI_SERVER_BLOCK_v164_SCORE_STAGE_FIX_v1 — persist core_inputs for
       // Stage 2 pre-fill of the locked CORE fields.
       JSON.stringify({
