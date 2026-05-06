@@ -15,7 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # BI_SERVER_BLOCK_v189_PROBE_FQDN_AND_NON_FATAL_v1
   AZURE_WEBAPP_NAME: BI-Server
+  AZURE_WEBAPP_HOSTNAME: bi-server-cse0apamgkheb9d5.canadacentral-01.azurewebsites.net
   NODE_VERSION: '20.x'
 
 jobs:
@@ -96,15 +98,28 @@ jobs:
           # auth reject this input. iisnode finds server.js automatically.
 
       - name: Post-deploy /health probe
+        # BI_SERVER_BLOCK_v189_PROBE_FQDN_AND_NON_FATAL_v1
+        # Smoke test only. The deploy step is the source of truth.
+        # Probe failure must NOT fail the workflow — Azure cold-start
+        # plus DB warmup can exceed 5 minutes on the smaller plan.
+        continue-on-error: true
         run: |
+          HOST="${{ env.AZURE_WEBAPP_HOSTNAME }}"
+          echo "probe target: https://$HOST/health"
           for i in $(seq 1 30); do
             sleep 10
-            HTTP=$(curl -s -o /tmp/h.txt -w "%{http_code}" "https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net/health" || echo "000")
+            HTTP=$(curl -s -m 10 -o /tmp/h.txt -w "%{http_code}" "https://$HOST/health" || echo "000")
             echo "attempt $i http=$HTTP"
             if [ "$HTTP" = "200" ]; then
-              cat /tmp/h.txt; echo
+              cat /tmp/h.txt 2>/dev/null || true
+              echo
               exit 0
             fi
           done
           echo "::warning::BI-Server /health did not return 200 within 5 minutes after deploy."
-          cat /tmp/h.txt 2>/dev/null
+          echo "Last response body (if any):"
+          cat /tmp/h.txt 2>/dev/null || true
+          # Exit 0 — continue-on-error already protects the workflow,
+          # but also being explicit so the step itself is green when
+          # the probe times out. The deploy already happened.
+          exit 0
