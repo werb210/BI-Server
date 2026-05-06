@@ -30,20 +30,38 @@ router.post("/applications/score", async (req, res) => {
   const id = crypto.randomUUID();
   const publicId = generatePublicId();
 
+  // BI_SERVER_BLOCK_v164_SCORE_STAGE_FIX_v1
+  // V1 spec ruling 15 + §3: score pass creates row in `created` stage.
+  // The pipeline card only materializes once the user submits the full
+  // 45-question form (which advances created -> in_progress).
   await pool.query(
     `INSERT INTO bi_applications
        (id, public_id, status, source,
         country, naics_code, formation_date, loan_amount, pgi_limit,
         annual_revenue, ebitda, total_debt, monthly_debt_service,
         collateral_value, enterprise_value,
+        data,
         created_at, updated_at)
-     VALUES ($1,$2,'in_progress','public',
-             $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, NOW(), NOW())`,
+     VALUES ($1,$2,'created','public',
+             $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, $14::jsonb, NOW(), NOW())`,
     [
       id, publicId,
       b.country, b.naics_code, b.formation_date, b.loan_amount, b.pgi_limit,
       b.annual_revenue, b.ebitda, b.total_debt, b.monthly_debt_service,
       b.collateral_value, b.enterprise_value,
+      // BI_SERVER_BLOCK_v164_SCORE_STAGE_FIX_v1 — persist core_inputs for
+      // Stage 2 pre-fill of the locked CORE fields.
+      JSON.stringify({
+        core_inputs: {
+          country: b.country, naics_code: b.naics_code,
+          formation_date: b.formation_date, loan_amount: b.loan_amount,
+          pgi_limit: b.pgi_limit, annual_revenue: b.annual_revenue,
+          ebitda: b.ebitda, total_debt: b.total_debt,
+          monthly_debt_service: b.monthly_debt_service,
+          collateral_value: b.collateral_value,
+          enterprise_value: b.enterprise_value,
+        },
+      }),
     ],
   );
 
@@ -70,7 +88,10 @@ router.post("/applications/score", async (req, res) => {
     return res.status(502).json({ error: "score_failed", public_id: publicId });
   }
 
-  const newStatus = score.decision === "decline" ? "declined" : "in_progress";
+  // BI_SERVER_BLOCK_v164_SCORE_STAGE_FIX_v1
+  // Stay in 'created' on approve — user must submit the full app to
+  // advance to 'in_progress'. Decline still terminates here.
+  const newStatus = score.decision === "decline" ? "declined" : "created";
   await pool.query(
     `UPDATE bi_applications
         SET score_id=$1, score_value=$2, score_decision=$3, score_reason=$4,
