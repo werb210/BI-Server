@@ -12,10 +12,17 @@ CREATE TABLE IF NOT EXISTS naics_codes (
   PRIMARY KEY (code, country)
 );
 
+-- BI_SERVER_BLOCK_v192_PG_TRGM_BEFORE_INDEX_v1
+-- Order matters: the GIN index references gin_trgm_ops, the operator class
+-- defined by the pg_trgm extension. Creating the index before the extension
+-- fails with 42704 ("operator class "gin_trgm_ops" does not exist for
+-- access method "gin""), runMigrations rolls back, and every later .sql
+-- is skipped. Same idempotent class as v190 / v191. CREATE EXTENSION must
+-- come first so the operator class is resolvable when the index is built.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 CREATE INDEX IF NOT EXISTS naics_codes_title_trgm_idx
   ON naics_codes USING gin (lower(title) gin_trgm_ops);
-
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 INSERT INTO naics_codes (code, country, title, description) VALUES
   ('236110','CA','Residential building construction','New single-family + multi-family + remodeling'),
