@@ -38,7 +38,11 @@ router.get("/crm/referrers", async (_req, res) => {
 ========================= */
 router.get("/crm/lenders", async (_req, res) => {
   const result = await pool.query(`
-    SELECT id, rep_full_name, company_name
+    -- BI_SERVER_BLOCK_v157_BF_JWT_INTEROP_AND_CRM_FIX_v1
+    -- bi_lenders has contact_full_name, not rep_full_name. The
+    -- old column name caused /api/v1/bi/crm/lenders to 500 on
+    -- every call from the BI silo CRM page.
+    SELECT id, contact_full_name, company_name
     FROM bi_lenders
     ORDER BY created_at DESC
   `);
