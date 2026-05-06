@@ -244,6 +244,22 @@ router.post("/applications/:publicId/submit", async (req, res) => {
   if (app.score_decision !== "approve") return res.status(403).json({ error: "score_not_approved" });
   if (app.score_stale) return res.status(409).json({ error: "score_stale", remediation: "re_run_score" });
 
+  // BI_SERVER_BLOCK_v184_PUBLIC_STATUS_GUARDS_v1
+  // Status guard. /submit advances 'created' -> 'in_progress' only.
+  // Idempotent if already 'in_progress'. Reject if past that to prevent
+  // applicant from regressing the application after staff has touched it.
+  const currentStatus = String(app.status ?? "").toLowerCase();
+  if (currentStatus === "in_progress") {
+    return res.json({ ok: true, status: "in_progress", idempotent: true });
+  }
+  if (currentStatus !== "created" && currentStatus !== "") {
+    return res.status(409).json({
+      error: "wrong_status",
+      current: currentStatus,
+      message: "Application has progressed past submit; further changes belong with staff."
+    });
+  }
+
   const required = [
     "guarantor_name", "guarantor_email", "guarantor_dob", "guarantor_address",
     "guarantor_phone", "business_name", "business_address", "entity_type",
@@ -289,6 +305,21 @@ router.post("/applications/:publicId/documents", publicDocUpload_v66.array("file
   );
   if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
   if (r.rows[0].score_decision !== "approve") return res.status(403).json({ error: "score_not_approved" });
+
+  // BI_SERVER_BLOCK_v184_PUBLIC_STATUS_GUARDS_v1
+  // Status guard. Uploads belong while the row is in_progress (between
+  // /submit and accept-all) or document_review (staff has accepted some
+  // and applicant is replacing rejected ones). Once past document_review
+  // (submitted/under_review/approved/declined/policy_issued) the
+  // applicant should not be uploading more documents.
+  const docStatus = String(r.rows[0].status ?? "").toLowerCase();
+  if (docStatus !== "in_progress" && docStatus !== "document_review") {
+    return res.status(409).json({
+      error: "wrong_status",
+      current: docStatus,
+      message: "Document upload only allowed while application is in_progress or document_review"
+    });
+  }
 
   const files = (req.files as Express.Multer.File[]) ?? [];
   if (files.length === 0) return res.status(400).json({ error: "no_files" });
