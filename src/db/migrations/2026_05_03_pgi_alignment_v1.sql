@@ -141,6 +141,29 @@ CREATE INDEX IF NOT EXISTS bi_applications_lender_id_idx ON bi_applications(lend
 CREATE INDEX IF NOT EXISTS bi_applications_referrer_id_idx ON bi_applications(referrer_id);
 CREATE INDEX IF NOT EXISTS bi_applications_pgi_app_id_idx ON bi_applications(pgi_application_id);
 
+-- BI_SERVER_BLOCK_v191_BI_DOCUMENTS_DOCUMENT_TYPE_BOOTSTRAP_v1
+-- Master schema (20260222_00_bi_master_schema.sql:265-268) creates bi_documents
+-- with `doc_type bi_document_type` (the original enum), NOT `document_type`.
+-- The UPDATE below references `document_type` directly, so without this
+-- bootstrap the migration fails with 42703 ("column "document_type" does
+-- not exist"), runMigrations rolls back, and every later .sql is skipped.
+-- Same pattern as v190 for bi_applications.status. Seed `document_type` from
+-- `doc_type::text` when the legacy column exists so the CASE-mapping below
+-- has values to operate on; otherwise leave NULL and let the mapping run.
+ALTER TABLE bi_documents ADD COLUMN IF NOT EXISTS document_type TEXT;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_name = 'bi_documents' AND column_name = 'doc_type'
+  ) THEN
+    UPDATE bi_documents
+       SET document_type = doc_type::text
+     WHERE document_type IS NULL;
+  END IF;
+END$$;
+
 ALTER TABLE bi_documents
   ADD COLUMN IF NOT EXISTS document_type_legacy TEXT;
 
