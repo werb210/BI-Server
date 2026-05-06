@@ -6,6 +6,20 @@ import { mirrorToContact } from "../services/crmMirrorService";
 import { logger } from "../platform/logger";
 import crypto from "node:crypto";
 const router = Router(); const COUNTRY_RE = /^(CA|US)$/;
+
+// BI_SERVER_BLOCK_v183_ADMIN_LENDER_ROLE_GATE_v1
+// All routes in this file are admin-only. Mount-level requireAuth
+// only verifies token validity; it does not check role. Without
+// this gate any authenticated user (lender, referrer, fresh OTP)
+// could mint API keys for other lenders. Inline gate so we don't
+// need to touch the auth.ts module exports.
+router.use((req: any, res: any, next: any) => {
+  const role = String((req.user as { role?: string } | undefined)?.role ?? "").toLowerCase();
+  if (role !== "admin") {
+    return res.status(403).json({ status: "error", error: "ADMIN_ONLY" });
+  }
+  next();
+});
 router.get("/admin/lenders", async (_req, res) => { const r = await pool.query(`SELECT id, company_name, website_url, address_line1, city, province, postal_code, country, contact_full_name, contact_email, contact_phone_e164, is_active, created_at FROM bi_lenders ORDER BY company_name`); return ok(res, { lenders: r.rows }); });
 router.post("/admin/lenders", async (req, res) => { const b = (req.body ?? {}) as Record<string, unknown>; const company_name = String(b.company_name ?? "").trim(); const contact_full_name = String(b.contact_full_name ?? "").trim(); const contact_email = String(b.contact_email ?? "").trim().toLowerCase(); const contact_phone_e164 = String(b.contact_phone_e164 ?? "").trim(); const country = String(b.country ?? "CA").toUpperCase(); if (!company_name) return badRequest(res, "company_name required"); if (!contact_full_name) return badRequest(res, "contact_full_name required"); if (!contact_email) return badRequest(res, "contact_email required"); if (!contact_phone_e164) return badRequest(res, "contact_phone_e164 required"); if (!COUNTRY_RE.test(country)) return badRequest(res, "country must be CA or US"); try { const r = await pool.query<{ id: string }>(`INSERT INTO bi_lenders (company_name, website_url, address_line1, city, province, postal_code, country, contact_full_name, contact_email, contact_phone_e164, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE) RETURNING id`, [company_name,(b.website_url as string) || null,(b.address_line1 as string) || null,(b.city as string) || null,(b.province as string) || null,(b.postal_code as string) || null,country,contact_full_name, contact_email, contact_phone_e164]); const lender_id = r.rows[0]!.id; await mirrorToContact({ source: "lender_contact", full_name: contact_full_name, email: contact_email, phone_e164: contact_phone_e164, company_name, extra_tags: [`lender:${lender_id}`] }); return ok(res, { id: lender_id }); } catch (err) { logger.error({ err }, "create lender failed"); return badRequest(res, "create failed"); } });
 router.patch("/admin/lenders/:id", async (req, res) => { const id = req.params.id; const b = (req.body ?? {}) as Record<string, unknown>; if (b.country !== undefined && !COUNTRY_RE.test(String(b.country).toUpperCase())) return badRequest(res, "country must be CA or US"); const setSql: string[] = []; const vals: unknown[] = [id]; let i = 2; const cols = ["company_name","website_url","address_line1","city","province","postal_code","country","contact_full_name","contact_email","contact_phone_e164","is_active"]; for (const c of cols) { if (b[c] !== undefined) { setSql.push(`${c} = $${i++}`); vals.push(c === "country" ? String(b[c]).toUpperCase() : b[c]); }} if (!setSql.length) return badRequest(res, "no fields to update"); await pool.query(`UPDATE bi_lenders SET ${setSql.join(", ")} WHERE id = $1`, vals); return ok(res, { updated: true }); });
