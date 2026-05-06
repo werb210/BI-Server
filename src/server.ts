@@ -50,6 +50,7 @@ import biApolloRoutes from "./routes/biApolloRoutes";
 // BI_PGI_ALIGNMENT_v56
 import biAdminLenderRoutes from "./routes/biAdminLenderRoutes";
 import biContactFormRoutes from "./routes/biContactFormRoutes";
+import biNaicsRoutes from "./routes/biNaicsRoutes";
 import biScoreRoutes from "./routes/biScoreRoutes";
 import biScrapeRoutes from "./routes/biScrapeRoutes";
 
@@ -209,6 +210,7 @@ app.use("/api/v1/bi", requireAuth, biApolloRoutes);
 // BI_PGI_ALIGNMENT_v56
 app.use("/api/v1/bi", requireAuth, biAdminLenderRoutes);
 app.use("/api/v1", biContactFormRoutes);  // public — no auth
+app.use("/api/v1/bi", biCors, biNaicsRoutes); // public NAICS lookup
 
 app.use(errorHandler);
 
