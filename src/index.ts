@@ -33,10 +33,15 @@ bootstrap().catch((err) => {
 
 const port = Number(env.PORT || "8080");
 
-const server = app.listen(port, () => {
+// eslint-disable-next-line no-console
+console.log("Starting BI-Server bootstrap...");
+
+const server = app.listen(port, "0.0.0.0", () => {
   logger.info({ port }, "BI server running");
   // eslint-disable-next-line no-console
   console.log(`[BI_BOOT_FIX_v63] BI server listening on ${port}`);
+  // eslint-disable-next-line no-console
+  console.log("BI-Server HTTP server ready");
 });
 
 // Heartbeat so Azure's log stream proves the process is alive even
