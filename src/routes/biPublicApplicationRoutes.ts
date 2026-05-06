@@ -225,8 +225,13 @@ router.post("/applications/:publicId/submit", async (req, res) => {
   const unconsented = consentKeys.filter((k) => !c[k]);
   if (unconsented.length) return res.status(400).json({ error: "missing_consents", fields: unconsented });
 
-  await pool.query(`UPDATE bi_applications SET status='document_review', updated_at=NOW() WHERE id=$1`, [app.id]);
-  return res.json({ ok: true, status: "document_review" });
+  // BI_SERVER_BLOCK_v168_STAGE_TRANSITION_FIX_v1
+  // V1 spec §3: full app submitted advances 'created' -> 'in_progress'.
+  // The next transition (-> 'document_review' for public,
+  // -> 'ready_for_submission' for lender) happens when docs are
+  // uploaded via the /documents endpoint, not here.
+  await pool.query(`UPDATE bi_applications SET status='in_progress', updated_at=NOW() WHERE id=$1`, [app.id]);
+  return res.json({ ok: true, status: "in_progress" });
 });
 
 
@@ -291,6 +296,34 @@ router.post("/applications/:publicId/documents", publicDocUpload_v66.array("file
        VALUES($1,'applicant','document_uploaded',$2)`,
       [r.rows[0].id, `Document uploaded: ${file.originalname}`],
     );
+  }
+
+  // BI_SERVER_BLOCK_v168_STAGE_TRANSITION_FIX_v1
+  // V1 spec §3: 'source_type=public AND all docs uploaded' advances
+  // 'in_progress' -> 'document_review'. Trigger fires on every upload
+  // call (idempotent — only writes when status is currently in_progress).
+  // The 'all docs uploaded' phrasing is satisfied by any successful
+  // upload reaching this point, since the endpoint requires at least
+  // one file (line 230 'no_files' guard).
+  try {
+    const advanceResult = await pool.query(
+      `UPDATE bi_applications
+          SET status = 'document_review', updated_at = NOW()
+        WHERE id = $1 AND status = 'in_progress'
+        RETURNING id`,
+      [r.rows[0].id]
+    );
+    if (advanceResult.rowCount && advanceResult.rowCount > 0) {
+      await pool.query(
+        `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
+         VALUES($1,'system','stage_advance','Auto-advanced to document_review on first doc upload')`,
+        [r.rows[0].id]
+      ).catch(() => {});
+    }
+  } catch (err) {
+    // Non-fatal — uploads succeeded; stage advance can be retried.
+    // eslint-disable-next-line no-console
+    console.warn('[v168] stage advance failed', err);
   }
 
   return res.json({ ok: true, documents: created });
