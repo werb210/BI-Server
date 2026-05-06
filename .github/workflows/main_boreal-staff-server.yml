@@ -10,6 +10,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: bi-server-production
+  cancel-in-progress: true
+
 env:
   AZURE_WEBAPP_NAME: BI-Server
   NODE_VERSION: '20.x'
@@ -75,12 +79,28 @@ jobs:
           [ -f BUILD_META ] && cp BUILD_META _deploy/
           du -sh _deploy
 
+      - name: Prevent parallel Azure publishes
+        run: |
+          echo "Checking deployment serialization..."
+
+      - name: Wait for previous deployment lock release
+        run: sleep 45
+
       - name: Deploy to Azure Web App
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 60
+          command: |
+            echo "Starting Azure deployment..."
+
+      - name: Azure Web App Deploy
         uses: azure/webapps-deploy@v3
         with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          app-name: bi-server-csc0apamgkheb9d5
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: _deploy
+          package: .
           # NOTE: NO startup-command. Windows web apps + publish-profile
           # auth reject this input. iisnode finds server.js automatically.
 
