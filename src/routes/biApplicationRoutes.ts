@@ -205,6 +205,165 @@ async function persistApplication(submission: ReturnType<typeof validatePgiSubmi
   return r.rows[0]!.id;
 }
 router.post("/applications/lender", async (req, res) => { const userId = (req as { user?: { staffUserId?: string } }).user?.staffUserId; if (!userId) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" }); const lenderRow = (await (await import("../db")).pool.query<{ id: string }>(`SELECT id FROM bi_lenders WHERE user_id = $1 AND is_active = TRUE LIMIT 1`, [userId])).rows[0]; if (!lenderRow) return res.status(403).json({ ok: false, error: "NOT_A_LENDER" }); const v = validatePgiSubmission(req.body); if (!v.ok) return res.status(400).json({ ok: false, error: "PGI_VALIDATION_FAILED", issues: v.issues }); try { const id = await persistApplication(v, "lender", lenderRow.id); await mirrorToContact({ source: "applicant", full_name: v.value.guarantor_name, email: v.value.guarantor_email, company_name: v.value.business_name, lifecycle_stage: "applicant", extra_tags: [`application:${id}`, `lender:${lenderRow.id}`] }); const result = await submitApplicationToPGI(id); return res.status(201).json({ ok: true, application_id: id, source: "lender", pgi: result }); } catch (err) { return res.status(500).json({ ok: false, error: "SUBMIT_FAILED", message: err instanceof Error ? err.message : "unknown" }); }});
-router.post("/applications/:id/submit-to-carrier", async (req, res) => { const id = req.params.id; const pool = (await import("../db")).pool; const r = await pool.query<{ source_type: string; stage: string }>(`SELECT source_type, stage FROM bi_applications WHERE id = $1 LIMIT 1`, [id]); const row = r.rows[0]; if (!row) return res.status(404).json({ ok: false, error: "NOT_FOUND" }); if (row.source_type !== "public") return res.status(400).json({ ok: false, error: "WRONG_SOURCE", message: "Lender submissions auto-forward; only public apps need staff submit." }); const docs = await pool.query<{ pending: string }>(`SELECT COUNT(*)::text AS pending FROM bi_documents WHERE application_id = $1 AND COALESCE(review_status, 'pending') != 'accepted'`, [id]); if (Number(docs.rows[0]?.pending ?? 0) > 0) return res.status(400).json({ ok: false, error: "DOCS_NOT_ALL_ACCEPTED" }); try { const result = await submitApplicationToPGI(id); return res.status(200).json({ ok: true, pgi: result }); } catch (err) { return res.status(500).json({ ok: false, error: "SUBMIT_FAILED", message: err instanceof Error ? err.message : "unknown" }); }});
+router.post("/applications/:id/submit-to-carrier", async (req, res) => {
+  // BI_SERVER_BLOCK_v160_SUBMIT_TO_CARRIER_HARDENING_v1
+  // V1 spec §7 (Send to Carrier button) + §8 (acceptance tests 2-9).
+  // Required controls in order:
+  //   (1) admin role only
+  //   (2) source_type='public' (lender submissions auto-forward)
+  //   (3) status='document_review'
+  //   (4) submission_locked=false (idempotency)
+  //   (5) all docs accepted
+  //   (6) LOCK application before PGI call
+  //   (7) write payload_snapshot to bi_submission_logs
+  //   (8) call PGI; on success update log with response, on failure
+  //       release lock + return to document_review + log error_message
+  const id = req.params.id;
+  const pool = (await import("../db")).pool;
+
+  // (1) admin role gate
+  const role = String((req.user as { role?: string } | undefined)?.role ?? "").toLowerCase();
+  if (role !== "admin") {
+    return res.status(403).json({ ok: false, error: "ADMIN_ONLY" });
+  }
+  const submittedBy = (req.user as { staffUserId?: string } | undefined)?.staffUserId ?? null;
+
+  // Load application with all the fields needed for the gates.
+  const r = await pool.query<{
+    source_type: string;
+    stage: string;
+    status: string | null;
+    submission_locked: boolean;
+  }>(
+    `SELECT source_type, stage, status, submission_locked
+       FROM bi_applications WHERE id = $1 LIMIT 1`,
+    [id]
+  );
+  const row = r.rows[0];
+  if (!row) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+
+  // (2) source_type
+  if (row.source_type !== "public") {
+    return res.status(400).json({
+      ok: false,
+      error: "WRONG_SOURCE",
+      message: "Lender submissions auto-forward; only public apps need staff submit.",
+    });
+  }
+
+  // (3) status='document_review'
+  // The V1 spec uses 'status' for the 10-stage value; some installs map it
+  // through 'stage' instead. Accept either, but require the value to be
+  // 'document_review' before this submit is valid.
+  const currentStatus = String(row.status ?? row.stage ?? "").toLowerCase();
+  if (currentStatus !== "document_review") {
+    return res.status(400).json({
+      ok: false,
+      error: "WRONG_STAGE",
+      message: `submit requires status='document_review' (current: ${currentStatus || "unknown"})`,
+    });
+  }
+
+  // (4) idempotency: submission_locked must be false
+  if (row.submission_locked === true) {
+    return res.status(409).json({ ok: false, error: "ALREADY_LOCKED" });
+  }
+
+  // (5) all docs accepted
+  const docs = await pool.query<{ pending: string }>(
+    `SELECT COUNT(*)::text AS pending
+       FROM bi_documents
+      WHERE application_id = $1
+        AND COALESCE(review_status, 'pending') != 'accepted'`,
+    [id]
+  );
+  if (Number(docs.rows[0]?.pending ?? 0) > 0) {
+    return res.status(400).json({ ok: false, error: "DOCS_NOT_ALL_ACCEPTED" });
+  }
+
+  // (6) LOCK application
+  const lockResult = await pool.query(
+    `UPDATE bi_applications
+        SET submission_locked = TRUE, updated_at = NOW()
+      WHERE id = $1 AND submission_locked = FALSE
+      RETURNING id`,
+    [id]
+  );
+  if (lockResult.rowCount === 0) {
+    // Race lost — another submitter beat us.
+    return res.status(409).json({ ok: false, error: "ALREADY_LOCKED" });
+  }
+
+  // (7) payload snapshot to bi_submission_logs (best-effort; do not fail
+  // the submit on log insert error, but capture for triage).
+  const snapshot = await pool
+    .query<{ data: unknown }>(
+      `SELECT row_to_json(a) AS data FROM bi_applications a WHERE id = $1 LIMIT 1`,
+      [id]
+    )
+    .then((rs) => rs.rows[0]?.data ?? {})
+    .catch(() => ({}));
+
+  const logResult = await pool
+    .query<{ id: string }>(
+      `INSERT INTO bi_submission_logs (application_id, payload_snapshot, submitted_by)
+       VALUES ($1, $2::jsonb, $3)
+       RETURNING id`,
+      [id, JSON.stringify(snapshot), submittedBy]
+    )
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error("[bi_submission_logs] insert failed", err);
+      return { rows: [{ id: null as unknown as string }] };
+    });
+  const logId = logResult.rows[0]?.id ?? null;
+
+  // (8) call PGI; on failure release lock and return to document_review.
+  try {
+    const result = await submitApplicationToPGI(id);
+    // Update log with response.
+    if (logId) {
+      await pool
+        .query(
+          `UPDATE bi_submission_logs
+              SET response_status = 200,
+                  response_body = $2::jsonb
+            WHERE id = $1`,
+          [logId, JSON.stringify(result)]
+        )
+        .catch(() => {});
+    }
+    return res.status(200).json({ ok: true, pgi: result });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    // Release lock and revert to document_review.
+    await pool
+      .query(
+        `UPDATE bi_applications
+            SET submission_locked = FALSE,
+                stage = 'document_review',
+                updated_at = NOW()
+          WHERE id = $1`,
+        [id]
+      )
+      .catch(() => {});
+    if (logId) {
+      await pool
+        .query(
+          `UPDATE bi_submission_logs
+              SET response_status = 500,
+                  error_message = $2
+            WHERE id = $1`,
+          [logId, errorMessage]
+        )
+        .catch(() => {});
+    }
+    return res.status(500).json({
+      ok: false,
+      error: "SUBMIT_FAILED",
+      message: errorMessage,
+    });
+  }
+});
 
 // BI_AUDIT_FIX_v58 — /applications/public moved to biPublicApplicationRoutes.ts
