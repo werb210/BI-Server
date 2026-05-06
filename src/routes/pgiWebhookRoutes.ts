@@ -20,6 +20,32 @@ router.post("/api/v1/webhooks/pgi", express.raw({ type: "application/json" }), a
   const signature = req.header("X-PGI-Signature");
   if (!verifySignature(rawBody, signature)) return res.status(401).json({ error: "invalid_signature" });
   const evt = JSON.parse(rawBody.toString("utf8"));
+
+  // BI_SERVER_BLOCK_v182_PGI_WEBHOOK_IDEMPOTENCY_v1
+  // PGI retries 5xx responses; without dedup we'd re-apply the same
+  // event multiple times. bi_webhook_log.pgi_webhook_id has a UNIQUE
+  // index from migration 20260409. Insert first; if 23505 fires, the
+  // event was already processed — return 200 without doing anything.
+  const webhookId = String(evt.id ?? evt.webhook_id ?? evt.event_id ?? "").trim();
+  if (webhookId) {
+    try {
+      await pool.query(
+        `INSERT INTO bi_webhook_log (pgi_webhook_id, event_type, payload, processed_at)
+         VALUES ($1, $2, $3::jsonb, NOW())`,
+        [webhookId, String(evt.event ?? "unknown"), JSON.stringify(evt)]
+      );
+    } catch (err: any) {
+      if (err?.code === "23505") {
+        // eslint-disable-next-line no-console
+        console.log("[v182] duplicate PGI webhook — skipping", { webhookId, event: evt.event });
+        return res.json({ ok: true, deduped: true });
+      }
+      // Any other failure: log but proceed (don't lose the event).
+      // eslint-disable-next-line no-console
+      console.warn("[v182] bi_webhook_log insert failed (non-fatal)", err);
+    }
+  }
+
   if (evt.event === "application.quoted") {
     const prev = await pool.query(`SELECT id, status FROM bi_applications WHERE pgi_application_id=$1 LIMIT 1`, [evt.application_id]);
     /* BI_SERVER_BLOCK_v62_STAGE_ALIGNMENT_v1 — quoted folds into under_review per
