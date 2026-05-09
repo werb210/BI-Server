@@ -7,9 +7,15 @@ import { generatePublicId } from "../util/publicId";
 const router = Router();
 const EBITDA_MIN = 50_000;
 
+// BI_SERVER_BLOCK_v62_LENDER_AUTH_DUAL_HEADER_v1
+// Lender Portal sends X-API-Key; LenderApiDocs documents Authorization: Bearer.
+// Accept either so both clients (and any third-party integrations using either
+// convention) work without a coordinated client-side change.
 async function authLender(req: any, res: any, next: any) {
   const auth = String(req.headers.authorization ?? "");
-  const key = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  const bearerKey = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  const headerKey = String(req.headers["x-api-key"] ?? "").trim();
+  const key = bearerKey || headerKey;
   if (!key) return res.status(401).json({ error: "missing_api_key" });
   const hash = crypto.createHash("sha256").update(key).digest("hex");
   const r = await pool.query(`SELECT lender_id FROM bi_lender_api_keys WHERE key_hash=$1 AND active=TRUE LIMIT 1`, [hash]);
