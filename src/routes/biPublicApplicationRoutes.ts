@@ -68,15 +68,19 @@ router.post("/applications/score", async (req, res) => {
   // 45-question form (which advances created -> in_progress).
   await pool.query(
     // BI_SERVER_BLOCK_v170_SCORE_PHONE_NOT_NULL_FIX_v1
+    // BI_SERVER_BLOCK_v207_CREATED_BY_ACTOR_NOT_NULL_FIX_v1
+    // bi_applications.created_by_actor is bi_actor_type NOT NULL (no default).
+    // Public CORE submissions are 'applicant' per enum: (applicant, lender,
+    // referrer, staff, system).
     `INSERT INTO bi_applications
-       (id, public_id, status, source,
+       (id, public_id, status, source, created_by_actor,
         country, naics_code, formation_date, loan_amount, pgi_limit,
         annual_revenue, ebitda, total_debt, monthly_debt_service,
         collateral_value, enterprise_value,
         applicant_phone_e164,
         data,
         created_at, updated_at)
-     VALUES ($1,$2,'created','public',
+     VALUES ($1,$2,'created','public','applicant',
              $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, $14, $15::jsonb, NOW(), NOW())`,
     [
       id, publicId,
