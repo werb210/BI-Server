@@ -45,6 +45,7 @@ import { badRequest } from "./utils/apiResponse";
 import { httpLogger } from "./utils/httpLogger";
 // BI_V1_FINAL_v47 — lender direct API + bi_notes
 import biLenderApiRoutes from "./routes/biLenderApiRoutes";
+import biApplicantOtpRoutes from "./routes/biApplicantOtpRoutes";
 import biNotesRoutes from "./routes/biNotesRoutes";
 import biApolloRoutes from "./routes/biApolloRoutes";
 // BI_PGI_ALIGNMENT_v56
@@ -172,6 +173,7 @@ app.use("/api/v1", biCors, biPublicApplicationRoutes);
 app.use("/api/v1", biCors, biScrapeRoutes);
 app.use("/api/v1", biCors, biQuoteRoutes);
 app.use("/api/v1", biCors, biLenderApiRoutes);
+app.use("/api/v1", biCors, biApplicantOtpRoutes);
 app.use("/api/v1", biCors, biReferrerRoutes);
 app.use("/api/v1", biCors, requireAuth, biScoreRoutes);
 

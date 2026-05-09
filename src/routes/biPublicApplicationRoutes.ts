@@ -1,6 +1,8 @@
 import { Router } from "express";
 import crypto from "node:crypto";
+import jwt from "jsonwebtoken";
 import { pool } from "../db";
+import { env } from "../platform/env";
 import { pgiScore } from "../services/pgiAdapter";
 import { generatePublicId } from "../util/publicId";
 // BI_SERVER_BLOCK_v66_PUBLIC_DOCS_AND_MIGRATION_SAFE_v1
@@ -57,6 +59,20 @@ router.post("/applications/score", async (req, res) => {
   if (Number(b.loan_amount) > LOAN_MAX) return res.status(400).json({ error: "loan_amount_exceeds_max", max: LOAN_MAX });
   if (Number(b.pgi_limit) > Number(b.loan_amount)) return res.status(400).json({ error: "pgi_limit_exceeds_loan" });
   if (Number(b.pgi_limit) > Number(b.loan_amount) * 0.80) return res.status(400).json({ error: "pgi_limit_exceeds_80pct" });
+    // BI_SERVER_BLOCK_v207_HOTFIX_AND_APPLICANT_OTP_v1 — Optional applicant JWT.
+  let verifiedPhone: string | null = null;
+  try {
+    const auth = String(req.headers.authorization ?? "");
+    if (auth.startsWith("Bearer ")) {
+      const claims: any = jwt.verify(auth.slice(7).trim(), env.JWT_SECRET || "dev-missing-jwt-secret");
+      if (claims && claims.kind === "applicant" && claims.phone) verifiedPhone = String(claims.phone);
+    }
+  } catch { /* ignore */ }
+  const applicantPhone: string | null = verifiedPhone
+    ?? (typeof b.applicant_phone_e164 === "string" && b.applicant_phone_e164.trim()
+      ? b.applicant_phone_e164.trim()
+      : null);
+
   if (Number(b.ebitda) < EBITDA_MIN) return res.status(400).json({ error: "ebitda_below_min", min: EBITDA_MIN });
 
   const id = crypto.randomUUID();
@@ -88,9 +104,7 @@ router.post("/applications/score", async (req, res) => {
       b.annual_revenue, b.ebitda, b.total_debt, b.monthly_debt_service,
       b.collateral_value, b.enterprise_value,
       // BI_SERVER_BLOCK_v170_SCORE_PHONE_NOT_NULL_FIX_v1
-      typeof b.applicant_phone_e164 === "string" && b.applicant_phone_e164.trim()
-        ? b.applicant_phone_e164.trim()
-        : null,
+      applicantPhone,
       // BI_SERVER_BLOCK_v164_SCORE_STAGE_FIX_v1 — persist core_inputs for
       // Stage 2 pre-fill of the locked CORE fields.
       JSON.stringify({
