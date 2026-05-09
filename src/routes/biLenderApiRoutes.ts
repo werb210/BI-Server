@@ -189,7 +189,8 @@ router.get("/lender/applications/mine", authLender, async (req: any, res) => {
   const r = await pool.query(
     `SELECT id, public_id, status, business_name, guarantor_name, loan_amount, pgi_limit, annual_premium, created_at, updated_at
        FROM bi_applications
-       WHERE lender_id = $1
+       -- BI_SERVER_BLOCK_v206_LENDER_PIPELINE_COLUMN_FIX_v1 - column is created_by_lender_id per FK constraint.
+       WHERE created_by_lender_id = $1
        ORDER BY created_at DESC
        LIMIT 500`,
     [req.lenderId],
