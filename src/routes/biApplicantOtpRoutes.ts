@@ -4,20 +4,26 @@ import jwt from "jsonwebtoken";
 import { pool } from "../db";
 import { env } from "../platform/env";
 import { sendOtp, verifyOtp } from "../services/otpService";
+// BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
+import { normalizeE164 } from "../util/phoneE164";
 
 const router = Router();
 
 router.post("/applicants/otp/start", async (req, res) => {
-  const phone = String(req.body?.phone ?? "").trim();
-  if (!phone) return res.status(400).json({ error: "phone_required" });
+  // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1 — normalize before Twilio call to prevent error 60200.
+  const phone = normalizeE164(req.body?.phone);
+  if (!phone) return res.status(400).json({ error: "invalid_phone" });
   await sendOtp(phone);
   res.json({ ok: true });
 });
 
 router.post("/applicants/otp/verify", async (req, res) => {
-  const phone = String(req.body?.phone ?? "").trim();
+  // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1 — phone must be normalized identically to /start so
+  // the Twilio Verify session lookup matches.
+  const phone = normalizeE164(req.body?.phone);
   const code = String(req.body?.code ?? "").trim();
-  if (!phone || !code) return res.status(400).json({ error: "missing_fields" });
+  if (!phone) return res.status(400).json({ error: "invalid_phone" });
+  if (!code) return res.status(400).json({ error: "missing_code" });
   const ok = await verifyOtp(phone, code);
   if (!ok) return res.status(401).json({ error: "invalid_otp" });
 

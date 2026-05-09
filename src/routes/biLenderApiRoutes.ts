@@ -5,6 +5,8 @@ import { pool } from "../db";
 import { env } from "../platform/env";
 import { pgiScore } from "../services/pgiAdapter";
 import { sendOtp, verifyOtp } from "../services/otpService";
+// BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
+import { normalizeE164 } from "../util/phoneE164";
 import { generatePublicId } from "../util/publicId";
 
 const router = Router();
@@ -134,8 +136,9 @@ router.get("/lender/applications", authLender, async (req: any, res) => {
 // Auth (lender JWT): /lender/me, /lender/applications/mine
 
 router.post("/lender/otp/start", async (req, res) => {
-  const phone = String(req.body?.phone ?? "").trim();
-  if (!phone) return res.status(400).json({ error: "phone_required" });
+  // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
+  const phone = normalizeE164(req.body?.phone);
+  if (!phone) return res.status(400).json({ error: "invalid_phone" });
 
   // Phone must be registered to an existing lender. We do NOT auto-create
   // (unlike referrers) because lenders are gated B2B partners.
@@ -153,9 +156,11 @@ router.post("/lender/otp/start", async (req, res) => {
 });
 
 router.post("/lender/otp/verify", async (req, res) => {
-  const phone = String(req.body?.phone ?? "").trim();
+  // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
+  const phone = normalizeE164(req.body?.phone);
   const code = String(req.body?.code ?? "").trim();
-  if (!phone || !code) return res.status(400).json({ error: "missing_fields" });
+  if (!phone) return res.status(400).json({ error: "invalid_phone" });
+  if (!code) return res.status(400).json({ error: "missing_code" });
 
   const r = await pool.query(
     `SELECT id, company_name, rep_full_name, rep_email FROM bi_lenders WHERE contact_phone_e164 = $1 LIMIT 1`,
