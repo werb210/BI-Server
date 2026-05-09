@@ -46,9 +46,6 @@ jobs:
       - name: Verify build artifacts
         run: |
           test -f dist/index.js || { echo "::error::dist/index.js missing"; exit 1; }
-          test -f dist/server.js || { echo "::error::dist/server.js missing"; exit 1; }
-          test -f server.js     || { echo "::error::server.js (iisnode shim) missing at root"; exit 1; }
-          test -f web.config    || { echo "::error::web.config missing at root"; exit 1; }
           echo "dist/ contents:" && ls -la dist | head -30
 
       - name: Copy SQL migrations into dist
@@ -67,17 +64,19 @@ jobs:
           echo "commit_sha=$COMMIT_SHA" >> BUILD_META
           cat BUILD_META
 
-      - name: Strip dev dependencies for runtime
-        run: npm prune --omit=dev
-
-      - name: Stage deploy package (slim)
+      # BI_SERVER_BLOCK_v65_DEPLOY_SPEED_AND_CLEANUP_v1 — drop dev deps + node_modules from upload.
+      # Oryx builds on the App Service side using cached layers (10x faster
+      # than uploading 300+ MB of node_modules over publish-profile).
+      - name: Stage deploy package (source only)
         run: |
           mkdir -p _deploy
-          cp -R dist          _deploy/dist
-          cp -R node_modules  _deploy/node_modules
-          cp package.json package-lock.json _deploy/
-          cp server.js   _deploy/   # iisnode entrypoint shim
-          cp web.config  _deploy/   # iisnode rewrite rules
+          cp -R dist                _deploy/dist
+          cp package.json           _deploy/
+          cp package-lock.json      _deploy/
+          cp startup.sh             _deploy/
+          cp .deployment            _deploy/
+          du -sh _deploy
+          echo "deploy package size above — should be < 5 MB"
           [ -f BUILD_META ] && cp BUILD_META _deploy/
           du -sh _deploy
 
@@ -94,8 +93,7 @@ jobs:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: .
-          # NOTE: NO startup-command. Windows web apps + publish-profile
-          # auth reject this input. iisnode finds server.js automatically.
+          # Startup is provided by startup.sh included in the package.
 
       - name: Post-deploy /health probe
         # BI_SERVER_BLOCK_v189_PROBE_FQDN_AND_NON_FATAL_v1
