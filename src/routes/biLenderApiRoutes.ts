@@ -1,7 +1,10 @@
 import { Router } from "express";
 import crypto from "node:crypto";
+import jwt from "jsonwebtoken";
 import { pool } from "../db";
+import { env } from "../platform/env";
 import { pgiScore } from "../services/pgiAdapter";
+import { sendOtp, verifyOtp } from "../services/otpService";
 import { generatePublicId } from "../util/publicId";
 
 const router = Router();
@@ -11,17 +14,39 @@ const EBITDA_MIN = 50_000;
 // Lender Portal sends X-API-Key; LenderApiDocs documents Authorization: Bearer.
 // Accept either so both clients (and any third-party integrations using either
 // convention) work without a coordinated client-side change.
+// BI_SERVER_BLOCK_v205_LENDER_OTP_AND_PIPELINE_v1
+// authLender accepts THREE credential forms:
+//   1) Lender JWT (Authorization: Bearer <jwt>) issued by /lender/otp/verify
+//   2) API key in Authorization: Bearer <bk_xxx...>
+//   3) API key in X-API-Key header
+// Order: try JWT first (cheap, in-memory verify); if it parses with kind=lender,
+// trust it. Otherwise treat the value as an API key and look it up by sha256.
 async function authLender(req: any, res: any, next: any) {
   const auth = String(req.headers.authorization ?? "");
-  const bearerKey = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  const bearerToken = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
   const headerKey = String(req.headers["x-api-key"] ?? "").trim();
-  const key = bearerKey || headerKey;
-  if (!key) return res.status(401).json({ error: "missing_api_key" });
-  const hash = crypto.createHash("sha256").update(key).digest("hex");
-  const r = await pool.query(`SELECT lender_id FROM bi_lender_api_keys WHERE key_hash=$1 AND active=TRUE LIMIT 1`, [hash]);
+  const candidate = bearerToken || headerKey;
+  if (!candidate) return res.status(401).json({ error: "missing_api_key" });
+
+  // Try lender JWT first — JWTs have exactly two dots; API keys do not.
+  if (bearerToken && bearerToken.split(".").length === 3) {
+    try {
+      const claims: any = jwt.verify(bearerToken, env.JWT_SECRET || "dev-missing-jwt-secret");
+      if (claims && claims.kind === "lender" && claims.id) {
+        req.lenderId = claims.id;
+        return next();
+      }
+    } catch {
+      // fall through to API key check
+    }
+  }
+
+  // Fall back to API key (sha256 lookup).
+  const hash = crypto.createHash("sha256").update(candidate).digest("hex");
+  const r = await pool.query(`SELECT lender_id FROM bi_lender_api_keys WHERE key_hash=$1 AND is_active=TRUE LIMIT 1`, [hash]);
   const row = r.rows[0];
   if (!row) return res.status(401).json({ error: "invalid_api_key" });
-  await pool.query(`UPDATE bi_lender_api_keys SET last_used_at=NOW() WHERE key_hash=$1`, [hash]);
+  await pool.query(`UPDATE bi_lender_api_keys SET last_used_at=NOW() WHERE key_hash=$1`, [hash]).catch(() => {});
   req.lenderId = row.lender_id;
   next();
 }
@@ -90,6 +115,86 @@ router.post("/lender/applications", authLender, async (req: any, res) => {
 router.get("/lender/applications", authLender, async (req: any, res) => {
   const r = await pool.query(`SELECT id, status, business_name, loan_amount, pgi_limit, annual_premium, quote_id, underwriter_ref, created_at, updated_at FROM bi_applications WHERE lender_id=$1 ORDER BY updated_at DESC LIMIT 200`, [req.lenderId]);
   return res.json({ applications: r.rows });
+});
+
+
+// BI_SERVER_BLOCK_v205_LENDER_OTP_AND_PIPELINE_v1 — Lender OTP + pipeline routes.
+// Lenders are provisioned by staff (bi_lenders row + contact_phone_e164 set).
+// Login is OTP-SMS to that registered phone. After verify we issue a JWT
+// with kind=lender + id=<lender_id>, scope every endpoint to req.lenderId.
+//
+// Public (no auth): /lender/otp/start, /lender/otp/verify
+// Auth (lender JWT): /lender/me, /lender/applications/mine
+
+router.post("/lender/otp/start", async (req, res) => {
+  const phone = String(req.body?.phone ?? "").trim();
+  if (!phone) return res.status(400).json({ error: "phone_required" });
+
+  // Phone must be registered to an existing lender. We do NOT auto-create
+  // (unlike referrers) because lenders are gated B2B partners.
+  const r = await pool.query(
+    `SELECT id FROM bi_lenders WHERE contact_phone_e164 = $1 LIMIT 1`,
+    [phone],
+  );
+  if (!r.rows[0]) {
+    // Don't leak phone enumeration. Pretend we sent.
+    return res.json({ ok: true });
+  }
+
+  await sendOtp(phone);
+  res.json({ ok: true });
+});
+
+router.post("/lender/otp/verify", async (req, res) => {
+  const phone = String(req.body?.phone ?? "").trim();
+  const code = String(req.body?.code ?? "").trim();
+  if (!phone || !code) return res.status(400).json({ error: "missing_fields" });
+
+  const r = await pool.query(
+    `SELECT id, company_name, rep_full_name, rep_email FROM bi_lenders WHERE contact_phone_e164 = $1 LIMIT 1`,
+    [phone],
+  );
+  if (!r.rows[0]) return res.status(401).json({ error: "phone_not_registered" });
+
+  const ok = await verifyOtp(phone, code);
+  if (!ok) return res.status(401).json({ error: "invalid_otp" });
+
+  const lender = r.rows[0];
+  const token = jwt.sign(
+    { kind: "lender", id: lender.id },
+    env.JWT_SECRET || "dev-missing-jwt-secret",
+    { expiresIn: "7d" },
+  );
+  res.json({
+    token,
+    lender: {
+      id: lender.id,
+      company_name: lender.company_name,
+      rep_full_name: lender.rep_full_name,
+      rep_email: lender.rep_email,
+    },
+  });
+});
+
+router.get("/lender/me", authLender, async (req: any, res) => {
+  const r = await pool.query(
+    `SELECT id, company_name, rep_full_name, rep_email, contact_phone_e164 FROM bi_lenders WHERE id = $1`,
+    [req.lenderId],
+  );
+  if (!r.rows[0]) return res.status(404).json({ error: "lender_not_found" });
+  res.json({ lender: r.rows[0] });
+});
+
+router.get("/lender/applications/mine", authLender, async (req: any, res) => {
+  const r = await pool.query(
+    `SELECT id, public_id, status, business_name, guarantor_name, loan_amount, pgi_limit, annual_premium, created_at, updated_at
+       FROM bi_applications
+       WHERE lender_id = $1
+       ORDER BY created_at DESC
+       LIMIT 500`,
+    [req.lenderId],
+  );
+  res.json({ applications: r.rows });
 });
 
 export default router;
