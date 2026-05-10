@@ -29,16 +29,17 @@ router.post("/applicants/otp/verify", async (req, res) => {
 
   let contactId: string | null = null;
   try {
-    const sel = await pool.query(`SELECT id FROM bi_contacts WHERE phone = $1 LIMIT 1`, [phone]);
+    // BI_SERVER_BLOCK_v209_BI_CONTACTS_SCHEMA_FIX_v1: real columns are
+    // phone_e164 + full_name(NOT NULL); no updated_at column exists.
+    const sel = await pool.query(`SELECT id FROM bi_contacts WHERE phone_e164 = $1 LIMIT 1`, [phone]);
     if (sel.rows[0]) {
       contactId = sel.rows[0].id;
-      await pool.query(`UPDATE bi_contacts SET updated_at = NOW() WHERE id = $1`, [contactId]);
     } else {
       const ins = await pool.query(
-        `INSERT INTO bi_contacts (id, phone, tags, created_at, updated_at)
-         VALUES (gen_random_uuid(), $1, ARRAY['applicant_otp']::text[], NOW(), NOW())
+        `INSERT INTO bi_contacts (id, full_name, phone_e164, tags, created_at)
+         VALUES (gen_random_uuid(), $1, $2, ARRAY['applicant_otp']::text[], NOW())
          RETURNING id`,
-        [phone],
+        [`Applicant ${phone}`, phone],
       );
       contactId = ins.rows[0]?.id ?? null;
     }
