@@ -6,10 +6,8 @@ name: Build and deploy Node.js app to Azure Web App - BI-Server
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
-
 concurrency:
   group: bi-server-production
   cancel-in-progress: true
