@@ -58,6 +58,7 @@ import biScrapeRoutes from "./routes/biScrapeRoutes";
 import { apiTimeoutGuard } from "./middleware/apiTimeoutGuard";
 import { apiErrorBoundary } from "./middleware/apiErrorBoundary";
 import biLenderApplicationCreate from "./routes/biLenderApplicationCreate.js";
+import biLenderApplicationDetail from "./routes/biLenderApplicationDetail.js";
 
 const app = express();
 // BI_BOOT_FIX_v60 — Azure App Service is behind a reverse proxy. Without
@@ -352,4 +353,5 @@ export default app;
 
 // BI_SERVER_BLOCK_v212_SUBMIT_GUARDS_v1
 app.use(biLenderApplicationCreate);
+app.use(biLenderApplicationDetail);
 app.use(apiErrorBoundary);
