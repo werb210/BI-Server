@@ -1,3 +1,4 @@
+import "express-async-errors";
 import compression from "compression";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
@@ -54,12 +55,15 @@ import biContactFormRoutes from "./routes/biContactFormRoutes";
 import biNaicsRoutes from "./routes/biNaicsRoutes";
 import biScoreRoutes from "./routes/biScoreRoutes";
 import biScrapeRoutes from "./routes/biScrapeRoutes";
+import { apiTimeoutGuard } from "./middleware/apiTimeoutGuard";
+import { apiErrorBoundary } from "./middleware/apiErrorBoundary";
 
 const app = express();
 // BI_BOOT_FIX_v60 — Azure App Service is behind a reverse proxy. Without
 // this, req.ip resolves to the proxy and rate limiting / IP throttling
 // collapse all clients into one bucket.
 app.set("trust proxy", 1);
+app.use(apiTimeoutGuard);
 
 app.use(requestId);
 app.use(idempotency);
@@ -344,3 +348,6 @@ async function bootstrapInner() {
 }
 
 export default app;
+
+// BI_SERVER_BLOCK_v212_SUBMIT_GUARDS_v1
+app.use(apiErrorBoundary);
