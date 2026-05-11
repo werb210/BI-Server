@@ -59,6 +59,7 @@ import { apiTimeoutGuard } from "./middleware/apiTimeoutGuard";
 import { apiErrorBoundary } from "./middleware/apiErrorBoundary";
 import biLenderApplicationCreate from "./routes/biLenderApplicationCreate.js";
 import biLenderApplicationDetail from "./routes/biLenderApplicationDetail.js";
+import biLenderAuthRoutes from "./routes/biLenderAuthRoutes.js"; // BI_SERVER_BLOCK_v221_LENDER_OTP_AND_ME_v1
 
 const app = express();
 // BI_BOOT_FIX_v60 — Azure App Service is behind a reverse proxy. Without
@@ -354,4 +355,5 @@ export default app;
 // BI_SERVER_BLOCK_v212_SUBMIT_GUARDS_v1
 app.use(biLenderApplicationCreate);
 app.use(biLenderApplicationDetail);
+app.use(biLenderAuthRoutes); // BI_SERVER_BLOCK_v221_LENDER_OTP_AND_ME_v1
 app.use(apiErrorBoundary);
