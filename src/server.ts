@@ -105,6 +105,7 @@ const PRODUCTION_FALLBACK_ORIGINS = [
   "https://boreal.financial",
   "https://www.boreal.financial",
   "https://delightful-sand-05a55580f.7.azurestaticapps.net",
+  "https://witty-moss-0886d220f.7.azurestaticapps.net", // BI_SERVER_BLOCK_v222_CORS_AZURESTATICAPPS_AND_HEALTH_v1 — current BI-Website SWA host
 ];
 const DEV_FALLBACK_ORIGINS = [
   "http://localhost:5173",
@@ -129,8 +130,18 @@ if (configuredOrigins.length === 0) {
   );
 }
 
+// BI_SERVER_BLOCK_v222_CORS_AZURESTATICAPPS_AND_HEALTH_v1 — origin matcher accepts the configured list OR
+// any *.azurestaticapps.net host (so SWA preview/build URL rotations don't
+// silently brick CORS). Server-to-server requests (no Origin header) pass through.
+const AZ_SWA_HOST_RE = /^https:\/\/[a-z0-9-]+\.[0-9]+\.azurestaticapps\.net$/i;
+const corsOriginSet = new Set(corsOrigins);
 const biCors = cors({
-  origin: corsOrigins,
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // non-browser / same-origin
+    if (corsOriginSet.has(origin)) return cb(null, true);
+    if (AZ_SWA_HOST_RE.test(origin)) return cb(null, true);
+    return cb(new Error(`origin not allowed: ${origin}`));
+  },
   credentials: true,
 });
 
@@ -145,7 +156,8 @@ app.use(limiter);
 app.use(helmet());
 app.use(compression());
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
-app.use("/health", healthRoutes);
+app.use("/health", biCors, healthRoutes); // BI_SERVER_BLOCK_v222_CORS_AZURESTATICAPPS_AND_HEALTH_v1
+
 app.use(metricsRoutes);
 if (env.NODE_ENV !== "production") app.use(morgan("dev"));
 
