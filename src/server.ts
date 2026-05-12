@@ -47,6 +47,10 @@ import { httpLogger } from "./utils/httpLogger";
 // BI_V1_FINAL_v47 — lender direct API + bi_notes
 import biLenderApiRoutes from "./routes/biLenderApiRoutes";
 import biApplicantOtpRoutes from "./routes/biApplicantOtpRoutes";
+// BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
+import biApplicantDocFlowRoutes from "./routes/biApplicantDocFlowRoutes";
+import { startDocReminderJob } from "./services/docReminderService";
+
 import biNotesRoutes from "./routes/biNotesRoutes";
 import biApolloRoutes from "./routes/biApolloRoutes";
 // BI_PGI_ALIGNMENT_v56
@@ -358,6 +362,7 @@ async function bootstrapInner() {
     startPremiumAccrualJob();
     startPurgeJob();
     startApolloSyncJob();
+    startDocReminderJob(); // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
     logger.info("BI bootstrap migrations + jobs started");
   } catch (error) {
     logger.error(
@@ -371,5 +376,6 @@ export default app;
 
 // BI_SERVER_BLOCK_v212_SUBMIT_GUARDS_v1
 app.use(biLenderApplicationDetail);
+app.use(biApplicantDocFlowRoutes); // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
 app.use(biLenderAuthRoutes); // BI_SERVER_BLOCK_v221_LENDER_OTP_AND_ME_v1
 app.use(apiErrorBoundary);
