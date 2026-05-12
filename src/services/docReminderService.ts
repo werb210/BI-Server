@@ -34,6 +34,10 @@ export async function runDocReminderTick(now: Date = new Date()): Promise<{ chec
       WHERE a.status IN ('in_progress', 'document_review')
         AND a.created_at >= NOW() - INTERVAL '14 days'
         AND (a.last_doc_reminder_at IS NULL OR a.last_doc_reminder_at < NOW() - INTERVAL '20 hours')
+        AND NOT EXISTS (
+          SELECT 1 FROM bi_sms_opt_outs o
+           WHERE o.phone_e164 = COALESCE(a.applicant_phone_e164, a.guarantor_phone)
+        )
       ORDER BY a.created_at DESC
       LIMIT 100`,
     [REQUIRED_DOC_TYPES],

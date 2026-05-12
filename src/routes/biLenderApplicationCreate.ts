@@ -7,6 +7,7 @@
 //     so the carrier knows which downstream lender originated each deal.
 import express, { type Request, type Response } from "express";
 import jwt from "jsonwebtoken";
+import { notifyStaff } from "../services/staffNotifyService";
 import { pool } from "../db";
 import { pgiSubmit } from "../services/pgiAdapter";
 import { logger } from "../platform/logger";
@@ -102,6 +103,7 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response) =
       [appId, `Carrier submission failed: ${pgi_error}`, JSON.stringify({ request: carrierRequestBody, error: pgi_error })],
     ).catch(() => {});
   }
+  void notifyStaff("new_application", `New BI lender app: ${(b as any).business_name || (b as any).company_name || "Untitled"}`).catch(() => {});
   return res.status(201).json({ ok: true, id: appId, application_code: code, pgi_application_id, pgi_status, pgi_error });
 });
 export default router;

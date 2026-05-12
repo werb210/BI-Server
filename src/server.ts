@@ -49,6 +49,9 @@ import biLenderApiRoutes from "./routes/biLenderApiRoutes";
 import biApplicantOtpRoutes from "./routes/biApplicantOtpRoutes";
 // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
 import biApplicantDocFlowRoutes from "./routes/biApplicantDocFlowRoutes";
+import biSmsInboundRoutes from "./routes/biSmsInboundRoutes";
+import biCarrierHealthRoutes from "./routes/biCarrierHealthRoutes";
+import { startCarrierHealthJob, getCarrierHealth } from "./services/carrierHealthService";
 import { startDocReminderJob } from "./services/docReminderService";
 
 import biNotesRoutes from "./routes/biNotesRoutes";
@@ -377,5 +380,7 @@ export default app;
 // BI_SERVER_BLOCK_v212_SUBMIT_GUARDS_v1
 app.use(biLenderApplicationDetail);
 app.use(biApplicantDocFlowRoutes); // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
+app.use(biSmsInboundRoutes);    // BI_SERVER_BLOCK_v234_OPS_HARDENING_v1
+app.use(biCarrierHealthRoutes); // BI_SERVER_BLOCK_v234_OPS_HARDENING_v1
 app.use(biLenderAuthRoutes); // BI_SERVER_BLOCK_v221_LENDER_OTP_AND_ME_v1
 app.use(apiErrorBoundary);
