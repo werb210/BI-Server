@@ -1,6 +1,7 @@
 // BI_SERVER_BLOCK_v213_LENDER_APPLICATIONS_POST_v1
 // BI_SERVER_BLOCK_v223_LENDER_CARRIER_FORWARDING_v1
 // BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1
+// BI_SERVER_BLOCK_v226_DEMO_SANDBOX_v1
 // BI_SERVER_BLOCK_v224_LENDER_NAME_ATTRIBUTION_v1
 //   - Lender name pulled from bi_lenders.company_name and forwarded to PGI
 //     so the carrier knows which downstream lender originated each deal.
@@ -26,15 +27,18 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response) =
   // we can a) attribute the row in bi_applications.lender_name and
   // b) tell PGI which downstream lender originated the deal.
   let lenderCompanyName: string | null = null;
+  let lenderIsDemo = false;
   try {
-    const lr = await pool.query(`SELECT company_name FROM bi_lenders WHERE id = $1 LIMIT 1`, [lenderId]);
+    const lr = await pool.query(`SELECT company_name, is_demo FROM bi_lenders WHERE id = $1 LIMIT 1`, [lenderId]);
     lenderCompanyName = (lr.rows[0]?.company_name as string | undefined) || null;
+    lenderIsDemo = lr.rows[0]?.is_demo === true;
   } catch {
     // Non-fatal: row still saved without lender_name; staff can fix in BI silo.
   }
-  const result = await pool.query(`INSERT INTO bi_applications (entity_type, status, source, lender_id, created_by_lender_id, application_code, phone, company_name, guarantor_name, guarantor_phone, guarantor_email, lender_name, core_inputs, consents, lender_notes, created_by_actor, created_at, updated_at) VALUES ('applicant', 'new_application', 'lender', $1, $1, $2, $3, $4, $5, $6, $7, $11, $8::jsonb, $9::jsonb, $10, 'lender', NOW(), NOW()) RETURNING id, application_code`, [lenderId, applicationCode, b.guarantor?.phone, b.company_name, b.guarantor?.name, b.guarantor?.phone, b.guarantor?.email || null, JSON.stringify(coreInputs), JSON.stringify({ data_use: true, credit_pull: true, info_accurate: true, source: "lender_attestation" }), b.lender_notes || null, lenderCompanyName]);
+  const result = await pool.query(`INSERT INTO bi_applications (entity_type, status, source, lender_id, created_by_lender_id, application_code, phone, company_name, guarantor_name, guarantor_phone, guarantor_email, lender_name, is_demo, core_inputs, consents, lender_notes, created_by_actor, created_at, updated_at) VALUES ('applicant', 'new_application', 'lender', $1, $1, $2, $3, $4, $5, $6, $7, $11, $12, $8::jsonb, $9::jsonb, $10, 'lender', NOW(), NOW()) RETURNING id, application_code`, [lenderId, applicationCode, b.guarantor?.phone, b.company_name, b.guarantor?.name, b.guarantor?.phone, b.guarantor?.email || null, JSON.stringify(coreInputs), JSON.stringify({ data_use: true, credit_pull: true, info_accurate: true, source: "lender_attestation" }), b.lender_notes || null, lenderCompanyName, lenderIsDemo]);
   const row = result.rows[0]; const appId: string = row.id; const code: string = row.application_code;
-  // BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1 — every outbound carrier call is captured.
+  // BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1
+// BI_SERVER_BLOCK_v226_DEMO_SANDBOX_v1 — every outbound carrier call is captured.
   let pgi_application_id: string | null = null;
   let pgi_status: string | null = null;
   let pgi_error: string | null = null;
@@ -46,7 +50,19 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response) =
     form_data: { country, naics_code, formation_date, loan_amount, pgi_limit, annual_revenue, ebitda, total_debt, monthly_debt_service, collateral_value, enterprise_value, bankruptcy_history, insolvency_history, judgment_history },
   };
   try {
-    const submit = await pgiSubmit(carrierRequestBody);
+    let submit;
+    if (lenderIsDemo) {
+      // BI_SERVER_BLOCK_v226_DEMO_SANDBOX_v1 — demo apps never hit the real carrier even
+      // when USE_PGI_STUB=false. Synthesize a stub response so the visible
+      // pipeline behaviour matches a real submission.
+      submit = {
+        application_id: `STUB_APP_DEMO_${Date.now()}`,
+        status: "received",
+        message: "Demo submission — carrier call skipped.",
+      } as any;
+    } else {
+      submit = await pgiSubmit(carrierRequestBody);
+    }
     pgi_application_id = submit.application_id;
     pgi_status = submit.status || "received";
     await pool.query(

@@ -155,6 +155,27 @@ router.post("/lender/otp/start", async (req, res) => {
   res.json({ ok: true });
 });
 
+// BI_SERVER_BLOCK_v226_DEMO_SANDBOX_v1 — Mint a short-lived JWT for the sandboxed demo
+// lender. No auth required: the demo lender has no production data
+// and demo apps are isolated server-side (is_demo=true forces stub
+// adapter + their pipeline only contains other demo rows).
+router.post("/lender/demo-session", async (_req, res) => {
+  const r = await pool.query(
+    `SELECT id, company_name FROM bi_lenders WHERE is_demo = TRUE AND is_active = TRUE ORDER BY created_at ASC LIMIT 1`
+  );
+  const demo = r.rows[0];
+  if (!demo) return res.status(503).json({ error: "demo_lender_missing", message: "Demo lender not provisioned. Apply v226 migration." });
+  const secret = process.env.JWT_SECRET;
+  if (!secret) return res.status(500).json({ error: "server_misconfig", message: "JWT_SECRET not set" });
+  const jwt = await import("jsonwebtoken");
+  const token = jwt.default.sign(
+    { kind: "lender", id: demo.id, is_demo: true },
+    secret,
+    { expiresIn: "4h" },
+  );
+  return res.json({ token, lender: { id: demo.id, company_name: demo.company_name, is_demo: true } });
+});
+
 router.post("/lender/otp/verify", async (req, res) => {
   // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
   const phone = normalizeE164(req.body?.phone);
@@ -204,6 +225,7 @@ router.get("/lender/applications/mine", authLender, async (req: any, res) => {
               loan_amount, pgi_limit, annual_premium,
               pgi_application_id, score_decision,
               carrier_received_at, carrier_last_event, carrier_last_event_at,
+              is_demo,
               core_inputs, created_at, updated_at
        FROM bi_applications
        -- BI_SERVER_BLOCK_v206_LENDER_PIPELINE_COLUMN_FIX_v1 - column is created_by_lender_id per FK constraint.
