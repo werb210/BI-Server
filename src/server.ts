@@ -191,6 +191,11 @@ app.use("/api/v1", biCors, biAuthRoutes);
 app.use("/api/v1", biCors, biPublicApplicationRoutes);
 app.use("/api/v1", biCors, biScrapeRoutes);
 app.use("/api/v1", biCors, biQuoteRoutes);
+// BI_SERVER_BLOCK_v223_LENDER_CARRIER_FORWARDING_v1 — biLenderApplicationCreate handles POST /api/v1/lender/applications
+// with the nested body the OTP-authenticated lender form sends. It MUST be
+// mounted before biLenderApiRoutes (whose POST /lender/applications expects a
+// flat body and runs pgiScore), otherwise Express resolves to the wrong handler.
+app.use(biLenderApplicationCreate);
 app.use("/api/v1", biCors, biLenderApiRoutes);
 app.use("/api/v1", biCors, biApplicantOtpRoutes);
 app.use("/api/v1", biCors, biReferrerRoutes);
@@ -365,7 +370,6 @@ async function bootstrapInner() {
 export default app;
 
 // BI_SERVER_BLOCK_v212_SUBMIT_GUARDS_v1
-app.use(biLenderApplicationCreate);
 app.use(biLenderApplicationDetail);
 app.use(biLenderAuthRoutes); // BI_SERVER_BLOCK_v221_LENDER_OTP_AND_ME_v1
 app.use(apiErrorBoundary);

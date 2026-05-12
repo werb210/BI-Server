@@ -199,9 +199,14 @@ router.get("/lender/me", authLender, async (req: any, res) => {
 
 router.get("/lender/applications/mine", authLender, async (req: any, res) => {
   const r = await pool.query(
-    `SELECT id, public_id, status, business_name, guarantor_name, loan_amount, pgi_limit, annual_premium, created_at, updated_at
+    `SELECT id, public_id, application_code, status,
+              business_name, company_name, guarantor_name,
+              loan_amount, pgi_limit, annual_premium,
+              pgi_application_id, score_decision,
+              core_inputs, created_at, updated_at
        FROM bi_applications
        -- BI_SERVER_BLOCK_v206_LENDER_PIPELINE_COLUMN_FIX_v1 - column is created_by_lender_id per FK constraint.
+       -- BI_SERVER_BLOCK_v223_LENDER_CARRIER_FORWARDING_v1 - surface application_code + pgi_application_id + company_name.
        WHERE created_by_lender_id = $1
        ORDER BY created_at DESC
        LIMIT 500`,
