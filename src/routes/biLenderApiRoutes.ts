@@ -1,6 +1,7 @@
 import { Router } from "express";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
+import { notifyStaff } from "../services/staffNotifyService"; // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1
 import { pool } from "../db";
 import { env } from "../platform/env";
 import { pgiScore } from "../services/pgiAdapter";
@@ -212,11 +213,58 @@ router.post("/lender/otp/verify", async (req, res) => {
 
 router.get("/lender/me", authLender, async (req: any, res) => {
   const r = await pool.query(
-    `SELECT id, company_name, rep_full_name, rep_email, contact_phone_e164 FROM bi_lenders WHERE id = $1`,
+    `SELECT id, company_name, rep_full_name, rep_email, contact_phone_e164, live_keys_enabled, is_demo FROM bi_lenders WHERE id = $1` /* BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 */,
     [req.lenderId],
   );
   if (!r.rows[0]) return res.status(404).json({ error: "lender_not_found" });
   res.json({ lender: r.rows[0] });
+});
+
+router.post("/lender/api-keys", authLender, async (req: any, res) => {
+  const mode = req.body?.mode === "live" ? "live" : "test";
+  // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 — live keys gated by staff approval.
+  if (mode === "live") {
+    const lr = await pool.query<{ live_keys_enabled: boolean | null }>(
+      `SELECT live_keys_enabled FROM bi_lenders WHERE id = $1 LIMIT 1`,
+      [req.lenderId],
+    );
+    if (lr.rows[0]?.live_keys_enabled !== true) {
+      return res.status(403).json({
+        error: "live_keys_not_enabled",
+        message: "Live key minting requires staff approval. Use POST /lender/api-keys/request-live to ask.",
+      });
+    }
+  }
+  const prefix = mode === "live" ? "bk_live_" : "bk_test_";
+  const wire = `${prefix}${crypto.randomBytes(6).toString("hex")}.${crypto.randomBytes(24).toString("hex")}`;
+  const hash = crypto.createHash("sha256").update(wire).digest("hex");
+  const inserted = await pool.query<{ id: string; created_at: string }>(
+    `INSERT INTO bi_lender_api_keys (lender_id, key_hash, active)
+     VALUES ($1, $2, TRUE)
+     RETURNING id, created_at`,
+    [req.lenderId, hash],
+  );
+  return res.status(201).json({ id: inserted.rows[0]?.id, created_at: inserted.rows[0]?.created_at, mode, secret: wire });
+});
+
+// BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 — lender asks staff for live-key approval.
+router.post("/lender/api-keys/request-live", authLender, async (req: any, res) => {
+  const r = await pool.query<{ company_name: string; contact_full_name: string | null; contact_phone_e164: string | null; live_keys_enabled: boolean | null }>(
+    `SELECT company_name, contact_full_name, contact_phone_e164, live_keys_enabled FROM bi_lenders WHERE id = $1 LIMIT 1`,
+    [req.lenderId],
+  );
+  if (!r.rows[0]) return res.status(404).json({ error: "lender_not_found" });
+  if (r.rows[0].live_keys_enabled === true) return res.json({ ok: true, already_enabled: true });
+  await pool.query(
+    `INSERT INTO bi_activity (application_id, actor_type, event_type, summary, meta)
+     VALUES (NULL, 'lender', 'live_keys_requested', $1, $2::jsonb)`,
+    [`${r.rows[0].company_name} requested live API key access`, JSON.stringify({ lender_id: req.lenderId, contact_phone: r.rows[0].contact_phone_e164 })],
+  ).catch(() => {});
+  void notifyStaff(
+    "new_application",
+    `BI live-key request: ${r.rows[0].company_name} (${r.rows[0].contact_full_name || "no contact"}). Approve in BF-portal Lender Management.`,
+  ).catch(() => {});
+  return res.json({ ok: true, requested: true });
 });
 
 router.get("/lender/applications/mine", authLender, async (req: any, res) => {

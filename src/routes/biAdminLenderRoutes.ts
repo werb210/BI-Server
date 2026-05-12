@@ -5,6 +5,8 @@ import { ok, badRequest } from "../utils/apiResponse";
 import { mirrorToContact } from "../services/crmMirrorService";
 import { logger } from "../platform/logger";
 import crypto from "node:crypto";
+// BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1
+import twilio from "twilio";
 const router = Router(); const COUNTRY_RE = /^(CA|US)$/;
 
 // BI_SERVER_BLOCK_v183_ADMIN_LENDER_ROLE_GATE_v1
@@ -20,8 +22,26 @@ router.use((req: any, res: any, next: any) => {
   }
   next();
 });
+
+// BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 — fire-and-forget SMS to a single number.
+async function sendBiSms(to: string, body: string): Promise<void> {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const tok = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_FROM;
+  if (!sid || !tok || !from) {
+    logger.warn({ to }, "[v235] Twilio not configured — SMS skipped");
+    return;
+  }
+  try {
+    const client = twilio(sid, tok);
+    await client.messages.create({ from, to, body });
+  } catch (err) {
+    logger.error({ err, to }, "[v235] SMS send failed");
+  }
+}
+
 router.get("/admin/lenders", async (_req, res) => { const r = await pool.query(`SELECT id, company_name, website_url, address_line1, city, province, postal_code, country, contact_full_name, contact_email, contact_phone_e164, is_active, created_at FROM bi_lenders ORDER BY company_name`); return ok(res, { lenders: r.rows }); });
-router.post("/admin/lenders", async (req, res) => { const b = (req.body ?? {}) as Record<string, unknown>; const company_name = String(b.company_name ?? "").trim(); const contact_full_name = String(b.contact_full_name ?? "").trim(); const contact_email = String(b.contact_email ?? "").trim().toLowerCase(); const contact_phone_e164 = String(b.contact_phone_e164 ?? "").trim(); const country = String(b.country ?? "CA").toUpperCase(); if (!company_name) return badRequest(res, "company_name required"); if (!contact_full_name) return badRequest(res, "contact_full_name required"); if (!contact_email) return badRequest(res, "contact_email required"); if (!contact_phone_e164) return badRequest(res, "contact_phone_e164 required"); if (!COUNTRY_RE.test(country)) return badRequest(res, "country must be CA or US"); try { const r = await pool.query<{ id: string }>(`INSERT INTO bi_lenders (company_name, website_url, address_line1, city, province, postal_code, country, contact_full_name, contact_email, contact_phone_e164, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE) RETURNING id`, [company_name,(b.website_url as string) || null,(b.address_line1 as string) || null,(b.city as string) || null,(b.province as string) || null,(b.postal_code as string) || null,country,contact_full_name, contact_email, contact_phone_e164]); const lender_id = r.rows[0]!.id; await mirrorToContact({ source: "lender_contact", full_name: contact_full_name, email: contact_email, phone_e164: contact_phone_e164, company_name, extra_tags: [`lender:${lender_id}`] }); return ok(res, { id: lender_id }); } catch (err) { logger.error({ err }, "create lender failed"); return badRequest(res, "create failed"); } });
+router.post("/admin/lenders", async (req, res) => { const b = (req.body ?? {}) as Record<string, unknown>; const company_name = String(b.company_name ?? "").trim(); const contact_full_name = String(b.contact_full_name ?? "").trim(); const contact_email = String(b.contact_email ?? "").trim().toLowerCase(); const contact_phone_e164 = String(b.contact_phone_e164 ?? "").trim(); const country = String(b.country ?? "CA").toUpperCase(); if (!company_name) return badRequest(res, "company_name required"); if (!contact_full_name) return badRequest(res, "contact_full_name required"); if (!contact_email) return badRequest(res, "contact_email required"); if (!contact_phone_e164) return badRequest(res, "contact_phone_e164 required"); if (!COUNTRY_RE.test(country)) return badRequest(res, "country must be CA or US"); try { const r = await pool.query<{ id: string }>(`INSERT INTO bi_lenders (company_name, website_url, address_line1, city, province, postal_code, country, contact_full_name, contact_email, contact_phone_e164, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE) RETURNING id`, [company_name,(b.website_url as string) || null,(b.address_line1 as string) || null,(b.city as string) || null,(b.province as string) || null,(b.postal_code as string) || null,country,contact_full_name, contact_email, contact_phone_e164]); const lender_id = r.rows[0]!.id; await mirrorToContact({ source: "lender_contact", full_name: contact_full_name, email: contact_email, phone_e164: contact_phone_e164, company_name, extra_tags: [`lender:${lender_id}`] }); /* BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 */ void sendBiSms(contact_phone_e164, `Boreal Risk: ${contact_full_name}, you have been added as a lender. Sign in to the lender portal: https://boreal.financial/lender/login. Use this mobile number when prompted. Reply STOP to opt out.`); return ok(res, { id: lender_id }); } catch (err) { logger.error({ err }, "create lender failed"); return badRequest(res, "create failed"); } });
 router.patch("/admin/lenders/:id", async (req, res) => { const id = req.params.id; const b = (req.body ?? {}) as Record<string, unknown>; if (b.country !== undefined && !COUNTRY_RE.test(String(b.country).toUpperCase())) return badRequest(res, "country must be CA or US"); const setSql: string[] = []; const vals: unknown[] = [id]; let i = 2; const cols = ["company_name","website_url","address_line1","city","province","postal_code","country","contact_full_name","contact_email","contact_phone_e164","is_active"]; for (const c of cols) { if (b[c] !== undefined) { setSql.push(`${c} = $${i++}`); vals.push(c === "country" ? String(b[c]).toUpperCase() : b[c]); }} if (!setSql.length) return badRequest(res, "no fields to update"); await pool.query(`UPDATE bi_lenders SET ${setSql.join(", ")} WHERE id = $1`, vals); return ok(res, { updated: true }); });
 router.delete("/admin/lenders/:id", async (req, res) => { await pool.query(`UPDATE bi_lenders SET is_active = FALSE WHERE id = $1`, [req.params.id]); return ok(res, { deactivated: true }); });
 // BI_SERVER_BLOCK_v65_LENDER_API_KEY_MINT_v1 — staff mints/lists/revokes
@@ -76,6 +96,36 @@ router.post("/admin/lenders/:id/api-keys/:keyId/revoke", async (req, res) => {
     [req.params.keyId, req.params.id]
   );
   return ok(res, { revoked: true });
+});
+
+
+// BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 — staff toggles live-key minting for a lender
+// and notifies the lender via SMS.
+router.post("/admin/lenders/:id/approve-live-keys", async (req, res) => {
+  const id = req.params.id;
+  const enabled = req.body?.enabled !== false; // default TRUE
+  const r = await pool.query<{ contact_phone_e164: string | null; contact_full_name: string | null; company_name: string }>(
+    `UPDATE bi_lenders SET live_keys_enabled = $1 WHERE id = $2
+     RETURNING contact_phone_e164, contact_full_name, company_name`,
+    [enabled, id],
+  );
+  if (!r.rows[0]) return badRequest(res, "lender not found");
+  const row = r.rows[0];
+  if (enabled && row.contact_phone_e164) {
+    void sendBiSms(
+      row.contact_phone_e164,
+      `Boreal Risk: ${row.contact_full_name || "your lender account"} has been approved for LIVE API keys. ` +
+      `Generate one at https://boreal.financial/lender/sandbox. Reply STOP to opt out.`,
+    );
+  }
+  await pool.query(
+    `INSERT INTO bi_activity (application_id, actor_type, event_type, summary, meta)
+     VALUES (NULL, 'staff', $1, $2, $3::jsonb)`,
+    [enabled ? "lender_live_approved" : "lender_live_revoked",
+     `Live keys ${enabled ? "approved" : "revoked"} for ${row.company_name}`,
+     JSON.stringify({ lender_id: id, enabled })],
+  ).catch(() => {});
+  return ok(res, { id, live_keys_enabled: enabled });
 });
 
 export default router;
