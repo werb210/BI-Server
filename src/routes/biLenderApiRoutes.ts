@@ -203,16 +203,39 @@ router.get("/lender/applications/mine", authLender, async (req: any, res) => {
               business_name, company_name, guarantor_name,
               loan_amount, pgi_limit, annual_premium,
               pgi_application_id, score_decision,
+              carrier_received_at, carrier_last_event, carrier_last_event_at,
               core_inputs, created_at, updated_at
        FROM bi_applications
        -- BI_SERVER_BLOCK_v206_LENDER_PIPELINE_COLUMN_FIX_v1 - column is created_by_lender_id per FK constraint.
        -- BI_SERVER_BLOCK_v223_LENDER_CARRIER_FORWARDING_v1 - surface application_code + pgi_application_id + company_name.
+       -- BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1 - surface carrier_received_at + carrier_last_event(_at).
        WHERE created_by_lender_id = $1
        ORDER BY created_at DESC
        LIMIT 500`,
     [req.lenderId],
   );
   res.json({ applications: r.rows });
+});
+
+
+// BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1 — lender-scoped timeline.
+router.get("/lender/applications/:code/timeline", authLender, async (req: any, res) => {
+  const { code } = req.params;
+  const ownerCheck = await pool.query(
+    `SELECT id FROM bi_applications WHERE application_code = $1 AND created_by_lender_id = $2 LIMIT 1`,
+    [code, req.lenderId],
+  );
+  const row = ownerCheck.rows[0];
+  if (!row) return res.status(404).json({ error: "not_found" });
+  const activity = await pool.query(
+    `SELECT event_type, summary, meta, created_at
+       FROM bi_activity
+      WHERE application_id = $1
+      ORDER BY created_at DESC
+      LIMIT 200`,
+    [row.id],
+  );
+  res.json({ application_code: code, events: activity.rows });
 });
 
 export default router;

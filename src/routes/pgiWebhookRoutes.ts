@@ -1,3 +1,4 @@
+// BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1
 import crypto from "crypto";
 import express from "express";
 import { pool } from "../db";
@@ -46,7 +47,12 @@ router.post("/api/v1/webhooks/pgi", express.raw({ type: "application/json" }), a
     }
   }
 
-  if (evt.event === "application.quoted") {
+  if (evt.event === "application.received") {
+    await pool.query(
+      `UPDATE bi_applications SET status='submitted', carrier_received_at=COALESCE(carrier_received_at, NOW()), updated_at=NOW() WHERE pgi_application_id=$1`,
+      [evt.application_id]
+    );
+  } else   if (evt.event === "application.quoted") {
     const prev = await pool.query(`SELECT id, status FROM bi_applications WHERE pgi_application_id=$1 LIMIT 1`, [evt.application_id]);
     /* BI_SERVER_BLOCK_v62_STAGE_ALIGNMENT_v1 — quoted folds into under_review per
        Todd's locked pipeline spec. Quote data persists; only policy.bound
@@ -106,6 +112,28 @@ router.post("/api/v1/webhooks/pgi", express.raw({ type: "application/json" }), a
         console.warn("[v173] onApplicationApproved failed", err);
       });
     }
+  }
+
+  // BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1 — generic post-processor
+  try {
+    const eventName = String(evt.event ?? "unknown");
+    const r2 = await pool.query<{ id: string }>(
+      `UPDATE bi_applications
+          SET carrier_last_event=$1, carrier_last_event_at=NOW(), updated_at=NOW()
+        WHERE pgi_application_id=$2
+        RETURNING id`,
+      [eventName, evt.application_id]
+    );
+    const appRowId = r2.rows[0]?.id ?? null;
+    if (appRowId) {
+      await pool.query(
+        `INSERT INTO bi_activity(application_id, actor_type, event_type, summary, meta)
+         VALUES($1, 'system', $2, $3, $4::jsonb)`,
+        [appRowId, `pgi.${eventName}`, `Carrier event: ${eventName}`, JSON.stringify(evt)]
+      );
+    }
+  } catch (err) {
+    console.warn("[v225] post-processor failed (non-fatal)", err);
   }
   res.json({ ok: true });
 });
