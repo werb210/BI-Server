@@ -107,6 +107,20 @@ router.post("/api/v1/webhooks/pgi", express.raw({ type: "application/json" }), a
          VALUES($1, 'system', 'policy_bound', $2)`,
         [appId, `Policy bound by carrier (${evt.policy_id ?? "no policy id"})`]
       ).catch(() => {});
+      // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1 — ISSUE #4 fix: ensure a bi_commissions
+      await pool.query(
+        `INSERT INTO bi_commissions (application_id, annual_premium_amount, commission_amount, status)
+         SELECT id, annual_premium, ROUND(COALESCE(annual_premium, 0) * 0.10, 2), 'estimated'
+           FROM bi_applications WHERE id = $1
+         ON CONFLICT (application_id) DO UPDATE
+            SET annual_premium_amount = EXCLUDED.annual_premium_amount,
+                commission_amount = EXCLUDED.commission_amount,
+                updated_at = NOW()
+          WHERE bi_commissions.annual_premium_amount IS DISTINCT FROM EXCLUDED.annual_premium_amount`,
+        [appId],
+      ).catch((err) => {
+        console.warn("[v241] ensure bi_commissions row failed (non-fatal)", err);
+      });
       await onApplicationApproved(appId).catch((err) => {
         // eslint-disable-next-line no-console
         console.warn("[v173] onApplicationApproved failed", err);

@@ -5,7 +5,7 @@ import rateLimit from "express-rate-limit"; // BI_SERVER_BLOCK_v236_RATE_LIMIT_A
 import { notifyStaff } from "../services/staffNotifyService"; // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1
 import { pool } from "../db";
 import { env } from "../platform/env";
-import { pgiScore } from "../services/pgiAdapter";
+import { pgiScore, pgiSubmit } from "../services/pgiAdapter"; // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1
 import { sendOtp, verifyOtp } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
 import { normalizeE164 } from "../util/phoneE164";
@@ -134,12 +134,36 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* BI_SERVER_BL
      Boolean(b.bankruptcy_history), Boolean(b.insolvency_history), Boolean(b.judgment_history),
      score.score_id, ("score" in score) ? score.score : null, score.decision,
      b]);
+  // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1 — BUG #1 fix: auto-forward to carrier after
+  let lenderCompanyName: string | null = null;
+  let lenderIsDemo = false;
+  try {
+    const lr = await pool.query(`SELECT company_name, is_demo FROM bi_lenders WHERE id = $1 LIMIT 1`, [req.lenderId]);
+    lenderCompanyName = (lr.rows[0]?.company_name as string | undefined) || null;
+    lenderIsDemo = lr.rows[0]?.is_demo === true;
+  } catch {}
+  const carrierRequestBody = { guarantor_name: b.guarantor_name, guarantor_email: b.guarantor_email, business_name: b.business_name, lender_name: lenderCompanyName ?? b.lender_name ?? undefined, form_data: { country: b.country, naics_code: b.naics_code, formation_date: b.formation_date, loan_amount: Number(b.loan_amount), pgi_limit: Number(b.pgi_limit), annual_revenue: Number(b.annual_revenue), ebitda: Number(b.ebitda), total_debt: Number(b.total_debt), monthly_debt_service: Number(b.monthly_debt_service), collateral_value: Number(b.collateral_value), enterprise_value: Number(b.enterprise_value), bankruptcy_history: Boolean(b.bankruptcy_history), insolvency_history: Boolean(b.insolvency_history), judgment_history: Boolean(b.judgment_history), }, };
+  let pgi_application_id: string | null = null;
+  let pgi_status: string | null = null;
+  let pgi_error: string | null = null;
+  try {
+    const submit = lenderIsDemo ? { application_id: `STUB_APP_DEMO_${Date.now()}`, status: "received", message: "Demo submission — carrier call skipped." } : await pgiSubmit(carrierRequestBody);
+    pgi_application_id = submit.application_id;
+    pgi_status = submit.status || "received";
+    await pool.query(`UPDATE bi_applications SET pgi_application_id=$1,status='submitted',carrier_received_at=NOW(),carrier_last_event='application.submitted',carrier_last_event_at=NOW(),carrier_submission_request=$2::jsonb,carrier_submission_response=$3::jsonb,updated_at=NOW() WHERE id=$4`, [pgi_application_id, JSON.stringify(carrierRequestBody), JSON.stringify(submit), id]);
+  } catch (e: any) {
+    pgi_error = String(e?.message ?? e);
+  }
+
   return res.status(201).json({
     public_id: publicId,
     application_id: id,
-    status: "ready_for_submission",
+    status: pgi_application_id ? "submitted" : "ready_for_submission",
     score_id: score.score_id,
     score: "score" in score ? score.score : null,
+    pgi_application_id,
+    pgi_status,
+    pgi_error,
   });
 });
 
