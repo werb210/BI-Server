@@ -58,6 +58,7 @@ async function authLender(req: any, res: any, next: any) {
       const claims: any = jwt.verify(bearerToken, env.JWT_SECRET || "dev-missing-jwt-secret");
       if (claims && claims.kind === "lender" && claims.id) {
         req.lenderId = claims.id;
+        if (claims.user_id) req.lenderUserId = String(claims.user_id);
         return next();
       }
     } catch {
@@ -114,7 +115,7 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* BI_SERVER_BL
   //     existing /lender/applications GET). req.lenderId fills both.
   await pool.query(`INSERT INTO bi_applications
        (id, public_id, status, source, source_type,
-        created_by_actor, created_by_lender_id, lender_id,
+        created_by_actor, created_by_lender_id, created_by_lender_user_id, lender_id,
         guarantor_name, guarantor_email, business_name, lender_name,
         country, naics_code, formation_date, loan_amount, pgi_limit,
         annual_revenue, ebitda, total_debt, monthly_debt_service,
@@ -123,7 +124,7 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* BI_SERVER_BL
         score_id, score_value, score_decision, score_at,
         form_data, created_at, updated_at)
      VALUES ($1,$2,'ready_for_submission','lender','lender',
-             'lender',$3,$3,
+             'lender',$3,$26,$3,
              $4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
              $19,$20,$21,$22,$23,$24,NOW(),$25,NOW(),NOW())`,
     [id, publicId, req.lenderId,
@@ -133,7 +134,8 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* BI_SERVER_BL
      b.collateral_value, b.enterprise_value,
      Boolean(b.bankruptcy_history), Boolean(b.insolvency_history), Boolean(b.judgment_history),
      score.score_id, ("score" in score) ? score.score : null, score.decision,
-     b]);
+     b,
+     req.lenderUserId ?? null]);
   // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1 — BUG #1 fix: auto-forward to carrier after
   let lenderCompanyName: string | null = null;
   let lenderIsDemo = false;
@@ -186,18 +188,17 @@ router.post("/lender/otp/start", async (req, res) => {
   const phone = normalizeE164(req.body?.phone);
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
 
-  // Phone must be registered to an existing lender. We do NOT auto-create
-  // (unlike referrers) because lenders are gated B2B partners.
+  // Multi-tenant contact lookup first; legacy primary fallback below.
   const r = await pool.query(
-    `SELECT id FROM bi_lenders WHERE contact_phone_e164 = $1 LIMIT 1`,
+    `SELECT c.id FROM bi_lender_contacts c JOIN bi_lenders l ON l.id = c.lender_id WHERE c.phone_e164 = $1 AND c.is_active = TRUE AND l.is_active = TRUE LIMIT 1`,
     [phone],
   );
-  if (!r.rows[0]) {
-    // Don't leak phone enumeration. Pretend we sent.
+  if (r.rows[0]) {
+    await sendOtp(phone);
     return res.json({ ok: true });
   }
-
-  await sendOtp(phone);
+  const primary = await pool.query(`SELECT id FROM bi_lenders WHERE contact_phone_e164 = $1 AND is_active = TRUE LIMIT 1`, [phone]);
+  if (primary.rows[0]) await sendOtp(phone);
   res.json({ ok: true });
 });
 
@@ -224,36 +225,27 @@ router.post("/lender/demo-session", demoSessionHandler);
 router.post("/lender/demo/session", demoSessionHandler);
 
 router.post("/lender/otp/verify", async (req, res) => {
-  // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
   const phone = normalizeE164(req.body?.phone);
   const code = String(req.body?.code ?? "").trim();
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
   if (!code) return res.status(400).json({ error: "missing_code" });
 
-  const r = await pool.query(
-    `SELECT id, company_name, rep_full_name, rep_email FROM bi_lenders WHERE contact_phone_e164 = $1 LIMIT 1`,
-    [phone],
-  );
-  if (!r.rows[0]) return res.status(401).json({ error: "phone_not_registered" });
-
+  let row: any;
+  const cr = await pool.query(`SELECT c.id AS contact_id, l.id AS lender_id, l.company_name, c.full_name, c.email, c.role FROM bi_lender_contacts c JOIN bi_lenders l ON l.id=c.lender_id WHERE c.phone_e164=$1 AND c.is_active=TRUE AND l.is_active=TRUE LIMIT 1`, [phone]);
+  if (cr.rows[0]) row = cr.rows[0];
+  else {
+    const lr = await pool.query(`SELECT id, company_name, contact_full_name, contact_email FROM bi_lenders WHERE contact_phone_e164=$1 AND is_active=TRUE LIMIT 1`, [phone]);
+    if (lr.rows[0]) {
+      const ins = await pool.query(`INSERT INTO bi_lender_contacts (lender_id, full_name, email, phone_e164, role, is_primary, is_active) VALUES ($1, COALESCE(NULLIF(TRIM($2), ''), '(primary)'), NULLIF(LOWER(TRIM($3)), ''), $4, 'primary', TRUE, TRUE) RETURNING id`, [lr.rows[0].id, lr.rows[0].contact_full_name, lr.rows[0].contact_email, phone]);
+      row = { contact_id: ins.rows[0].id, lender_id: lr.rows[0].id, company_name: lr.rows[0].company_name, full_name: lr.rows[0].contact_full_name, email: lr.rows[0].contact_email, role: 'primary' };
+    }
+  }
+  if (!row) return res.status(401).json({ error: "phone_not_registered" });
   const ok = await verifyOtp(phone, code);
   if (!ok) return res.status(401).json({ error: "invalid_otp" });
-
-  const lender = r.rows[0];
-  const token = jwt.sign(
-    { kind: "lender", id: lender.id },
-    env.JWT_SECRET || "dev-missing-jwt-secret",
-    { expiresIn: "7d" },
-  );
-  res.json({
-    token,
-    lender: {
-      id: lender.id,
-      company_name: lender.company_name,
-      rep_full_name: lender.rep_full_name,
-      rep_email: lender.rep_email,
-    },
-  });
+  if (row.contact_id) await pool.query(`UPDATE bi_lender_contacts SET last_login_at=NOW(), updated_at=NOW() WHERE id=$1`, [row.contact_id]).catch(()=>{});
+  const token = jwt.sign({ kind: "lender", id: row.lender_id, user_id: row.contact_id }, env.JWT_SECRET || "dev-missing-jwt-secret", { expiresIn: "7d" });
+  res.json({ token, lender: { id: row.lender_id, company_name: row.company_name }, user: { id: row.contact_id, full_name: row.full_name, email: row.email, role: row.role } });
 });
 
 router.get("/lender/me", authLender, async (req: any, res) => {
@@ -262,7 +254,9 @@ router.get("/lender/me", authLender, async (req: any, res) => {
     [req.lenderId],
   );
   if (!r.rows[0]) return res.status(404).json({ error: "lender_not_found" });
-  res.json({ lender: r.rows[0] });
+  let user = null;
+  if (req.lenderUserId) { const ur = await pool.query(`SELECT id, full_name, email, role FROM bi_lender_contacts WHERE id=$1 LIMIT 1`, [req.lenderUserId]); if (ur.rows[0]) user = ur.rows[0]; }
+  res.json({ lender: r.rows[0], user });
 });
 
 router.post("/lender/api-keys", authLender, lenderRateLimit, /* BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1 */ async (req: any, res) => {

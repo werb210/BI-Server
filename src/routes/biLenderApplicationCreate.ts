@@ -16,12 +16,14 @@ function genCode(): string { const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; l
 function num(v: any): number | null { if (v === null || v === undefined || v === "") return null; const n = Number(String(v).replace(/[,$\s]/g, "")); return Number.isFinite(n) ? n : null; }
 function bool(v: any): boolean { if (v === true || v === false) return v; if (typeof v === "string") return v.toLowerCase() === "yes" || v.toLowerCase() === "true"; return Boolean(v); }
 function getLenderId(req: Request): string | null { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return null; const secret = process.env.JWT_SECRET; if (!secret) return null; try { const payload = jwt.verify(m[1], secret) as any; if (payload?.kind !== "lender" || !payload?.id) return null; return String(payload.id); } catch { return null; } }
+function getLenderUserId(req: Request): string | null { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return null; const secret = process.env.JWT_SECRET; if (!secret) return null; try { const payload = jwt.verify(m[1], secret) as any; if (payload?.kind !== "lender" || !payload?.user_id) return null; return String(payload.user_id); } catch { return null; } }
 router.post("/api/v1/lender/applications", async (req: Request, res: Response, next: NextFunction) => {
   // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1 — flat-body callers (documented programmatic API)
   if (!req.body || typeof req.body !== "object" || !req.body.guarantor || typeof req.body.guarantor !== "object") {
     return next();
   }
   const lenderId = getLenderId(req); if (!lenderId) return res.status(401).json({ error: "unauthorized", message: "Valid lender Bearer token required" });
+  const lenderUserId = getLenderUserId(req);
   const b = req.body || {};
   const required: Array<[string, any]> = [["company_name", b.company_name],["guarantor.name", b.guarantor?.name],["guarantor.phone", b.guarantor?.phone],["business.naics", b.business?.naics],["business.start_date", b.business?.start_date],["loan.amount", b.loan?.amount],["loan.pgi_limit", b.loan?.pgi_limit],["financials.revenue_last_year", b.financials?.revenue_last_year ?? b.financials?.annual_revenue],["financials.ebitda_last_year", b.financials?.ebitda_last_year ?? b.financials?.ebitda],];
   const missing = required.filter(([_, v]) => v === undefined || v === null || v === "").map(([k]) => k); if (missing.length > 0) return res.status(400).json({ error: "validation", missing });
@@ -40,7 +42,7 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
   } catch {
     // Non-fatal: row still saved without lender_name; staff can fix in BI silo.
   }
-  const result = await pool.query(`INSERT INTO bi_applications (entity_type, status, source, lender_id, created_by_lender_id, application_code, phone, company_name, guarantor_name, guarantor_phone, guarantor_email, lender_name, is_demo, core_inputs, consents, lender_notes, created_by_actor, created_at, updated_at) VALUES ('applicant', 'new_application', 'lender', $1, $1, $2, $3, $4, $5, $6, $7, $11, $12, $8::jsonb, $9::jsonb, $10, 'lender', NOW(), NOW()) RETURNING id, application_code`, [lenderId, applicationCode, b.guarantor?.phone, b.company_name, b.guarantor?.name, b.guarantor?.phone, b.guarantor?.email || null, JSON.stringify(coreInputs), JSON.stringify({ data_use: true, credit_pull: true, info_accurate: true, source: "lender_attestation" }), b.lender_notes || null, lenderCompanyName, lenderIsDemo]);
+  const result = await pool.query(`INSERT INTO bi_applications (entity_type, status, source, lender_id, created_by_lender_id, created_by_lender_user_id, application_code, phone, company_name, guarantor_name, guarantor_phone, guarantor_email, lender_name, is_demo, core_inputs, consents, lender_notes, created_by_actor, created_at, updated_at) VALUES ('applicant', 'new_application', 'lender', $1, $1, $13, $2, $3, $4, $5, $6, $7, $11, $12, $8::jsonb, $9::jsonb, $10, 'lender', NOW(), NOW()) RETURNING id, application_code`, [lenderId, applicationCode, b.guarantor?.phone, b.company_name, b.guarantor?.name, b.guarantor?.phone, b.guarantor?.email || null, JSON.stringify(coreInputs), JSON.stringify({ data_use: true, credit_pull: true, info_accurate: true, source: "lender_attestation" }), b.lender_notes || null, lenderCompanyName, lenderIsDemo, lenderUserId]);
   const row = result.rows[0]; const appId: string = row.id; const code: string = row.application_code;
   // BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1
 // BI_SERVER_BLOCK_v226_DEMO_SANDBOX_v1 — every outbound carrier call is captured.
