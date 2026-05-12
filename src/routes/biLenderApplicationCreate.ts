@@ -5,7 +5,7 @@
 // BI_SERVER_BLOCK_v224_LENDER_NAME_ATTRIBUTION_v1
 //   - Lender name pulled from bi_lenders.company_name and forwarded to PGI
 //     so the carrier knows which downstream lender originated each deal.
-import express, { type Request, type Response } from "express";
+import express, { type NextFunction, type Request, type Response } from "express"; // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1
 import jwt from "jsonwebtoken";
 import { notifyStaff } from "../services/staffNotifyService";
 import { pool } from "../db";
@@ -16,7 +16,11 @@ function genCode(): string { const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; l
 function num(v: any): number | null { if (v === null || v === undefined || v === "") return null; const n = Number(String(v).replace(/[,$\s]/g, "")); return Number.isFinite(n) ? n : null; }
 function bool(v: any): boolean { if (v === true || v === false) return v; if (typeof v === "string") return v.toLowerCase() === "yes" || v.toLowerCase() === "true"; return Boolean(v); }
 function getLenderId(req: Request): string | null { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return null; const secret = process.env.JWT_SECRET; if (!secret) return null; try { const payload = jwt.verify(m[1], secret) as any; if (payload?.kind !== "lender" || !payload?.id) return null; return String(payload.id); } catch { return null; } }
-router.post("/api/v1/lender/applications", async (req: Request, res: Response) => {
+router.post("/api/v1/lender/applications", async (req: Request, res: Response, next: NextFunction) => {
+  // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1 — flat-body callers (documented programmatic API)
+  if (!req.body || typeof req.body !== "object" || !req.body.guarantor || typeof req.body.guarantor !== "object") {
+    return next();
+  }
   const lenderId = getLenderId(req); if (!lenderId) return res.status(401).json({ error: "unauthorized", message: "Valid lender Bearer token required" });
   const b = req.body || {};
   const required: Array<[string, any]> = [["company_name", b.company_name],["guarantor.name", b.guarantor?.name],["guarantor.phone", b.guarantor?.phone],["business.naics", b.business?.naics],["business.start_date", b.business?.start_date],["loan.amount", b.loan?.amount],["loan.pgi_limit", b.loan?.pgi_limit],["financials.revenue_last_year", b.financials?.revenue_last_year ?? b.financials?.annual_revenue],["financials.ebitda_last_year", b.financials?.ebitda_last_year ?? b.financials?.ebitda],];
