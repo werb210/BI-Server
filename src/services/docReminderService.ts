@@ -26,6 +26,15 @@ function getTwilio() {
 
 export async function runDocReminderTick(now: Date = new Date()): Promise<{ checked: number; sent: number; skipped: number }> {
   if (!isBusinessHoursMT(now)) return { checked: 0, sent: 0, skipped: 0 };
+  // BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1 — only one instance in
+  // the fleet runs a tick at a time.
+  const ADVISORY_LOCK_KEY = 8273410001;
+  const lockResult = await pool.query<{ locked: boolean }>(
+    `SELECT pg_try_advisory_lock($1) AS locked`,
+    [ADVISORY_LOCK_KEY],
+  );
+  if (lockResult.rows[0]?.locked !== true) return { checked: 0, sent: 0, skipped: 0 };
+  try {
   const candidates = await pool.query<{id:string;public_id:string;applicant_phone_e164:string|null;guarantor_phone:string|null;doc_reminder_count:number;docs_uploaded:number;}>(
     `SELECT a.id, a.public_id, a.applicant_phone_e164, a.guarantor_phone, a.doc_reminder_count,
             (SELECT COUNT(DISTINCT doc_type) FROM bi_documents d
@@ -60,6 +69,10 @@ export async function runDocReminderTick(now: Date = new Date()): Promise<{ chec
   }
   if (sent > 0 || skipped > 0) logger.info({ checked: candidates.rows.length, sent, skipped }, "[docReminder] tick complete");
   return { checked: candidates.rows.length, sent, skipped };
+  } finally {
+    // BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1 — always release lock.
+    await pool.query(`SELECT pg_advisory_unlock($1)`, [ADVISORY_LOCK_KEY]).catch(() => {});
+  }
 }
 
 export function startDocReminderJob(): void {
