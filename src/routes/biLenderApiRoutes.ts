@@ -1,6 +1,7 @@
 import { Router } from "express";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
+import rateLimit from "express-rate-limit"; // BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1
 import { notifyStaff } from "../services/staffNotifyService"; // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1
 import { pool } from "../db";
 import { env } from "../platform/env";
@@ -11,6 +12,26 @@ import { normalizeE164 } from "../util/phoneE164";
 import { generatePublicId } from "../util/publicId";
 
 const router = Router();
+// BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1 — Per-key (or per-IP fallback) rate limit.
+const _lenderLimitPerMin = Number(process.env.RATE_LIMIT_LENDER_PER_MIN || 60);
+const lenderRateLimit = rateLimit({
+  windowMs: 60_000,
+  max: Number.isFinite(_lenderLimitPerMin) && _lenderLimitPerMin > 0 ? _lenderLimitPerMin : 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const auth = String(req.headers.authorization ?? "");
+    const tok = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+    if (tok) return `k:${crypto.createHash("sha256").update(tok).digest("hex").slice(0, 24)}`;
+    return `ip:${req.ip || "unknown"}`;
+  },
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: "rate_limited",
+      message: "Too many requests. See Retry-After header for cooldown.",
+    });
+  },
+});
 const EBITDA_MIN = 50_000;
 
 // BI_SERVER_BLOCK_v62_LENDER_AUTH_DUAL_HEADER_v1
@@ -54,7 +75,7 @@ async function authLender(req: any, res: any, next: any) {
   next();
 }
 
-router.post("/lender/applications", authLender, async (req: any, res) => {
+router.post("/lender/applications", authLender, lenderRateLimit, /* BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1 */ async (req: any, res) => {
   const b = req.body ?? {};
   const scoreReq = ["country","naics_code","formation_date","loan_amount","pgi_limit","annual_revenue","ebitda","total_debt","monthly_debt_service","collateral_value","enterprise_value"];
   const missing = scoreReq.filter((k) => b[k] === undefined || b[k] === "");
@@ -220,7 +241,7 @@ router.get("/lender/me", authLender, async (req: any, res) => {
   res.json({ lender: r.rows[0] });
 });
 
-router.post("/lender/api-keys", authLender, async (req: any, res) => {
+router.post("/lender/api-keys", authLender, lenderRateLimit, /* BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1 */ async (req: any, res) => {
   const mode = req.body?.mode === "live" ? "live" : "test";
   // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 — live keys gated by staff approval.
   if (mode === "live") {
@@ -248,7 +269,7 @@ router.post("/lender/api-keys", authLender, async (req: any, res) => {
 });
 
 // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 — lender asks staff for live-key approval.
-router.post("/lender/api-keys/request-live", authLender, async (req: any, res) => {
+router.post("/lender/api-keys/request-live", authLender, lenderRateLimit, /* BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1 */ async (req: any, res) => {
   const r = await pool.query<{ company_name: string; contact_full_name: string | null; contact_phone_e164: string | null; live_keys_enabled: boolean | null }>(
     `SELECT company_name, contact_full_name, contact_phone_e164, live_keys_enabled FROM bi_lenders WHERE id = $1 LIMIT 1`,
     [req.lenderId],
