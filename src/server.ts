@@ -113,6 +113,9 @@ const PRODUCTION_FALLBACK_ORIGINS = [
   "https://www.boreal.financial",
   "https://delightful-sand-05a55580f.7.azurestaticapps.net",
   "https://witty-moss-0886d220f.7.azurestaticapps.net", // BI_SERVER_BLOCK_v222_CORS_AZURESTATICAPPS_AND_HEALTH_v1 — current BI-Website SWA host
+  // BI_SERVER_BLOCK_v239_CORS_BOREAL_INSURE_v1 — public BI-Website now lives at boreal.insure.
+  "https://www.boreal.insure",
+  "https://boreal.insure",
 ];
 const DEV_FALLBACK_ORIGINS = [
   "http://localhost:5173",
