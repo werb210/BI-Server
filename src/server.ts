@@ -21,6 +21,8 @@ import biPublicApplicationRoutes from "./routes/biPublicApplicationRoutes"; // B
 import biApplicationsFromBfRoutes from "./routes/biApplicationsFromBfRoutes";
 // BI_SERVER_BLOCK_v249_DOCS_FROM_BF_v1
 import biDocumentsFromBfRoutes from "./routes/biDocumentsFromBfRoutes";
+// BI_SERVER_BLOCK_v250_MAYA_STAFF_PIPELINE_QUERY_v1
+import biMayaStaffRoutes from "./routes/biMayaStaffRoutes";
 import biAuthRoutes, { biAppApplicantRoutes } from "./routes/biAuthRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
@@ -225,6 +227,8 @@ app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biApplicationsFrom
 
 // BI_SERVER_BLOCK_v249_DOCS_FROM_BF_v1 — service-JWT-authed doc mirror.
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biDocumentsFromBfRoutes);
+// BI_SERVER_BLOCK_v250_MAYA_STAFF_PIPELINE_QUERY_v1 — service-JWT-authed Maya staff query endpoint.
+app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biMayaStaffRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biApplicationRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biEventsRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biAppApplicantRoutes);
