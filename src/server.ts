@@ -17,6 +17,8 @@ import { biRateLimiter } from "./middleware/biRateLimit";
 import { enforceBIPrefix } from "./middleware/biIsolation";
 import biApplicationRoutes from "./routes/biApplicationRoutes";
 import biPublicApplicationRoutes from "./routes/biPublicApplicationRoutes"; // BI_AUDIT_FIX_v58
+// BI_SERVER_BLOCK_v248_APPLICATIONS_FROM_BF_v1
+import biApplicationsFromBfRoutes from "./routes/biApplicationsFromBfRoutes";
 import biAuthRoutes, { biAppApplicantRoutes } from "./routes/biAuthRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
@@ -215,6 +217,9 @@ app.use("/api/v1", biCors, requireAuth, biScoreRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biRoutes);
 // BI_AUDIT_FIX_v58 — public PGI flow (no auth). Must be mounted BEFORE
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biPublicApplicationRoutes);
+// BI_SERVER_BLOCK_v248_APPLICATIONS_FROM_BF_v1 — service-JWT-authed BF→BI handoff.
+// Mounted alongside the public flow so it gets the same CORS + rate-limit guards.
+app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biApplicationsFromBfRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biApplicationRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biEventsRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biAppApplicantRoutes);
