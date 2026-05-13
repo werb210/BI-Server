@@ -319,21 +319,22 @@ router.post("/lender/api-keys/request-live", authLender, lenderRateLimit, /* BI_
 });
 
 router.get("/lender/applications/mine", authLender, async (req: any, res) => {
+  // BI_SERVER_BLOCK_v258_APPLICATION_SCHEMA_FIX_v1
+  // bi_applications has no company_name column; it's normalized into
+  // bi_companies via company_id. LEFT JOIN so applications without
+  // a linked company still appear.
   const r = await pool.query(
-    `SELECT id, public_id, application_code, status,
-              business_name, company_name, guarantor_name,
-              loan_amount, pgi_limit, annual_premium,
-              pgi_application_id, score_decision,
-              carrier_received_at, carrier_last_event, carrier_last_event_at,
-              is_demo,
-              created_at, updated_at
-       FROM bi_applications
-       -- BI_SERVER_BLOCK_v206_LENDER_PIPELINE_COLUMN_FIX_v1 - column is created_by_lender_id per FK constraint.
-       -- BI_SERVER_BLOCK_v223_LENDER_CARRIER_FORWARDING_v1 - surface application_code + pgi_application_id + company_name.
-       -- BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1 - surface carrier_received_at + carrier_last_event(_at).
-       -- BI_SERVER_BLOCK_v244_LIVE_TEST_FIXES_v1 - drop core_inputs from pipeline SELECT; not needed for cards, and the migration adds it idempotently anyway.
-       WHERE created_by_lender_id = $1
-       ORDER BY created_at DESC
+    `SELECT a.id, a.public_id, a.application_code, a.status,
+            a.business_name, c.legal_name AS company_name, a.guarantor_name,
+            a.loan_amount, a.pgi_limit, a.annual_premium,
+            a.pgi_application_id, a.score_decision,
+            a.carrier_received_at, a.carrier_last_event, a.carrier_last_event_at,
+            a.is_demo,
+            a.created_at, a.updated_at
+       FROM bi_applications a
+       LEFT JOIN bi_companies c ON c.id = a.company_id
+       WHERE a.created_by_lender_id = $1
+       ORDER BY a.created_at DESC
        LIMIT 500`,
     [req.lenderId],
   );

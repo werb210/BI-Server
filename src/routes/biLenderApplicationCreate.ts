@@ -42,7 +42,31 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
   } catch {
     // Non-fatal: row still saved without lender_name; staff can fix in BI silo.
   }
-  const result = await pool.query(`INSERT INTO bi_applications (entity_type, status, source, lender_id, created_by_lender_id, created_by_lender_user_id, application_code, company_name, guarantor_name, guarantor_phone, guarantor_email, lender_name, is_demo, core_inputs, consents, lender_notes, created_by_actor, created_at, updated_at) VALUES ('applicant', 'new_application', 'lender', $1, $1, $12, $2, $3, $4, $5, $6, $10, $11, $7::jsonb, $8::jsonb, $9, 'lender', NOW(), NOW()) RETURNING id, application_code` /* BI_SERVER_BLOCK_v245_LIVE_TEST_FIXES_PT2_v1 */, [lenderId, applicationCode, b.company_name, b.guarantor?.name, b.guarantor?.phone, b.guarantor?.email || null, JSON.stringify(coreInputs), JSON.stringify({ data_use: true, credit_pull: true, info_accurate: true, source: "lender_attestation" }), b.lender_notes || null, lenderCompanyName, lenderIsDemo, lenderUserId]);
+  // BI_SERVER_BLOCK_v258_APPLICATION_SCHEMA_FIX_v1
+  // Find-or-create the applicant company first, then link via company_id.
+  let companyId: string | null = null;
+  if (b.company_name && String(b.company_name).trim().length > 0) {
+    const found = await pool.query<{ id: string }>(
+      `SELECT id FROM bi_companies
+        WHERE lower(legal_name) = lower($1) AND kind = 'applicant'
+        ORDER BY created_at ASC
+        LIMIT 1`,
+      [String(b.company_name).trim()],
+    );
+    if (found.rows[0]) {
+      companyId = found.rows[0].id;
+    } else {
+      const created = await pool.query<{ id: string }>(
+        `INSERT INTO bi_companies (legal_name, kind)
+         VALUES ($1, 'applicant')
+         RETURNING id`,
+        [String(b.company_name).trim()],
+      );
+      companyId = created.rows[0].id;
+    }
+  }
+
+  const result = await pool.query(`INSERT INTO bi_applications (entity_type, status, source, lender_id, created_by_lender_id, created_by_lender_user_id, application_code, company_id, guarantor_name, guarantor_phone, guarantor_email, lender_name, is_demo, core_inputs, consents, lender_notes, created_by_actor, created_at, updated_at) VALUES ('applicant', 'new_application', 'lender', $1, $1, $12, $2, $3, $4, $5, $6, $10, $11, $7::jsonb, $8::jsonb, $9, 'lender', NOW(), NOW()) RETURNING id, application_code` /* BI_SERVER_BLOCK_v245_LIVE_TEST_FIXES_PT2_v1 */, [lenderId, applicationCode, companyId, b.guarantor?.name, b.guarantor?.phone, b.guarantor?.email || null, JSON.stringify(coreInputs), JSON.stringify({ data_use: true, credit_pull: true, info_accurate: true, source: "lender_attestation" }), b.lender_notes || null, lenderCompanyName, lenderIsDemo, lenderUserId]);
   const row = result.rows[0]; const appId: string = row.id; const code: string = row.application_code;
   // BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1
 // BI_SERVER_BLOCK_v226_DEMO_SANDBOX_v1 — every outbound carrier call is captured.

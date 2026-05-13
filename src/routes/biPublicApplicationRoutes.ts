@@ -203,6 +203,8 @@ router.patch("/applications/:publicId", async (req, res) => {
     business_name: "business_name",
     business_address: "business_address",
     business_website: "business_website",
+    // BI_SERVER_BLOCK_v258_APPLICATION_SCHEMA_FIX_v1 — entity_type CHECK
+    // constraint dropped in the migration; 'applicant' now accepted.
     entity_type: "entity_type",
     business_number: "business_number",
     naics_code: "naics_code",
@@ -240,6 +242,32 @@ router.patch("/applications/:publicId", async (req, res) => {
     consents: "consents",
   };
 
+  // BI_SERVER_BLOCK_v258_APPLICATION_SCHEMA_FIX_v1
+  // Auto-create a bi_companies row tagged kind='lender' so the lender
+  // appears in BI CRM Companies the moment the application is patched.
+  let lenderCompanyId: string | null = null;
+  const lenderName = typeof b.lender_name === 'string' ? b.lender_name.trim() : '';
+  if (lenderName.length > 0) {
+    const found = await pool.query<{ id: string }>(
+      `SELECT id FROM bi_companies
+        WHERE lower(legal_name) = lower($1) AND kind = 'lender'
+        ORDER BY created_at ASC
+        LIMIT 1`,
+      [lenderName],
+    );
+    if (found.rows[0]) {
+      lenderCompanyId = found.rows[0].id;
+    } else {
+      const created = await pool.query<{ id: string }>(
+        `INSERT INTO bi_companies (legal_name, kind)
+         VALUES ($1, 'lender')
+         RETURNING id`,
+        [lenderName],
+      );
+      lenderCompanyId = created.rows[0].id;
+    }
+  }
+
   const sets: string[] = [];
   const vals: any[] = [];
   let i = 1;
@@ -250,6 +278,8 @@ router.patch("/applications/:publicId", async (req, res) => {
     }
   }
   if (!sets.length) return res.json({ ok: true, no_op: true });
+  sets.push(`lender_company_id = $${i++}`);
+  vals.push(lenderCompanyId);
   vals.push(r.rows[0].id);
   await pool.query(`UPDATE bi_applications SET ${sets.join(", ")}, updated_at=NOW() WHERE id=$${i}`, vals);
   return res.json({ ok: true });
