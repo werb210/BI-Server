@@ -245,6 +245,7 @@ app.use("/api/v1/bi/crm", requireAuth, biCrmRoutes);
 // BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — outreach endpoints under /api/v1/bi/crm/outreach/*.
 // Router has its own requireAuth so we mount at /api/v1/bi to get clean internal paths.
 app.use("/api/v1/bi", biOutreachCrmRoutes);
+
 app.use("/api/v1/bi/referrers", requireAuth, biReferrerRoutes);
 app.use("/api/v1/bi", requireAuth, biLenderRoutes);
 app.use("/api/v1/bi/reports", requireAuth, biReportRoutes);
