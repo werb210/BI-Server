@@ -333,6 +333,241 @@ router.get("/crm/referrers", async (_req, res) => {
   ok(res, result.rows);
 });
 
+// BI_SERVER_BLOCK_v256_CRM_COMPANIES_v1
+// Companies list with search + sort + pagination. Same shape as
+// v254 contacts list. owner_id is left as a placeholder — bi_companies
+// doesn't have an owner column today; if marketing wants per-company
+// staff ownership it lands as a one-line column add later.
+const COMPANIES_SORT_COLS: Record<string, string> = {
+  name: "legal_name",
+  legal_name: "legal_name",
+  industry: "industry",
+  created_at: "created_at",
+};
+
+router.get("/crm/companies", async (req, res) => {
+  const search =
+    typeof req.query.q === "string"
+      ? req.query.q.trim()
+      : typeof req.query.search === "string"
+        ? req.query.search.trim()
+        : "";
+  const industry =
+    typeof req.query.industry === "string" ? req.query.industry.trim() : "";
+  const page = Math.max(Number(req.query.page) || 1, 1);
+  const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 200, 1), 500);
+  const offset = (page - 1) * pageSize;
+
+  const rawSort = typeof req.query.sort === "string" ? req.query.sort : "";
+  const [sortColRaw, sortDirRaw] = rawSort.split(":");
+  const sortCol = COMPANIES_SORT_COLS[sortColRaw] ?? "created_at";
+  const sortDir =
+    sortDirRaw && sortDirRaw.toLowerCase() === "asc" ? "ASC" : "DESC";
+
+  const where: string[] = [];
+  const params: unknown[] = [];
+  let i = 1;
+  if (search) {
+    where.push(
+      `(legal_name ILIKE $${i} OR operating_name ILIKE $${i} OR business_number ILIKE $${i})`,
+    );
+    params.push(`%${search}%`);
+    i++;
+  }
+  if (industry) {
+    where.push(`industry = $${i++}`);
+    params.push(industry);
+  }
+
+  const sql = `
+    SELECT id,
+           legal_name,
+           operating_name,
+           business_number,
+           address_line1,
+           city,
+           province,
+           postal_code,
+           industry,
+           created_at,
+           (SELECT COUNT(*)::int FROM bi_contacts c WHERE c.company_id = bi_companies.id) AS contact_count
+      FROM bi_companies
+     ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+     ORDER BY ${sortCol} ${sortDir}
+     LIMIT ${pageSize}
+     OFFSET ${offset}
+  `;
+  try {
+    const r = await pool.query(sql, params);
+    ok(res, r.rows);
+  } catch (err: any) {
+    logger.error({ err }, "bi_crm_companies_list_failed");
+    return res.status(500).json({ error: "list_failed" });
+  }
+});
+
+// BI_SERVER_BLOCK_v256_CRM_COMPANIES_v1
+// Detail endpoint with three rollups in one round trip: the
+// company row itself, contacts at that company, and applications
+// where the company is the applicant. application_count and
+// contact_count badges drive the portal header.
+router.get("/crm/companies/:id", async (req, res) => {
+  const id = typeof req.params.id === "string" ? req.params.id : "";
+  if (!id) return res.status(400).json({ error: "id_required" });
+  try {
+    const co = await pool.query(
+      `SELECT id, legal_name, operating_name, business_number,
+              address_line1, city, province, postal_code, industry,
+              created_at,
+              (SELECT COUNT(*)::int FROM bi_contacts c WHERE c.company_id = bi_companies.id) AS contact_count,
+              (SELECT COUNT(*)::int FROM bi_applications a WHERE a.company_id = bi_companies.id) AS application_count
+         FROM bi_companies
+        WHERE id = $1
+        LIMIT 1`,
+      [id],
+    );
+    if (!co.rows[0]) return res.status(404).json({ error: "not_found" });
+
+    const contacts = await pool.query(
+      `SELECT id, full_name, email, phone_e164, title, outreach_status, created_at
+         FROM bi_contacts
+        WHERE company_id = $1
+        ORDER BY full_name ASC
+        LIMIT 200`,
+      [id],
+    );
+
+    // bi_applications may exist in multiple shapes across schemas;
+    // select the minimal columns the portal needs.
+    let applications: Array<Record<string, unknown>> = [];
+    try {
+      const apps = await pool.query(
+        `SELECT id, application_code, stage, status, created_at
+           FROM bi_applications
+          WHERE company_id = $1
+          ORDER BY created_at DESC
+          LIMIT 200`,
+        [id],
+      );
+      applications = apps.rows;
+    } catch {
+      // Older schemas may not have company_id on bi_applications.
+      applications = [];
+    }
+
+    return ok(res, {
+      company: co.rows[0],
+      contacts: contacts.rows,
+      applications,
+    });
+  } catch (err: any) {
+    logger.error({ err, id }, "bi_crm_company_get_failed");
+    return res.status(500).json({ error: "get_failed" });
+  }
+});
+
+// BI_SERVER_BLOCK_v256_CRM_COMPANIES_v1
+// POST /crm/companies — create a new company. legal_name required;
+// everything else optional. Returns the new row id.
+router.post("/crm/companies", async (req, res) => {
+  const b: Record<string, unknown> = (req.body ?? {}) as Record<string, unknown>;
+  const legalName =
+    typeof b.legal_name === "string" ? b.legal_name.trim().slice(0, 200) : "";
+  if (!legalName) return res.status(400).json({ error: "legal_name_required" });
+
+  const operatingName =
+    b.operating_name === null ? null :
+    typeof b.operating_name === "string" ? b.operating_name.trim().slice(0, 200) || null : null;
+  const businessNumber =
+    b.business_number === null ? null :
+    typeof b.business_number === "string" ? b.business_number.trim().slice(0, 50) || null : null;
+  const addressLine1 =
+    b.address_line1 === null ? null :
+    typeof b.address_line1 === "string" ? b.address_line1.trim().slice(0, 200) || null : null;
+  const city =
+    b.city === null ? null :
+    typeof b.city === "string" ? b.city.trim().slice(0, 100) || null : null;
+  const province =
+    b.province === null ? null :
+    typeof b.province === "string" ? b.province.trim().slice(0, 50) || null : null;
+  const postalCode =
+    b.postal_code === null ? null :
+    typeof b.postal_code === "string" ? b.postal_code.trim().slice(0, 20) || null : null;
+  const industry =
+    b.industry === null ? null :
+    typeof b.industry === "string" ? b.industry.trim().slice(0, 200) || null : null;
+
+  try {
+    const r = await pool.query<{ id: string }>(
+      `INSERT INTO bi_companies
+         (legal_name, operating_name, business_number, address_line1, city, province, postal_code, industry)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id`,
+      [legalName, operatingName, businessNumber, addressLine1, city, province, postalCode, industry],
+    );
+    return res.status(201).json({ ok: true, id: r.rows[0].id });
+  } catch (err: any) {
+    logger.error({ err }, "bi_crm_company_create_failed");
+    return res.status(500).json({ error: "create_failed" });
+  }
+});
+
+// BI_SERVER_BLOCK_v256_CRM_COMPANIES_v1
+// PATCH /crm/companies/:id — general-purpose company update.
+// Send `null` to clear a field. Unknown fields ignored. Empty
+// body returns no_op.
+function v256S(v: unknown, max = 200): string | null {
+  if (v === null) return null;
+  if (typeof v !== "string") return null;
+  const t = v.trim().slice(0, max);
+  return t.length ? t : null;
+}
+
+router.patch("/crm/companies/:id", async (req, res) => {
+  const id = typeof req.params.id === "string" ? req.params.id : "";
+  if (!id) return res.status(400).json({ error: "id_required" });
+  const b: Record<string, unknown> = (req.body ?? {}) as Record<string, unknown>;
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  let i = 1;
+  const cols: Array<[string, number]> = [
+    ["legal_name", 200],
+    ["operating_name", 200],
+    ["business_number", 50],
+    ["address_line1", 200],
+    ["city", 100],
+    ["province", 50],
+    ["postal_code", 20],
+    ["industry", 200],
+  ];
+  for (const [col, max] of cols) {
+    if (b[col] === undefined) continue;
+    const val = b[col] === null ? null : v256S(b[col], max);
+    if (col === "legal_name" && val === null) {
+      return res.status(400).json({ error: "legal_name_required" });
+    }
+    sets.push(`${col} = $${i++}`);
+    params.push(val);
+  }
+
+  if (sets.length === 0) {
+    return res.json({ ok: true, no_op: true });
+  }
+  params.push(id);
+  try {
+    const r = await pool.query(
+      `UPDATE bi_companies SET ${sets.join(", ")} WHERE id = $${i} RETURNING id`,
+      params,
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
+    return res.json({ ok: true });
+  } catch (err: any) {
+    logger.error({ err, id }, "bi_crm_company_patch_failed");
+    return res.status(500).json({ error: "patch_failed" });
+  }
+});
+
 /* =========================
    LENDERS
 ========================= */
