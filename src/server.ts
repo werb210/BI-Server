@@ -28,6 +28,8 @@ import biOutreachCrmRoutes from "./routes/biOutreachCrmRoutes";
 import biAuthRoutes, { biAppApplicantRoutes } from "./routes/biAuthRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
+// BI_SERVER_BLOCK_v257_STAFF_DIRECTORY_v1
+import biStaffRoutes from "./routes/biStaffRoutes";
 import biDocumentRoutes from "./routes/biDocumentRoutes";
 import biEventsRoutes from "./routes/biEvents";
 import biLenderRoutes from "./routes/biLenderRoutes";
@@ -242,6 +244,8 @@ app.use("/api/v1/bi", requireAuth, biDocumentRoutes);
 app.use("/api/v1/bi/documents", requireAuth, biDocumentRoutes);
 app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
 app.use("/api/v1/bi/crm", requireAuth, biCrmRoutes);
+// BI_SERVER_BLOCK_v257_STAFF_DIRECTORY_v1
+app.use("/api/v1/bi/staff", requireAuth, biStaffRoutes);
 // BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — outreach endpoints under /api/v1/bi/crm/outreach/*.
 // Router has its own requireAuth so we mount at /api/v1/bi to get clean internal paths.
 app.use("/api/v1/bi", biOutreachCrmRoutes);
