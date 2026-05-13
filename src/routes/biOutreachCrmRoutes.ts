@@ -4,12 +4,24 @@
 // Auth: requireAuth (staff JWT). All writes capture req.user.staffUserId
 // as the actor so the activity timeline shows who did what.
 import express, { type Request, type Response } from "express";
+import multer from "multer";
+import * as XLSX from "xlsx";
 import { pool } from "../db";
 import { requireAuth } from "../platform/auth";
 import { logger } from "../platform/logger";
+import { sendOutreachSms } from "../services/smsService";
 
 const router = express.Router();
 router.use(requireAuth);
+
+// BI_SERVER_BLOCK_v252_OUTREACH_IMPORT_AND_INVITE_v1
+// 10 MB cap is plenty for typical outreach lists (tens of
+// thousands of rows compress well into XLSX). Memory storage
+// because we parse and discard inline.
+const outreachUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 const ALLOWED_STATUS = new Set([
   "cold",
@@ -320,5 +332,294 @@ router.put("/crm/outreach/me/profile", async (req: Request, res: Response) => {
     return res.status(500).json({ ok: false, error: "profile_put_failed" });
   }
 });
+
+// BI_SERVER_BLOCK_v252_OUTREACH_IMPORT_AND_INVITE_v1
+// POST /crm/outreach/import — Excel/CSV upload.
+// Multipart form field name is "file". The XLSX lib auto-detects
+// CSV vs XLSX from the buffer. Accepted columns (case-insensitive,
+// any underscore/space/dash flavor): full_name (required),
+// company_name, email, phone_e164 (alias: phone), title (alias:
+// role), tags (comma-separated), notes.
+function normalizeHeader(h: unknown): string {
+  return String(h ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\-]+/g, "_");
+}
+const HEADER_ALIASES: Record<string, string> = {
+  full_name: "full_name",
+  name: "full_name",
+  contact_name: "full_name",
+  company: "company_name",
+  company_name: "company_name",
+  organization: "company_name",
+  email: "email",
+  email_address: "email",
+  phone: "phone_e164",
+  phone_e164: "phone_e164",
+  mobile: "phone_e164",
+  title: "title",
+  role: "title",
+  job_title: "title",
+  tags: "tags",
+  notes: "notes",
+  note: "notes",
+};
+
+function normalizePhone(v: unknown): string | null {
+  if (typeof v !== "string" && typeof v !== "number") return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const digits = s.replace(/[^\d+]/g, "");
+  if (/^\+\d{8,15}$/.test(digits)) return digits;
+  if (/^\d{10}$/.test(digits)) return `+1${digits}`;
+  if (/^1\d{10}$/.test(digits)) return `+${digits}`;
+  return null;
+}
+
+router.post(
+  "/crm/outreach/import",
+  outreachUpload.single("file"),
+  async (req: Request, res: Response) => {
+    const file = (req as any).file as { buffer: Buffer; originalname: string } | undefined;
+    if (!file) return res.status(400).json({ ok: false, error: "file_required" });
+
+    let rows: Array<Record<string, unknown>> = [];
+    try {
+      const wb = XLSX.read(file.buffer, { type: "buffer" });
+      const sheetName = wb.SheetNames[0];
+      if (!sheetName) {
+        return res.status(400).json({ ok: false, error: "no_sheets_in_file" });
+      }
+      rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: null, raw: false });
+    } catch (e: any) {
+      logger.error({ err: e, file: file.originalname }, "outreach_import_parse_failed");
+      return res.status(400).json({ ok: false, error: "parse_failed", detail: e?.message });
+    }
+
+    if (!rows.length) {
+      return res.status(400).json({ ok: false, error: "no_rows" });
+    }
+
+    const actor = ((req as any).user ?? {}) as { staffUserId?: string };
+    const ownerId = typeof actor.staffUserId === "string" ? actor.staffUserId : null;
+
+    const results: Array<{ row: number; ok: boolean; id?: string; error?: string }> = [];
+    let imported = 0;
+    let skipped = 0;
+
+    for (let i = 0; i < rows.length; i++) {
+      const raw = rows[i] ?? {};
+      const norm: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(raw)) {
+        const alias = HEADER_ALIASES[normalizeHeader(k)];
+        if (alias) norm[alias] = v;
+      }
+      const fullName =
+        typeof norm.full_name === "string" ? norm.full_name.trim() : "";
+      if (!fullName) {
+        results.push({ row: i + 2, ok: false, error: "missing_full_name" });
+        skipped++;
+        continue;
+      }
+      const email =
+        typeof norm.email === "string" && norm.email.trim().length
+          ? norm.email.trim()
+          : null;
+      const phone = normalizePhone(norm.phone_e164);
+      const companyName =
+        typeof norm.company_name === "string" && norm.company_name.trim().length
+          ? norm.company_name.trim()
+          : null;
+      const title =
+        typeof norm.title === "string" && norm.title.trim().length
+          ? norm.title.trim()
+          : null;
+      const notes =
+        typeof norm.notes === "string" && norm.notes.trim().length
+          ? norm.notes.trim().slice(0, 8000)
+          : null;
+      const tagsRaw = typeof norm.tags === "string" ? norm.tags : "";
+      const tags = tagsRaw
+        .split(",")
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+
+      try {
+        let companyId: string | null = null;
+        if (companyName) {
+          const found = await pool.query<{ id: string }>(
+            `SELECT id FROM bi_companies WHERE lower(legal_name) = lower($1) LIMIT 1`,
+            [companyName],
+          );
+          if (found.rows[0]) {
+            companyId = found.rows[0].id;
+          } else {
+            const created = await pool.query<{ id: string }>(
+              `INSERT INTO bi_companies (legal_name) VALUES ($1) RETURNING id`,
+              [companyName],
+            );
+            companyId = created.rows[0].id;
+          }
+        }
+
+        const ins = await pool.query<{ id: string }>(
+          `INSERT INTO bi_contacts
+             (company_id, full_name, email, phone_e164, tags,
+              title, notes, outreach_status, outreach_owner_id, outreach_updated_at)
+           VALUES ($1, $2, $3, $4, $5::text[], $6, $7, 'cold', $8, NOW())
+           RETURNING id`,
+          [companyId, fullName, email, phone, tags, title, notes, ownerId],
+        );
+        const contactId = ins.rows[0].id;
+
+        await pool.query(
+          `INSERT INTO bi_contact_activity
+             (id, contact_id, actor_id, event_type, body, meta)
+           VALUES (gen_random_uuid(), $1, $2, 'import', $3, $4::jsonb)`,
+          [
+            contactId,
+            ownerId,
+            `Imported from ${file.originalname}`,
+            JSON.stringify({ row: i + 2, source: file.originalname }),
+          ],
+        );
+
+        results.push({ row: i + 2, ok: true, id: contactId });
+        imported++;
+      } catch (e: any) {
+        logger.error({ err: e, row: i + 2 }, "outreach_import_row_failed");
+        results.push({ row: i + 2, ok: false, error: e?.message ?? "insert_failed" });
+        skipped++;
+      }
+    }
+
+    return res.json({
+      ok: true,
+      imported,
+      skipped,
+      total: rows.length,
+      results,
+    });
+  },
+);
+
+// BI_SERVER_BLOCK_v252_OUTREACH_IMPORT_AND_INVITE_v1
+// POST /crm/outreach/contacts/:id/demo-invite — send demo invite SMS.
+// Body: { custom_message?: string }
+// Reads the staff member's bookings_url from bi_staff_profile and
+// SMSes it to the contact's phone_e164. Logs 'sms' to the activity
+// timeline. Status auto-bumps to 'attempting' if currently null/cold,
+// and to 'demo_booked' would be premature here (the contact hasn't
+// confirmed yet), so we stop at 'attempting'.
+router.post(
+  "/crm/outreach/contacts/:id/demo-invite",
+  async (req: Request, res: Response) => {
+    const id = typeof req.params.id === "string" ? req.params.id : "";
+    if (!id) return res.status(400).json({ ok: false, error: "id_required" });
+
+    const actor = ((req as any).user ?? {}) as { staffUserId?: string };
+    const staffId = typeof actor.staffUserId === "string" ? actor.staffUserId : null;
+    if (!staffId) return res.status(400).json({ ok: false, error: "no_staff_user_id" });
+
+    // Look up staff bookings_url + contact phone in one round trip.
+    let bookingsUrl: string | null = null;
+    let contactPhone: string | null = null;
+    let contactName: string | null = null;
+    let contactStatus: string | null = null;
+    try {
+      const sp = await pool.query<{ bookings_url: string | null }>(
+        `SELECT bookings_url FROM bi_staff_profile WHERE staff_user_id = $1 LIMIT 1`,
+        [staffId],
+      );
+      bookingsUrl = sp.rows[0]?.bookings_url ?? null;
+
+      const cr = await pool.query<{
+        phone_e164: string | null;
+        full_name: string;
+        outreach_status: string | null;
+      }>(
+        `SELECT phone_e164, full_name, outreach_status FROM bi_contacts WHERE id = $1 LIMIT 1`,
+        [id],
+      );
+      if (!cr.rows[0]) return res.status(404).json({ ok: false, error: "contact_not_found" });
+      contactPhone = cr.rows[0].phone_e164;
+      contactName = cr.rows[0].full_name;
+      contactStatus = cr.rows[0].outreach_status;
+    } catch (e: any) {
+      logger.error({ err: e, id }, "outreach_invite_lookup_failed");
+      return res.status(500).json({ ok: false, error: "lookup_failed" });
+    }
+
+    if (!bookingsUrl) {
+      return res.status(400).json({ ok: false, error: "bookings_url_missing" });
+    }
+    if (!contactPhone) {
+      return res.status(400).json({ ok: false, error: "contact_has_no_phone" });
+    }
+
+    const customMessage =
+      typeof req.body?.custom_message === "string"
+        ? req.body.custom_message.trim().slice(0, 400)
+        : "";
+    const firstName = (contactName ?? "").split(/\s+/)[0] || "there";
+    const body = customMessage.length
+      ? `${customMessage}
+
+Book a time: ${bookingsUrl}`
+      : `Hi ${firstName}, this is Boreal Insurance. Pick a 30-minute slot that works for you: ${bookingsUrl}`;
+
+    let sid: string | null = null;
+    let smsOk = false;
+    let smsError: string | null = null;
+    try {
+      const r = await sendOutreachSms(contactPhone, body);
+      sid = r.sid;
+      smsOk = true;
+    } catch (e: any) {
+      smsError = e?.message ?? "sms_failed";
+      logger.error({ err: e, to: contactPhone }, "outreach_invite_sms_failed");
+    }
+
+    // Log the attempt regardless of outcome.
+    try {
+      await pool.query(
+        `INSERT INTO bi_contact_activity
+           (id, contact_id, actor_id, event_type, outcome, body, meta)
+         VALUES (gen_random_uuid(), $1, $2, 'sms', $3, $4, $5::jsonb)`,
+        [
+          id,
+          staffId,
+          smsOk ? "sent" : "failed",
+          body.slice(0, 1000),
+          JSON.stringify({ sid, kind: "demo_invite", error: smsError }),
+        ],
+      );
+    } catch (e: any) {
+      logger.error({ err: e, id }, "outreach_invite_log_failed");
+    }
+
+    if (!smsOk) {
+      return res.status(502).json({ ok: false, error: "sms_failed", detail: smsError });
+    }
+
+    // Auto-bump status if appropriate.
+    if (contactStatus == null || contactStatus === "cold") {
+      try {
+        await pool.query(
+          `UPDATE bi_contacts
+              SET outreach_status = 'attempting',
+                  outreach_updated_at = NOW()
+            WHERE id = $1`,
+          [id],
+        );
+      } catch (e: any) {
+        logger.error({ err: e, id }, "outreach_invite_status_bump_failed");
+      }
+    }
+
+    return res.json({ ok: true, sid, body });
+  },
+);
 
 export default router;
