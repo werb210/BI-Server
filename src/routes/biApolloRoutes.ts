@@ -1,13 +1,216 @@
-// BI_APOLLO_RUN_v55_PHASE3 — campaign-readiness routes.
-import { Router } from "express";
+// BI_SERVER_BLOCK_v253_APOLLO_PHASE1_SCAFFOLD_v1
+// BI Apollo routes. All paths nest under /api/v1/bi/apollo/*.
+// Auth: requireAuth (staff JWT). Mock-mode results are returned
+// with mock=true so the portal can clearly badge them.
+import express, { type Request, type Response } from "express";
 import { pool } from "../db";
-import { ok, badRequest } from "../utils/apiResponse";
-import { enrichContact } from "../integrations/apollo/apolloEnrichOnDemand";
-import { searchPeople } from "../integrations/apollo/apolloClient";
-import { enrollContactsInSequence, ICP_SEGMENTS, type IcpSegment } from "../integrations/apollo/apolloSequenceService";
+import { requireAuth } from "../platform/auth";
 import { logger } from "../platform/logger";
-const router = Router(); const UUID=/^[0-9a-f-]{36}$/i;
-router.post('/contacts/:id/enrich', async (req,res)=>{ const id=req.params.id; if(!UUID.test(id)) return badRequest(res,'invalid contact id'); try { return ok(res, await enrichContact(id, {force:req.query.force==='1'})); } catch(err){ logger.error({err,id},'enrich failed'); return badRequest(res,'enrichment failed'); } });
-router.post('/apollo/search-people', async (req,res)=>{ try { return ok(res, await searchPeople(req.body??{})); } catch(err){ logger.error({err},'people search failed'); return badRequest(res,'search failed'); } });
-router.post('/apollo/sequences/:apolloSequenceId/enroll', async (req,res)=>{ const sid=req.params.apolloSequenceId; const {contact_ids, icp_segment, email_account_id}=(req.body??{}) as {contact_ids:string[], icp_segment?:IcpSegment, email_account_id?:string}; if(!Array.isArray(contact_ids)||!contact_ids.length) return badRequest(res,'contact_ids required'); if(icp_segment && !ICP_SEGMENTS.includes(icp_segment)) return badRequest(res,'invalid icp_segment'); try { return ok(res, await enrollContactsInSequence({sequenceId:sid, contactIds:contact_ids, icpSegment:icp_segment, emailAccountId:email_account_id})); } catch(err){ logger.error({err,sid}, 'enroll failed'); return badRequest(res,'enroll failed'); } });
+import {
+  apolloIsLive,
+  enrichPerson,
+  listSequences,
+  enrollContact,
+  listMailboxes,
+} from "../services/apolloClient";
+
+const router = express.Router();
+router.use(requireAuth);
+
+function s(v: unknown, max = 1000): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim().slice(0, max);
+  return t.length ? t : null;
+}
+
+function actorId(req: Request): string | null {
+  const u = (req as any).user as Record<string, unknown> | undefined;
+  return typeof u?.staffUserId === "string" ? u.staffUserId : null;
+}
+
+// GET /apollo/health — quick is-it-live + mailbox snapshot.
+router.get("/apollo/health", async (_req: Request, res: Response) => {
+  const live = apolloIsLive();
+  try {
+    const mb = await listMailboxes();
+    return res.json({
+      ok: true,
+      live,
+      mock: mb.mock,
+      mailboxes: mb.mailboxes,
+    });
+  } catch (e: any) {
+    logger.error({ err: e }, "apollo_health_failed");
+    return res.status(502).json({ ok: false, error: "apollo_unreachable", live });
+  }
+});
+
+// POST /apollo/enrich/:contact_id
+// Enriches a bi_contact using Apollo person-match. Caches the
+// result into bi_apollo_enrichment (one row per contact).
+router.post("/apollo/enrich/:contact_id", async (req: Request, res: Response) => {
+  const contactId = s(req.params.contact_id);
+  if (!contactId) return res.status(400).json({ ok: false, error: "id_required" });
+  try {
+    const c = await pool.query<{
+      full_name: string;
+      email: string | null;
+      company_id: string | null;
+    }>(
+      `SELECT full_name, email, company_id FROM bi_contacts WHERE id = $1 LIMIT 1`,
+      [contactId],
+    );
+    if (!c.rows[0]) return res.status(404).json({ ok: false, error: "contact_not_found" });
+    let companyName: string | null = null;
+    let companyDomain: string | null = null;
+    if (c.rows[0].company_id) {
+      const co = await pool.query<{ legal_name: string; primary_domain: string | null }>(
+        // primary_domain may not exist on bi_companies in all envs;
+        // COALESCE to NULL via to_jsonb pattern keeps this safe.
+        `SELECT legal_name,
+                NULLIF(NULLIF((to_jsonb(bi_companies)::jsonb)->>'primary_domain', ''), 'null') AS primary_domain
+           FROM bi_companies WHERE id = $1 LIMIT 1`,
+        [c.rows[0].company_id],
+      );
+      companyName = co.rows[0]?.legal_name ?? null;
+      companyDomain = co.rows[0]?.primary_domain ?? null;
+    }
+    const result = await enrichPerson({
+      full_name: c.rows[0].full_name,
+      email: c.rows[0].email,
+      company_name: companyName,
+      company_domain: companyDomain,
+    });
+
+    const p = result.person;
+    if (p) {
+      await pool.query(
+        `INSERT INTO bi_apollo_enrichment
+           (contact_id, apollo_person_id, email, title, linkedin_url,
+            company_name, company_domain, seniority, raw_json, fetched_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW())
+         ON CONFLICT (contact_id) DO UPDATE
+           SET apollo_person_id = EXCLUDED.apollo_person_id,
+               email            = COALESCE(EXCLUDED.email, bi_apollo_enrichment.email),
+               title            = COALESCE(EXCLUDED.title, bi_apollo_enrichment.title),
+               linkedin_url     = COALESCE(EXCLUDED.linkedin_url, bi_apollo_enrichment.linkedin_url),
+               company_name     = COALESCE(EXCLUDED.company_name, bi_apollo_enrichment.company_name),
+               company_domain   = COALESCE(EXCLUDED.company_domain, bi_apollo_enrichment.company_domain),
+               seniority        = COALESCE(EXCLUDED.seniority, bi_apollo_enrichment.seniority),
+               raw_json         = EXCLUDED.raw_json,
+               fetched_at       = NOW()`,
+        [
+          contactId,
+          p.id ?? null,
+          p.email ?? null,
+          p.title ?? null,
+          p.linkedin_url ?? null,
+          p.organization?.name ?? null,
+          p.organization?.primary_domain ?? null,
+          p.seniority ?? null,
+          JSON.stringify(result.raw),
+        ],
+      );
+    }
+
+    return res.json({
+      ok: true,
+      mock: result.mock,
+      person: p,
+    });
+  } catch (e: any) {
+    logger.error({ err: e, contactId }, "apollo_enrich_failed");
+    return res.status(502).json({ ok: false, error: e?.message ?? "enrich_failed" });
+  }
+});
+
+// GET /apollo/sequences — list known sequences and (optionally)
+// sync from Apollo if ?sync=true.
+router.get("/apollo/sequences", async (req: Request, res: Response) => {
+  const sync = String(req.query.sync ?? "") === "true";
+  try {
+    if (sync) {
+      const live = await listSequences();
+      for (const seq of live.sequences) {
+        await pool.query(
+          `INSERT INTO bi_apollo_sequence (apollo_sequence_id, name, is_active, raw_json, updated_at)
+           VALUES ($1, $2, $3, $4::jsonb, NOW())
+           ON CONFLICT (apollo_sequence_id) DO UPDATE
+             SET name = EXCLUDED.name,
+                 is_active = EXCLUDED.is_active,
+                 updated_at = NOW()`,
+          [seq.id, seq.name, seq.active ?? true, JSON.stringify(seq)],
+        );
+      }
+    }
+    const r = await pool.query(
+      `SELECT id, apollo_sequence_id, name, is_active, created_at, updated_at
+         FROM bi_apollo_sequence
+        ORDER BY is_active DESC, name ASC`,
+    );
+    return res.json({ ok: true, sequences: r.rows, live: apolloIsLive() });
+  } catch (e: any) {
+    logger.error({ err: e }, "apollo_sequences_failed");
+    return res.status(502).json({ ok: false, error: "sequences_failed" });
+  }
+});
+
+// POST /apollo/sequences/:id/enroll/:contact_id
+// Adds a bi_contact to an Apollo sequence and writes a row to
+// bi_apollo_enrollment.
+router.post("/apollo/sequences/:id/enroll/:contact_id", async (req: Request, res: Response) => {
+  const sequenceId = s(req.params.id);
+  const contactId = s(req.params.contact_id);
+  if (!sequenceId || !contactId) {
+    return res.status(400).json({ ok: false, error: "ids_required" });
+  }
+  try {
+    const seq = await pool.query<{ apollo_sequence_id: string | null; name: string }>(
+      `SELECT apollo_sequence_id, name FROM bi_apollo_sequence WHERE id = $1 LIMIT 1`,
+      [sequenceId],
+    );
+    if (!seq.rows[0]) return res.status(404).json({ ok: false, error: "sequence_not_found" });
+    const apolloSeqId = seq.rows[0].apollo_sequence_id;
+    if (!apolloSeqId) {
+      return res.status(400).json({ ok: false, error: "sequence_missing_apollo_id" });
+    }
+    const c = await pool.query<{ full_name: string; email: string | null }>(
+      `SELECT full_name, email FROM bi_contacts WHERE id = $1 LIMIT 1`,
+      [contactId],
+    );
+    if (!c.rows[0]) return res.status(404).json({ ok: false, error: "contact_not_found" });
+    if (!c.rows[0].email) {
+      return res.status(400).json({ ok: false, error: "contact_has_no_email" });
+    }
+    const [first, ...rest] = (c.rows[0].full_name ?? "").split(/\s+/);
+    const enroll = await enrollContact({
+      apollo_sequence_id: apolloSeqId,
+      email: c.rows[0].email,
+      first_name: first ?? null,
+      last_name: rest.length ? rest.join(" ") : null,
+    });
+
+    await pool.query(
+      `INSERT INTO bi_apollo_enrollment
+         (contact_id, sequence_id, apollo_contact_id, status, enrolled_by, enrolled_at, raw_json)
+       VALUES ($1, $2, $3, 'active', $4, NOW(), $5::jsonb)
+       ON CONFLICT (contact_id, sequence_id) DO UPDATE
+         SET apollo_contact_id = EXCLUDED.apollo_contact_id,
+             status            = 'active',
+             enrolled_at       = NOW(),
+             raw_json          = EXCLUDED.raw_json`,
+      [contactId, sequenceId, enroll.apollo_contact_id, actorId(req), JSON.stringify(enroll.raw)],
+    );
+
+    return res.json({
+      ok: true,
+      mock: enroll.mock,
+      apollo_contact_id: enroll.apollo_contact_id,
+    });
+  } catch (e: any) {
+    logger.error({ err: e, sequenceId, contactId }, "apollo_enroll_failed");
+    return res.status(502).json({ ok: false, error: e?.message ?? "enroll_failed" });
+  }
+});
+
 export default router;
