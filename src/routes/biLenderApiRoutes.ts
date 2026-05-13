@@ -278,12 +278,24 @@ router.post("/lender/api-keys", authLender, lenderRateLimit, /* BI_SERVER_BLOCK_
   const wire = `${prefix}${crypto.randomBytes(6).toString("hex")}.${crypto.randomBytes(24).toString("hex")}`;
   const hash = crypto.createHash("sha256").update(wire).digest("hex");
   const inserted = await pool.query<{ id: string; created_at: string }>(
-    `INSERT INTO bi_lender_api_keys (lender_id, key_hash, active)
-     VALUES ($1, $2, TRUE)
-     RETURNING id, created_at`,
-    [req.lenderId, hash],
+    `INSERT INTO bi_lender_api_keys (lender_id, key_hash, key_prefix, is_active)
+     VALUES ($1, $2, $3, TRUE)
+     RETURNING id, created_at` /* BI_SERVER_BLOCK_v245_LIVE_TEST_FIXES_PT2_v1 */,
+    [req.lenderId, hash, prefix],
   );
   return res.status(201).json({ id: inserted.rows[0]?.id, created_at: inserted.rows[0]?.created_at, mode, secret: wire });
+});
+
+// BI_SERVER_BLOCK_v245_LIVE_TEST_FIXES_PT2_v1 — GET /lender/api-keys
+router.get("/lender/api-keys", authLender, async (req: any, res) => {
+  const r = await pool.query(
+    `SELECT id, key_prefix, is_active, last_used_at, created_at
+       FROM bi_lender_api_keys
+      WHERE lender_id = $1 AND is_active = TRUE
+      ORDER BY created_at DESC`,
+    [req.lenderId],
+  );
+  res.json({ items: r.rows });
 });
 
 // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 — lender asks staff for live-key approval.

@@ -79,7 +79,7 @@ router.delete("/admin/lenders/:id", async (req, res) => {
 // at rest. Bearer auth on biLenderApiRoutes verifies via key_hash.
 router.get("/admin/lenders/:id/api-keys", async (req, res) => {
   const r = await pool.query(
-    `SELECT id, key_hash, active, last_used_at, created_at
+    `SELECT id, key_hash, key_prefix, is_active, last_used_at, created_at
        FROM bi_lender_api_keys
       WHERE lender_id = $1
       ORDER BY created_at DESC`,
@@ -88,7 +88,7 @@ router.get("/admin/lenders/:id/api-keys", async (req, res) => {
   const items = r.rows.map((row: any) => ({
     id: row.id,
     prefix: typeof row.key_hash === "string" ? row.key_hash.slice(0, 8) : "",
-    active: row.active,
+    is_active: row.is_active,  // BI_SERVER_BLOCK_v245_LIVE_TEST_FIXES_PT2_v1
     last_used_at: row.last_used_at,
     created_at: row.created_at,
   }));
@@ -106,10 +106,10 @@ router.post("/admin/lenders/:id/api-keys", async (req, res) => {
   const hash = crypto.createHash("sha256").update(wire).digest("hex");
 
   const r = await pool.query<{ id: string; created_at: string }>(
-    `INSERT INTO bi_lender_api_keys (lender_id, key_hash, active)
-     VALUES ($1, $2, TRUE)
+    `INSERT INTO bi_lender_api_keys (lender_id, key_hash, key_prefix, is_active)
+     VALUES ($1, $2, $3, TRUE)
      RETURNING id, created_at`,
-    [lenderId, hash]
+    [lenderId, hash, prefix]
   );
   return ok(res, {
     id: r.rows[0]!.id,
