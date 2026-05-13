@@ -314,11 +314,12 @@ router.get("/lender/applications/mine", authLender, async (req: any, res) => {
               pgi_application_id, score_decision,
               carrier_received_at, carrier_last_event, carrier_last_event_at,
               is_demo,
-              core_inputs, created_at, updated_at
+              created_at, updated_at
        FROM bi_applications
        -- BI_SERVER_BLOCK_v206_LENDER_PIPELINE_COLUMN_FIX_v1 - column is created_by_lender_id per FK constraint.
        -- BI_SERVER_BLOCK_v223_LENDER_CARRIER_FORWARDING_v1 - surface application_code + pgi_application_id + company_name.
        -- BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1 - surface carrier_received_at + carrier_last_event(_at).
+       -- BI_SERVER_BLOCK_v244_LIVE_TEST_FIXES_v1 - drop core_inputs from pipeline SELECT; not needed for cards, and the migration adds it idempotently anyway.
        WHERE created_by_lender_id = $1
        ORDER BY created_at DESC
        LIMIT 500`,
