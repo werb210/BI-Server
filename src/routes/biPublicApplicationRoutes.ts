@@ -278,10 +278,18 @@ router.post("/applications/:publicId/submit", async (req, res) => {
     });
   }
 
+  // BI_SERVER_BLOCK_v246_BN_OPTIONAL_SUBMIT_v1
+  // Operator decision (PROJECT_PLAN row 2): business_number is now
+  // optional on the PUBLIC application flow. The CRA BN field stays on
+  // the form (BI-Website v169) but the server no longer rejects
+  // submits that lack it. Carrier (PGI) receives null when BN is
+  // missing; if PGI starts flagging missing-BN apps in volume we
+  // revisit (plan §4 decision). Lender flow is unchanged because
+  // it does not enforce BN server-side today.
   const required = [
     "guarantor_name", "guarantor_email", "guarantor_dob", "guarantor_address",
     "guarantor_phone", "business_name", "business_address", "entity_type",
-    "business_number", "lender_name", "loan_purpose", "loan_funding_date",
+    "lender_name", "loan_purpose", "loan_funding_date",
     "policy_start_date", "bankruptcy_history", "insolvency_history",
     "judgment_history", "personal_judgments", "business_judgments",
     "personally_guaranteeing", "consents",
