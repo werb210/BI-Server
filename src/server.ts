@@ -249,7 +249,12 @@ app.use("/api/v1/bi/applications", requireAuth, biDocumentRoutes);
 app.use("/api/v1/bi", requireAuth, biDocumentRoutes);
 app.use("/api/v1/bi/documents", requireAuth, biDocumentRoutes);
 app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
-app.use("/api/v1/bi/crm", requireAuth, biCrmRoutes);
+// BI_SERVER_BLOCK_v267_CRM_REPORTS_MOUNT_ALIGNMENT_v1
+// biCrmRoutes' internal paths already include /crm/* — mounting at
+// /api/v1/bi/crm doubled the prefix to /api/v1/bi/crm/crm/*.
+// BF-portal calls /api/v1/bi/crm/contacts and friends; mount at /api/v1/bi
+// so the absolute URL matches the router's path.
+app.use("/api/v1/bi", requireAuth, biCrmRoutes);
 // BI_SERVER_BLOCK_v257_STAFF_DIRECTORY_v1
 app.use("/api/v1/bi/staff", requireAuth, biStaffRoutes);
 // BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — outreach endpoints under /api/v1/bi/crm/outreach/*.
@@ -258,7 +263,11 @@ app.use("/api/v1/bi", biOutreachCrmRoutes);
 
 app.use("/api/v1/bi/referrers", requireAuth, biReferrerRoutes);
 app.use("/api/v1/bi", requireAuth, biLenderRoutes);
-app.use("/api/v1/bi/reports", requireAuth, biReportRoutes);
+// BI_SERVER_BLOCK_v267_CRM_REPORTS_MOUNT_ALIGNMENT_v1
+// Same double-prefix pattern: router has /reports/summary, mount used
+// to be /api/v1/bi/reports → effective /api/v1/bi/reports/reports/summary.
+// BF-portal calls /api/v1/bi/reports/summary.
+app.use("/api/v1/bi", requireAuth, biReportRoutes);
 app.use("/api/v1/bi/policies", requireAuth, biPolicyRoutes);
 app.use("/api/v1/bi/payouts", requireAuth, biPayoutRoutes);
 app.use("/api/v1/bi/underwriting", requireAuth, biUnderwritingRoutes);
