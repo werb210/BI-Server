@@ -8,6 +8,8 @@ import { generatePublicId } from "../util/publicId";
 // BI_SERVER_BLOCK_v66_PUBLIC_DOCS_AND_MIGRATION_SAFE_v1
 import multer from "multer";
 import { getStorage } from "../lib/storage";
+// BI_SERVER_BLOCK_v273_PUBLIC_UPLOAD_OCR_v1
+import { runOcrForDocument } from "../services/ocrRunner";
 
 const router = Router();
 const EBITDA_MIN = 50_000;
@@ -416,6 +418,12 @@ router.post("/applications/:publicId/documents", publicDocUpload_v66.array("file
       return res.status(400).json({ error: "invalid_doc_type", doc_type: docType, detail: String((err as Error)?.message ?? err) });
     }
     created.push({ id: inserted.rows[0].id as string, doc_type: docType, filename: file.originalname });
+    // BI_SERVER_BLOCK_v273_PUBLIC_UPLOAD_OCR_v1
+    // Public-flow docs need OCR for the carrier text bundle, same as
+    // staff uploads. Fire-and-forget: by the time staff clicks
+    // Forward to carrier the row's ocr_status has flipped to
+    // 'complete' / 'failed' / 'skipped'.
+    void runOcrForDocument(inserted.rows[0].id as string, file).catch(() => { /* logged inside */ });
     await pool.query(
       `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
        VALUES($1,'applicant','document_uploaded',$2)`,
