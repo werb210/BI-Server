@@ -10,8 +10,12 @@ import { env } from "../platform/env";
 // BI_HARDENING_v44 — switch BI document storage from local disk to the Azure
 // Blob abstraction. Memory storage so multer doesn't write to disk first.
 import { getStorage } from "../lib/storage";
-// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — OCR pipeline.
+// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER / BI_SERVER_BLOCK_v273_PUBLIC_UPLOAD_OCR_v1
+// runOcrForDocument moved into shared service so public-flow uploads
+// can call the same code. extractText import retained because other
+// code paths in this file may still reference it directly.
 import { extractText } from "../services/ocrService";
+import { runOcrForDocument } from "../services/ocrRunner";
 
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
@@ -289,35 +293,9 @@ router.post("/:id/reject", requireAuth, requireStaffOrAdmin, async (req, res) =>
 });
 
 
-// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — background OCR runner.
-async function runOcrForDocument(docId: string, file: Express.Multer.File): Promise<void> {
-  try {
-    await pool.query(`UPDATE bi_documents SET ocr_status='processing' WHERE id=$1`, [docId]);
-    const result = await extractText({
-      buffer: file.buffer,
-      mimeType: file.mimetype,
-      filename: file.originalname,
-    });
-    await pool.query(
-      `UPDATE bi_documents
-       SET ocr_status=$2,
-           extracted_text=$3,
-           ocr_error=$4,
-           ocr_completed_at=NOW()
-       WHERE id=$1`,
-      [docId, result.status, result.extractedText, result.error ?? null]
-    );
-  } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    await pool.query(
-      `UPDATE bi_documents
-       SET ocr_status='failed',
-           ocr_error=$2,
-           ocr_completed_at=NOW()
-       WHERE id=$1`,
-      [docId, error]
-    ).catch(() => { /* swallow nested DB error */ });
-  }
-}
+// BI_SERVER_BLOCK_v273_PUBLIC_UPLOAD_OCR_v1
+// Local runOcrForDocument moved to src/services/ocrRunner.ts.
+// Module-local `pool` here is the legacy per-route Pool — runOcrForDocument
+// uses the shared db pool (see ocrRunner.ts).
 
 export default router;
