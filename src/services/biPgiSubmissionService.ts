@@ -73,11 +73,57 @@ function buildBIApplicationFromRow(row: ApplicationRow): BIApplication {
 }
 
 export async function submitApplicationToPGI(applicationId: string): Promise<{ externalId: string; status: string; alreadySubmitted: boolean }> {
-  // BI_SERVER_BLOCK_v264_ORCHESTRATOR_PGI_APP_ID_v1
-  // Read both pgi_application_id (canonical, webhooks key off it) and
-  // pgi_external_id (legacy, populated by the old version of this
-  // function). Either being non-null means the carrier has already
-  // received this app — short-circuit idempotently.
+  // BI_SERVER_BLOCK_v270_ORCHESTRATOR_RACE_CLAIM_v1
+  // Atomic claim: only one request can flip submission_locked=FALSE→TRUE
+  // for a row that hasn't already been carrier-submitted. Closes the
+  // F-2 race without holding a row lock across the Markel network call.
+  const claim = await pool.query<{ id: string }>(
+    `UPDATE bi_applications
+        SET submission_locked = TRUE,
+            updated_at = NOW()
+      WHERE id = $1
+        AND pgi_application_id IS NULL
+        AND pgi_external_id IS NULL
+        AND submission_locked = FALSE
+    RETURNING id`,
+    [applicationId]
+  );
+
+  if (claim.rowCount === 0) {
+    // Either already submitted, or another request is in flight.
+    // Re-read to distinguish; either way return idempotent (the
+    // route handler treats both the same — the UI reloads and the
+    // button is hidden because submission_locked=TRUE).
+    const re = await pool.query<{ pgi_application_id: string | null; pgi_external_id: string | null; stage: string }>(
+      `SELECT pgi_application_id, pgi_external_id, stage
+         FROM bi_applications WHERE id = $1 LIMIT 1`,
+      [applicationId]
+    );
+    const r = re.rows[0];
+    if (!r) {
+      throw new Error("Application not found");
+    }
+    const existingCarrierId = r.pgi_application_id ?? r.pgi_external_id ?? null;
+    if (existingCarrierId) {
+      const statusResult = await pool.query<{ status: string | null }>(
+        `SELECT data->>'status' AS status
+         FROM pgi_applications
+         WHERE id::text = $1 OR data->>'externalId' = $1
+         LIMIT 1`,
+        [existingCarrierId]
+      );
+      return {
+        externalId: existingCarrierId,
+        status: statusResult.rows[0]?.status || r.stage,
+        alreadySubmitted: true
+      };
+    }
+    // In flight by a concurrent request. UI reloads and sees
+    // submission_locked=TRUE; button stays hidden.
+    return { externalId: "", status: "in_flight", alreadySubmitted: true };
+  }
+
+  // We hold the claim. Hydrate the row for the carrier payload.
   const appResult = await pool.query<ApplicationRow>(
     `SELECT a.id, a.pgi_application_id, a.pgi_external_id, a.stage, a.data, a.applicant_phone_e164, a.lender_name, a.guarantor_name, a.guarantor_email,
             co.legal_name AS company_name,
@@ -93,26 +139,14 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
 
   const app = appResult.rows[0];
   if (!app) {
+    // Vanishingly unlikely (we just held the row in the UPDATE) but
+    // release the claim and bail rather than throw with the row stuck.
+    await pool.query(
+      `UPDATE bi_applications SET submission_locked = FALSE
+         WHERE id = $1 AND pgi_application_id IS NULL AND pgi_external_id IS NULL`,
+      [applicationId]
+    ).catch(() => {});
     throw new Error("Application not found");
-  }
-
-  // BI_SERVER_BLOCK_v264_ORCHESTRATOR_PGI_APP_ID_v1 — idempotency reads
-  // the canonical column first, falls through to legacy.
-  const existingCarrierId = app.pgi_application_id ?? app.pgi_external_id ?? null;
-  if (existingCarrierId) {
-    const statusResult = await pool.query<{ status: string | null }>(
-      `SELECT data->>'status' AS status
-       FROM pgi_applications
-       WHERE id::text = $1 OR data->>'externalId' = $1
-       LIMIT 1`,
-      [existingCarrierId]
-    );
-
-    return {
-      externalId: existingCarrierId,
-      status: statusResult.rows[0]?.status || app.stage,
-      alreadySubmitted: true
-    };
   }
 
   const payload = buildBIApplicationFromRow(app);
@@ -123,17 +157,26 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
     (payload as any).documents_text = documentsText;
   }
 
-  const result = await submitToPGI(payload);
+  // BI_SERVER_BLOCK_v270_ORCHESTRATOR_RACE_CLAIM_v1
+  // Call the carrier OUTSIDE any lock. Submission_locked=TRUE from the
+  // claim already prevents concurrent submits; this is the long step.
+  let result: { externalId: string; status: string };
+  try {
+    result = await submitToPGI(payload);
+  } catch (err) {
+    // Release the claim so the user can retry (only release rows that
+    // never reached the carrier — guards against releasing a row that
+    // partially succeeded between two retries).
+    await pool.query(
+      `UPDATE bi_applications SET submission_locked = FALSE, updated_at = NOW()
+         WHERE id = $1 AND pgi_application_id IS NULL AND pgi_external_id IS NULL`,
+      [applicationId]
+    ).catch(() => {});
+    throw err;
+  }
 
-  // BI_SERVER_BLOCK_v264_ORCHESTRATOR_PGI_APP_ID_v1
-  // Write the canonical pgi_application_id column so pgiWebhookRoutes
-  // can correlate every later event (.received, .quoted, .declined,
-  // .approved, policy.bound, policy.issued). Also write status='submitted'
-  // so the pipeline LIST CASE moves the card from Doc Review to Submitted,
-  // set carrier_received_at so the Forward-to-carrier button is hidden
-  // on next portal load, capture the request/response payloads for audit,
-  // and lock the application against double-submit. pgi_external_id is
-  // kept in sync for any tooling still keyed on it.
+  // submission_locked already TRUE from the claim; v264 success UPDATE
+  // simplified to the carrier columns that the claim didn't touch.
   await pool.query(
     `UPDATE bi_applications
      SET pgi_application_id = $2,
@@ -145,7 +188,6 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
          carrier_submission_response = $4::jsonb,
          carrier_last_event = 'application.submitted',
          carrier_last_event_at = NOW(),
-         submission_locked = TRUE,
          submitted_at = COALESCE(submitted_at, NOW()),
          updated_at = NOW()
      WHERE id = $1`,
