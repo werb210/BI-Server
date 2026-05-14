@@ -40,18 +40,24 @@ router.get("/applications", async (req, res) => {
     `SELECT a.id,
             a.public_id,
             a.application_code,
+            -- BI_SERVER_BLOCK_v265_PIPELINE_CASE_ALIGN_BI_STAGES_v1
+            -- Every value here must exist in BI_STAGES (BF-portal
+            -- biStages.ts): new_application, documents_pending,
+            -- under_review, submitted, quoted, bound, declined, claim.
+            -- Anything else is invisible in the silo Pipeline kanban
+            -- because PipelinePage groups by stage === column.id.
             COALESCE(
               CASE
                 WHEN a.status = 'created'              THEN 'new_application'
-                WHEN a.status = 'in_progress'          THEN 'in_progress'
-                WHEN a.status = 'document_review'      THEN 'document_review'
+                WHEN a.status = 'in_progress'          THEN 'documents_pending'
+                WHEN a.status = 'document_review'      THEN 'under_review'
                 WHEN a.status = 'ready_for_submission' THEN 'submitted'
                 WHEN a.status = 'submitted'            THEN 'submitted'
                 WHEN a.status = 'under_review'         THEN 'under_review'
                 WHEN a.status = 'information_required' THEN 'under_review'
-                WHEN a.status = 'approved'             THEN 'approved'
+                WHEN a.status = 'approved'             THEN 'quoted'
                 WHEN a.status = 'declined'             THEN 'declined'
-                WHEN a.status = 'policy_issued'        THEN 'policy_issued'
+                WHEN a.status = 'policy_issued'        THEN 'bound'
                 ELSE NULL
               END,
               a.stage::text
@@ -168,18 +174,19 @@ router.get("/applications/:id", async (req, res) => {
                  AND purged_at IS NULL
                  AND COALESCE(review_status, 'pending') != 'accepted'
              )) AS all_docs_accepted,
+            -- BI_SERVER_BLOCK_v265_PIPELINE_CASE_ALIGN_BI_STAGES_v1 (detail)
             COALESCE(
               CASE
                 WHEN a.status = 'created'              THEN 'new_application'
-                WHEN a.status = 'in_progress'          THEN 'in_progress'
-                WHEN a.status = 'document_review'      THEN 'document_review'
+                WHEN a.status = 'in_progress'          THEN 'documents_pending'
+                WHEN a.status = 'document_review'      THEN 'under_review'
                 WHEN a.status = 'ready_for_submission' THEN 'submitted'
                 WHEN a.status = 'submitted'            THEN 'submitted'
                 WHEN a.status = 'under_review'         THEN 'under_review'
                 WHEN a.status = 'information_required' THEN 'under_review'
-                WHEN a.status = 'approved'             THEN 'approved'
+                WHEN a.status = 'approved'             THEN 'quoted'
                 WHEN a.status = 'declined'             THEN 'declined'
-                WHEN a.status = 'policy_issued'        THEN 'policy_issued'
+                WHEN a.status = 'policy_issued'        THEN 'bound'
                 ELSE NULL
               END,
               a.stage::text
