@@ -6,7 +6,11 @@ import { getPGIQuote, submitToPGI, type BIApplication } from "../services/pgiAda
 import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
-const useStub = (process.env.USE_PGI_STUB || "false").toLowerCase() === "true";
+// BI_SERVER_BLOCK_v268_CLEANUP_v1 — F-3: align with pgiAdapter.ts which
+// defaults to "true" per brief. Keeping two different defaults in one
+// codebase makes stub vs live behaviour depend on which code path the
+// request flows through.
+const useStub = (process.env.USE_PGI_STUB || "true").toLowerCase() === "true";
 
 const stubStore = new Map<string, { id: string; status: string; payload: BIApplication }>();
 

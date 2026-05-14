@@ -76,7 +76,9 @@ import { apiTimeoutGuard } from "./middleware/apiTimeoutGuard";
 import { apiErrorBoundary } from "./middleware/apiErrorBoundary";
 import biLenderApplicationCreate from "./routes/biLenderApplicationCreate.js";
 import biLenderApplicationDetail from "./routes/biLenderApplicationDetail.js";
-import biLenderAuthRoutes from "./routes/biLenderAuthRoutes.js"; // BI_SERVER_BLOCK_v221_LENDER_OTP_AND_ME_v1
+// BI_SERVER_BLOCK_v268_CLEANUP_v1 — D-3: import removed with the dead mount.
+// The biLenderAuthRoutes module is kept in src/routes/ for now; another
+// cleanup pass can delete the file if no test still imports it.
 
 const app = express();
 // BI_BOOT_FIX_v60 — Azure App Service is behind a reverse proxy. Without
@@ -261,7 +263,10 @@ app.use("/api/v1/bi/staff", requireAuth, biStaffRoutes);
 // Router has its own requireAuth so we mount at /api/v1/bi to get clean internal paths.
 app.use("/api/v1/bi", biOutreachCrmRoutes);
 
-app.use("/api/v1/bi/referrers", requireAuth, biReferrerRoutes);
+// BI_SERVER_BLOCK_v268_CLEANUP_v1 — D-1: removed dead mount. The working
+// mount at /api/v1 (line 221) handles /referrer/otp/* and friends; the
+// mount under /api/v1/bi/referrers produced /api/v1/bi/referrers/referrer/*
+// URLs that no client calls.
 app.use("/api/v1/bi", requireAuth, biLenderRoutes);
 // BI_SERVER_BLOCK_v267_CRM_REPORTS_MOUNT_ALIGNMENT_v1
 // Same double-prefix pattern: router has /reports/summary, mount used
@@ -274,7 +279,9 @@ app.use("/api/v1/bi/underwriting", requireAuth, biUnderwritingRoutes);
 
 // BI_HARDENING_v44 — Quote estimate endpoint is PUBLIC per BI-1 (ruling 7).
 // No requireAuth — the calculator must work for unauthenticated visitors.
-app.use("/api/v1/bi/quote", biQuoteRoutes);
+// BI_SERVER_BLOCK_v268_CLEANUP_v1 — D-2: removed dead mount. The working
+// mount at /api/v1 (line 213) handles /quote/calculate; this second
+// mount produced /api/v1/bi/quote/quote/calculate — dead.
 
 // BI_V1_FINAL_v47 — lender direct API. Admin endpoints inside require staff auth;
 // the public submission endpoint authenticates via X-API-Key header.
@@ -431,5 +438,8 @@ app.use(biLenderApplicationDetail);
 app.use("/api/v1", biCors, biApplicantDocFlowRoutes); // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
 app.use(biSmsInboundRoutes);    // BI_SERVER_BLOCK_v234_OPS_HARDENING_v1
 app.use(biCarrierHealthRoutes); // BI_SERVER_BLOCK_v234_OPS_HARDENING_v1
-app.use(biLenderAuthRoutes); // BI_SERVER_BLOCK_v221_LENDER_OTP_AND_ME_v1
+// BI_SERVER_BLOCK_v268_CLEANUP_v1 — D-3: removed dead mount. All four
+// endpoints (/lender/otp/start, /verify, /me, /applications/mine) are
+// already served by biLenderApiRoutes at /api/v1 (line 219), which wins
+// by mount order. This mount never served a request.
 app.use(apiErrorBoundary);
