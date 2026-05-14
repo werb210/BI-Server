@@ -18,16 +18,58 @@ async function enqueuePurgeIfTerminal(applicationId: string, stage: string) {
 }
 
 
-router.get("/applications", async (_req, res) => {
-  const result = await pool.query(`
-    SELECT a.id, a.stage, a.bankruptcy_flag, a.premium_calc, a.created_by_lender_id,
-           c.full_name AS primary_contact_name
-    FROM bi_applications a
-    LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
-    ORDER BY a.created_at DESC
-  `);
+// BI_SERVER_BLOCK_v261_CARRIER_PATH_E2E_FIX_v2
+// The portal's BIPipeline page (BF_PORTAL_BLOCK_v193_BI_SILO_ALIGN_v1)
+// expects 15+ fields per row plus hide_demo and lender_id filters,
+// and wraps results in {applications: [...]}. The previous handler
+// returned a 6-field bare array, so Pipeline cards rendered with no
+// business name, no guarantor, no loan amount, no carrier chip, and
+// the demo / lender filters were ignored.
+//
+// Adds an effective_stage column on every row (status passed through
+// as stage when set, falling back to the raw stage enum) so the
+// portal's stage badges + filtering work for public apps whose stage
+// column is never written by the public flow.
+router.get("/applications", async (req, res) => {
+  const hideDemo = String(req.query.hide_demo ?? "").toLowerCase() === "true";
+  const lenderId = typeof req.query.lender_id === "string" && req.query.lender_id.trim()
+    ? req.query.lender_id.trim()
+    : null;
 
-  return ok(res, result.rows);
+  const result = await pool.query(
+    `SELECT a.id,
+            a.public_id,
+            a.application_code,
+            COALESCE(a.status, a.stage::text) AS stage,
+            a.source,
+            a.source_type,
+            a.bankruptcy_flag,
+            a.premium_calc,
+            a.created_by_lender_id,
+            a.is_demo,
+            a.business_name,
+            COALESCE(a.company_name, co.legal_name, a.business_name) AS company_name,
+            a.guarantor_name,
+            a.lender_name,
+            a.loan_amount,
+            a.pgi_limit,
+            a.carrier_received_at,
+            a.carrier_last_event,
+            a.carrier_last_event_at,
+            a.pgi_application_id,
+            a.created_at,
+            a.updated_at,
+            c.full_name AS primary_contact_name
+     FROM bi_applications a
+     LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
+     LEFT JOIN bi_companies co ON co.id = a.company_id
+     WHERE ($1::boolean IS FALSE OR COALESCE(a.is_demo, FALSE) = FALSE)
+       AND ($2::uuid IS NULL OR a.created_by_lender_id = $2::uuid)
+     ORDER BY a.created_at DESC`,
+    [hideDemo, lenderId]
+  );
+
+  return ok(res, { applications: result.rows });
 });
 
 router.get("/pipeline", async (req, res) => {
@@ -47,8 +89,13 @@ router.get("/pipeline", async (req, res) => {
   return ok(res, result.rows);
 });
 
-router.patch("/pipeline/:id/stage", async (req, res) => {
-  const { id } = req.params;
+// BI_SERVER_BLOCK_v261_CARRIER_PATH_E2E_FIX_v2
+// The portal's biPipelineAdapter.move POSTs PATCH to
+// /api/v1/bi/applications/:id/stage. The pre-existing handler lived
+// at /pipeline/:id/stage which didn't match — the Kanban drag-and-drop
+// hit 404 silently. Expose both paths via a shared handler.
+async function setStageHandler(req: any, res: any) {
+  const id = req.params.id;
   const { stage } = req.body as { stage?: string };
   const actor = (req.user as { staffUserId?: string } | undefined)?.staffUserId || null;
 
@@ -66,9 +113,11 @@ router.patch("/pipeline/:id/stage", async (req, res) => {
   );
 
   return ok(res, { success: true });
-});
+}
+router.patch("/pipeline/:id/stage", setStageHandler);
+router.patch("/applications/:id/stage", setStageHandler);
 
-// BI_SERVER_BLOCK_v260_CARRIER_PATH_E2E_FIX_v1
+// BI_SERVER_BLOCK_v261_CARRIER_PATH_E2E_FIX_v2
 // GET /applications/:id must return all_docs_accepted (boolean) and an
 // effective stage so the portal's "Forward to carrier" button works.
 //
@@ -104,20 +153,7 @@ router.get("/applications/:id", async (req, res) => {
                  AND purged_at IS NULL
                  AND COALESCE(review_status, 'pending') != 'accepted'
              )) AS all_docs_accepted,
-            COALESCE(
-              CASE
-                WHEN a.status = 'created'               THEN 'new_application'
-                WHEN a.status = 'in_progress'           THEN 'documents_pending'
-                WHEN a.status = 'document_review'       THEN 'document_review'
-                WHEN a.status = 'ready_for_submission'  THEN 'submitted'
-                WHEN a.status = 'submitted'             THEN 'submitted'
-                WHEN a.status = 'under_review'          THEN 'under_review'
-                WHEN a.status = 'declined'              THEN 'declined'
-                WHEN a.status = 'approved'              THEN 'bound'
-                ELSE NULL
-              END,
-              a.stage::text
-            ) AS effective_stage
+            COALESCE(a.status, a.stage::text) AS effective_stage
      FROM bi_applications a
      LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
      LEFT JOIN bi_companies co ON co.id = a.company_id
