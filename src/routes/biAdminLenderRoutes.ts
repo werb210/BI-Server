@@ -191,4 +191,51 @@ router.post("/admin/lenders/:id/contacts", async (req, res) => {
   return ok(res, { id: contact_id });
 });
 
+// BI_SERVER_BLOCK_v277_LENDER_CONTACT_DELETE_RESEND_v1
+// Soft-delete a lender contact. is_active=FALSE removes their login
+// access on the next OTP attempt (biLenderApiRoutes filters
+// is_active=TRUE in the lookup). updated_at is bumped for audit.
+router.delete("/admin/lenders/:id/contacts/:contactId", async (req, res) => {
+  const lenderId = req.params.id;
+  const contactId = req.params.contactId;
+  const r = await pool.query<{ id: string }>(
+    `UPDATE bi_lender_contacts
+        SET is_active = FALSE, updated_at = NOW()
+      WHERE id = $1 AND lender_id = $2 AND is_active = TRUE
+    RETURNING id`,
+    [contactId, lenderId]
+  );
+  if (r.rowCount === 0) {
+    return res.status(404).json({ error: "contact_not_found_or_already_inactive" });
+  }
+  return ok(res, { deactivated: true });
+});
+
+// BI_SERVER_BLOCK_v277_LENDER_CONTACT_DELETE_RESEND_v1
+// Resend the welcome SMS that the POST handler fires on contact
+// creation. Useful when the lender lost the original message or
+// didn't receive it. Phone must still be on an active contact.
+router.post("/admin/lenders/:id/contacts/:contactId/resend-invite", async (req, res) => {
+  const lenderId = req.params.id;
+  const contactId = req.params.contactId;
+  const r = await pool.query<{ full_name: string; phone_e164: string; company_name: string }>(
+    `SELECT c.full_name, c.phone_e164, l.company_name
+       FROM bi_lender_contacts c
+       JOIN bi_lenders l ON l.id = c.lender_id
+      WHERE c.id = $1 AND c.lender_id = $2 AND c.is_active = TRUE
+      LIMIT 1`,
+    [contactId, lenderId]
+  );
+  const row = r.rows[0];
+  if (!row) {
+    return res.status(404).json({ error: "contact_not_found_or_inactive" });
+  }
+  const firstName = row.full_name.split(/\s+/)[0] || row.full_name;
+  void sendBiSms(
+    row.phone_e164,
+    `Boreal Risk: Hi ${firstName}, you've been added as a contact for ${row.company_name}. Sign in to submit applications: https://www.boreal.insure/lender/login. Use this number when prompted. Reply STOP to opt out.`,
+  );
+  return ok(res, { sent: true, to: row.phone_e164 });
+});
+
 export default router;
