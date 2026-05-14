@@ -3,7 +3,7 @@ import bcrypt from "bcrypt";
 import { pool } from "../db";
 import { signStaffToken } from "../platform/auth";
 import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
-import { sendOtp, verifyOtp } from "../services/otpService";
+import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
 import { calculatePremium } from "../services/premiumService";
 import { badRequest, ok } from "../utils/apiResponse";
 
@@ -55,7 +55,8 @@ publicRouter.post("/otp/request", async (req, res) => {
   }
 
   try {
-    await sendOtp(phone);
+    const sr = await sendOtpSafe(phone);
+    if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
 
     await pool.query(
       `INSERT INTO bi_otp_sessions(phone_e164, purpose, name, email, user_type, requested_ip)
@@ -87,7 +88,9 @@ publicRouter.post("/otp/verify", async (req, res) => {
   }
 
   try {
-    const approved = await verifyOtp(phone, code);
+    const vr = await verifyOtpSafe(phone, code);
+    if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+    const approved = vr.approved;
 
     if (!approved) {
       return badRequest(res, "Invalid code");

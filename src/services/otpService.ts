@@ -34,3 +34,30 @@ export async function verifyOtp(phone: string, code: string) {
 
   return result.status === "approved";
 }
+
+// BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1
+// Discriminated-result wrappers. Never throw — Twilio failures
+// become {ok:false, error} which route handlers convert to a 502
+// with a user-facing code instead of exposing Twilio internals.
+export type OtpSendResult = { ok: true } | { ok: false; error: string };
+export type OtpVerifyResult = { ok: true; approved: boolean } | { ok: false; error: string };
+
+export async function sendOtpSafe(phone: string): Promise<OtpSendResult> {
+  try {
+    await sendOtp(phone);
+    return { ok: true };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg.slice(0, 200) };
+  }
+}
+
+export async function verifyOtpSafe(phone: string, code: string): Promise<OtpVerifyResult> {
+  try {
+    const approved = await verifyOtp(phone, code);
+    return { ok: true, approved };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg.slice(0, 200) };
+  }
+}

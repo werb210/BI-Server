@@ -2,15 +2,39 @@ import { Router } from "express";
 import { pool } from "../db";
 import jwt from "jsonwebtoken";
 import { env } from "../platform/env";
-import { sendOtp, verifyOtp } from "../services/otpService";
+// BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1 — typed wrappers
+import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
 import { normalizeE164 } from "../util/phoneE164";
 
 const router = Router();
-router.post("/referrer/otp/start", async (req, res) => { const phone = normalizeE164(req.body?.phone); if (!phone) return res.status(400).json({ error: "invalid_phone" }) ; await sendOtp(phone); res.json({ ok: true }); });
-// BI_SERVER_BLOCK_v259_REAL_SUBMISSION_FIX_v2
+// BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1
+router.post("/referrer/otp/start", async (req, res) => {
+  const phone = normalizeE164(req.body?.phone);
+  if (!phone) return res.status(400).json({ error: "invalid_phone" });
+  const sr = await sendOtpSafe(phone);
+  if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
+  res.json({ ok: true });
+});
+// BI_SERVER_BLOCK_v259_REAL_SUBMISSION_FIX_v2 / v278
 // bi_referrers stores phone in phone_e164 (per 2026_05_14_referrer_portal_v238.sql).
-router.post("/referrer/otp/verify", async (req, res) => { const phone = normalizeE164(req.body?.phone); const code = String(req.body?.code ?? "").trim(); if (!phone) return res.status(400).json({ error: "invalid_phone" }) ; if (!code) return res.status(400).json({ error: "missing_code" }) ; if (!await verifyOtp(phone, code)) return res.status(401).json({ error: "invalid_otp" }) ; let r = await pool.query(`SELECT * FROM bi_referrers WHERE phone_e164=$1`, [phone]); if (!r.rows[0]) { await pool.query(`INSERT INTO bi_referrers (phone_e164) VALUES ($1)`, [phone]); r = await pool.query(`SELECT * FROM bi_referrers WHERE phone_e164=$1`, [phone]); } const ref = r.rows[0]; const token = jwt.sign({ kind: "referrer", id: ref.id }, env.JWT_SECRET || "dev-missing-jwt-secret", { expiresIn: "7d" }); res.json({ token, intake_complete: ref.intake_complete }); });
+router.post("/referrer/otp/verify", async (req, res) => {
+  const phone = normalizeE164(req.body?.phone);
+  const code = String(req.body?.code ?? "").trim();
+  if (!phone) return res.status(400).json({ error: "invalid_phone" });
+  if (!code) return res.status(400).json({ error: "missing_code" });
+  const vr = await verifyOtpSafe(phone, code);
+  if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+  if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
+  let r = await pool.query(`SELECT * FROM bi_referrers WHERE phone_e164=$1`, [phone]);
+  if (!r.rows[0]) {
+    await pool.query(`INSERT INTO bi_referrers (phone_e164) VALUES ($1)`, [phone]);
+    r = await pool.query(`SELECT * FROM bi_referrers WHERE phone_e164=$1`, [phone]);
+  }
+  const ref = r.rows[0];
+  const token = jwt.sign({ kind: "referrer", id: ref.id }, env.JWT_SECRET || "dev-missing-jwt-secret", { expiresIn: "7d" });
+  res.json({ token, intake_complete: ref.intake_complete });
+});
 function requireReferrer(req: any, res: any, next: any) { const auth = String(req.headers.authorization ?? ""); if (!auth.startsWith("Bearer ")) return res.status(401).json({ error: "missing_token" }); try { const claims: any = jwt.verify(auth.slice(7), env.JWT_SECRET || "dev-missing-jwt-secret"); if (claims.kind !== "referrer") return res.status(403).json({ error: "wrong_session" }); req.referrerId = claims.id; next(); } catch { return res.status(401).json({ error: "invalid_token" }); } }
 router.post("/referrer/intake", requireReferrer, async (req: any, res) => { const b = req.body ?? {}; const required = ["first_name","last_name","email","address_line1","city","province","postal_code","country"]; const missing = required.filter((k) => !b[k]); if (missing.length) return res.status(400).json({ error: "missing_fields", fields: missing }) ; await pool.query(`UPDATE bi_referrers SET first_name=$1, last_name=$2, email=$3, company_name=$4, address_line1=$5, address_line2=$6, city=$7, province=$8, postal_code=$9, country=$10, etransfer_email=$11, intake_complete=TRUE, updated_at=NOW() WHERE id=$12`, [b.first_name,b.last_name,b.email,b.company_name ?? null,b.address_line1,b.address_line2 ?? null,b.city,b.province,b.postal_code,b.country,b.etransfer_email ?? null,req.referrerId]); res.json({ ok: true }); });
 // BI_SERVER_BLOCK_v259_REAL_SUBMISSION_FIX_v2

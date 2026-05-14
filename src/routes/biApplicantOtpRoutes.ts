@@ -3,29 +3,31 @@ import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { pool } from "../db";
 import { env } from "../platform/env";
-import { sendOtp, verifyOtp } from "../services/otpService";
+// BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1 — typed wrappers
+import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
 import { normalizeE164 } from "../util/phoneE164";
 
 const router = Router();
 
 router.post("/applicants/otp/start", async (req, res) => {
-  // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1 — normalize before Twilio call to prevent error 60200.
+  // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1 / v278
   const phone = normalizeE164(req.body?.phone);
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
-  await sendOtp(phone);
+  const r = await sendOtpSafe(phone);
+  if (!r.ok) return res.status(502).json({ error: "otp_send_failed", detail: r.error });
   res.json({ ok: true });
 });
 
 router.post("/applicants/otp/verify", async (req, res) => {
-  // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1 — phone must be normalized identically to /start so
-  // the Twilio Verify session lookup matches.
+  // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1 / v278
   const phone = normalizeE164(req.body?.phone);
   const code = String(req.body?.code ?? "").trim();
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
   if (!code) return res.status(400).json({ error: "missing_code" });
-  const ok = await verifyOtp(phone, code);
-  if (!ok) return res.status(401).json({ error: "invalid_otp" });
+  const vr = await verifyOtpSafe(phone, code);
+  if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+  if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
 
   let contactId: string | null = null;
   try {
