@@ -412,7 +412,14 @@ export default app;
 
 // BI_SERVER_BLOCK_v212_SUBMIT_GUARDS_v1
 app.use(biLenderApplicationDetail);
-app.use(biApplicantDocFlowRoutes); // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
+// BI_SERVER_BLOCK_v263_APPLICANT_DOC_FLOW_MOUNT_FIX_v1
+// The router declares its routes as /applicants/... (no /api/v1 prefix).
+// BI-Website BASE = ${origin}/api/v1, so the website calls
+// /api/v1/applicants/applications/:publicId/defer-docs and
+// /api/v1/applicants/me/pending-application. Without the /api/v1 mount
+// prefix every call 404s. Adding biCors so cross-origin preflight from
+// www.boreal.insure passes (this endpoint is public-facing).
+app.use("/api/v1", biCors, biApplicantDocFlowRoutes); // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
 app.use(biSmsInboundRoutes);    // BI_SERVER_BLOCK_v234_OPS_HARDENING_v1
 app.use(biCarrierHealthRoutes); // BI_SERVER_BLOCK_v234_OPS_HARDENING_v1
 app.use(biLenderAuthRoutes); // BI_SERVER_BLOCK_v221_LENDER_OTP_AND_ME_v1
