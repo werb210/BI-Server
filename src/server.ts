@@ -223,8 +223,14 @@ app.use("/api/v1", biCors, requireAuth, biScoreRoutes);
 
 // Authenticated BI endpoints — every BI route lives under /api/v1/bi
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biRoutes);
-// BI_AUDIT_FIX_v58 — public PGI flow (no auth). Must be mounted BEFORE
-app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biPublicApplicationRoutes);
+// BI_SERVER_BLOCK_v262_CARRIER_PATH_E2E_FIX_v3 — Removed the duplicate
+// biPublicApplicationRoutes mount under /api/v1/bi. It was shadowing
+// biApplicationRoutes' staff GET /applications/:id (line 218): both
+// routers have a /applications/:something route, Express picks the
+// first mounted, and the public handler queried by public_id (6-char
+// code) instead of UUID, returning 404 for every staff portal app
+// detail load. The public flow is still reachable at its primary
+// mount at /api/v1 (line 201).
 // BI_SERVER_BLOCK_v248_APPLICATIONS_FROM_BF_v1 — service-JWT-authed BF→BI handoff.
 // Mounted alongside the public flow so it gets the same CORS + rate-limit guards.
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biApplicationsFromBfRoutes);

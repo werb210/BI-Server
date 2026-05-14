@@ -3,22 +3,29 @@
 // BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1
 // BI_SERVER_BLOCK_v226_DEMO_SANDBOX_v1
 // BI_SERVER_BLOCK_v224_LENDER_NAME_ATTRIBUTION_v1
-//   - Lender name pulled from bi_lenders.company_name and forwarded to PGI
-//     so the carrier knows which downstream lender originated each deal.
-import express, { type NextFunction, type Request, type Response } from "express"; // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1
+// BI_SERVER_BLOCK_v262_CARRIER_PATH_E2E_FIX_v3 — source_type='lender'
+//   on the INSERT (was defaulting to 'public' before; portal mislabeled
+//   lender apps). Also adds POST /api/v1/lender/applications/:code/documents
+//   for the BI-Website lender form's post-create doc upload step
+//   (previously 404'd because no server route handled that path).
+import express, { type NextFunction, type Request, type Response } from "express";
+import multer from "multer";
 import jwt from "jsonwebtoken";
 import { notifyStaff } from "../services/staffNotifyService";
 import { pool } from "../db";
 import { pgiSubmit } from "../services/pgiAdapter";
 import { logger } from "../platform/logger";
+import { getStorage } from "../lib/storage";
+
 const router = express.Router();
+
 function genCode(): string { const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let out = ""; for (let i = 0; i < 8; i++) out += chars[Math.floor(Math.random() * chars.length)]; return out; }
 function num(v: any): number | null { if (v === null || v === undefined || v === "") return null; const n = Number(String(v).replace(/[,$\s]/g, "")); return Number.isFinite(n) ? n : null; }
 function bool(v: any): boolean { if (v === true || v === false) return v; if (typeof v === "string") return v.toLowerCase() === "yes" || v.toLowerCase() === "true"; return Boolean(v); }
 function getLenderId(req: Request): string | null { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return null; const secret = process.env.JWT_SECRET; if (!secret) return null; try { const payload = jwt.verify(m[1], secret) as any; if (payload?.kind !== "lender" || !payload?.id) return null; return String(payload.id); } catch { return null; } }
 function getLenderUserId(req: Request): string | null { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return null; const secret = process.env.JWT_SECRET; if (!secret) return null; try { const payload = jwt.verify(m[1], secret) as any; if (payload?.kind !== "lender" || !payload?.user_id) return null; return String(payload.user_id); } catch { return null; } }
+
 router.post("/api/v1/lender/applications", async (req: Request, res: Response, next: NextFunction) => {
-  // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1 — flat-body callers (documented programmatic API)
   if (!req.body || typeof req.body !== "object" || !req.body.guarantor || typeof req.body.guarantor !== "object") {
     return next();
   }
@@ -30,9 +37,6 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
   const applicationCode = genCode();
   const country = (b.business?.country || "CA") as "CA" | "US"; const naics_code = String(b.business?.naics); const formation_date = String(b.business?.start_date); const loan_amount = num(b.loan?.amount) || 0; const pgi_limit = num(b.loan?.pgi_limit) || 0; const annual_revenue = num(b.financials?.revenue_last_year ?? b.financials?.annual_revenue) || 0; const ebitda = num(b.financials?.ebitda_last_year ?? b.financials?.ebitda) || 0; const total_debt = num(b.financials?.total_debt) || 0; const monthly_debt_service = num(b.financials?.monthly_payments ?? b.financials?.monthly_debt_service) || 0; const collateral_value = num(b.financials?.collateral_value) || 0; const enterprise_value = num(b.financials?.enterprise_value) || 0; const bankruptcy_history = bool(b.risk?.bankruptcy_history); const insolvency_history = bool(b.risk?.insolvency_history); const judgment_history = bool(b.risk?.judgment_history);
   const coreInputs = { country, naics: naics_code, naics_code, business_start_date: formation_date, formation_date, loan_amount, pgi_limit, use_of_proceeds: b.loan?.use_of_proceeds || "expansion", estimated_close_date: b.loan?.estimated_close_date ?? b.loan?.loan_funding_date, loan_funding_date: b.loan?.loan_funding_date, policy_start_date: b.loan?.policy_start_date, revenue: annual_revenue, annual_revenue, ebitda, total_debt, monthly_payments: monthly_debt_service, monthly_debt_service, collateral_value, enterprise_value, bankruptcy_history, insolvency_history, judgment_history };
-  // BI_SERVER_BLOCK_v224_LENDER_NAME_ATTRIBUTION_v1 — pull the submitting lender's company name so
-  // we can a) attribute the row in bi_applications.lender_name and
-  // b) tell PGI which downstream lender originated the deal.
   let lenderCompanyName: string | null = null;
   let lenderIsDemo = false;
   try {
@@ -40,36 +44,11 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
     lenderCompanyName = (lr.rows[0]?.company_name as string | undefined) || null;
     lenderIsDemo = lr.rows[0]?.is_demo === true;
   } catch {
-    // Non-fatal: row still saved without lender_name; staff can fix in BI silo.
+    // Non-fatal: row still saved without lender_name.
   }
-  // BI_SERVER_BLOCK_v258_APPLICATION_SCHEMA_FIX_v1
-  // Find-or-create the applicant company first, then link via company_id.
-  let companyId: string | null = null;
-  if (b.company_name && String(b.company_name).trim().length > 0) {
-    const found = await pool.query<{ id: string }>(
-      `SELECT id FROM bi_companies
-        WHERE lower(legal_name) = lower($1) AND kind = 'applicant'
-        ORDER BY created_at ASC
-        LIMIT 1`,
-      [String(b.company_name).trim()],
-    );
-    if (found.rows[0]) {
-      companyId = found.rows[0].id;
-    } else {
-      const created = await pool.query<{ id: string }>(
-        `INSERT INTO bi_companies (legal_name, kind)
-         VALUES ($1, 'applicant')
-         RETURNING id`,
-        [String(b.company_name).trim()],
-      );
-      companyId = created.rows[0].id;
-    }
-  }
-
-  const result = await pool.query(`INSERT INTO bi_applications (entity_type, status, source, source_type, lender_id, created_by_lender_id, created_by_lender_user_id, application_code, company_id, guarantor_name, guarantor_phone, guarantor_email, lender_name, is_demo, core_inputs, consents, lender_notes, created_by_actor, created_at, updated_at) VALUES ('applicant', 'new_application', 'lender', 'lender', $1, $1, $12, $2, $3, $4, $5, $6, $10, $11, $7::jsonb, $8::jsonb, $9, 'lender', NOW(), NOW()) RETURNING id, application_code` /* BI_SERVER_BLOCK_v261_CARRIER_PATH_E2E_FIX_v2 */, [lenderId, applicationCode, companyId, b.guarantor?.name, b.guarantor?.phone, b.guarantor?.email || null, JSON.stringify(coreInputs), JSON.stringify({ data_use: true, credit_pull: true, info_accurate: true, source: "lender_attestation" }), b.lender_notes || null, lenderCompanyName, lenderIsDemo, lenderUserId]);
+  // BI_SERVER_BLOCK_v262_CARRIER_PATH_E2E_FIX_v3 — added source_type='lender'.
+  const result = await pool.query(`INSERT INTO bi_applications (entity_type, status, source, source_type, lender_id, created_by_lender_id, created_by_lender_user_id, application_code, company_name, guarantor_name, guarantor_phone, guarantor_email, lender_name, is_demo, core_inputs, consents, lender_notes, created_by_actor, created_at, updated_at) VALUES ('applicant', 'new_application', 'lender', 'lender', $1, $1, $12, $2, $3, $4, $5, $6, $10, $11, $7::jsonb, $8::jsonb, $9, 'lender', NOW(), NOW()) RETURNING id, application_code`, [lenderId, applicationCode, b.company_name, b.guarantor?.name, b.guarantor?.phone, b.guarantor?.email || null, JSON.stringify(coreInputs), JSON.stringify({ data_use: true, credit_pull: true, info_accurate: true, source: "lender_attestation" }), b.lender_notes || null, lenderCompanyName, lenderIsDemo, lenderUserId]);
   const row = result.rows[0]; const appId: string = row.id; const code: string = row.application_code;
-  // BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1
-// BI_SERVER_BLOCK_v226_DEMO_SANDBOX_v1 — every outbound carrier call is captured.
   let pgi_application_id: string | null = null;
   let pgi_status: string | null = null;
   let pgi_error: string | null = null;
@@ -83,14 +62,7 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
   try {
     let submit;
     if (lenderIsDemo) {
-      // BI_SERVER_BLOCK_v226_DEMO_SANDBOX_v1 — demo apps never hit the real carrier even
-      // when USE_PGI_STUB=false. Synthesize a stub response so the visible
-      // pipeline behaviour matches a real submission.
-      submit = {
-        application_id: `STUB_APP_DEMO_${Date.now()}`,
-        status: "received",
-        message: "Demo submission — carrier call skipped.",
-      } as any;
+      submit = { application_id: `STUB_APP_DEMO_${Date.now()}`, status: "received", message: "Demo submission — carrier call skipped." } as any;
     } else {
       submit = await pgiSubmit(carrierRequestBody);
     }
@@ -136,4 +108,67 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
   void notifyStaff("new_application", `New BI lender app: ${(b as any).business_name || (b as any).company_name || "Untitled"}`).catch(() => {});
   return res.status(201).json({ ok: true, id: appId, application_code: code, pgi_application_id, pgi_status, pgi_error });
 });
+
+const lenderDocUpload_v262 = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+router.post(
+  "/api/v1/lender/applications/:code/documents",
+  lenderDocUpload_v262.array("files"),
+  async (req: Request, res: Response) => {
+    const lenderId = getLenderId(req);
+    if (!lenderId) return res.status(401).json({ error: "unauthorized" }); // BI_SERVER_BLOCK_v262
+    const code = String(req.params.code || "").trim();
+    if (!code) return res.status(400).json({ error: "missing_code" }); // BI_SERVER_BLOCK_v262
+
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(code);
+    const lookup = await pool.query<{ id: string; lender_id: string | null; created_by_lender_id: string | null }>(
+      isUuid
+        ? `SELECT id, lender_id, created_by_lender_id FROM bi_applications WHERE id = $1 LIMIT 1`
+        : `SELECT id, lender_id, created_by_lender_id FROM bi_applications WHERE application_code = $1 LIMIT 1`,
+      [code]
+    );
+    const app = lookup.rows[0];
+    if (!app) return res.status(404).json({ error: "not_found" }); // BI_SERVER_BLOCK_v262
+    if (app.lender_id !== lenderId && app.created_by_lender_id !== lenderId) {
+      return res.status(403).json({ error: "wrong_lender" }); // BI_SERVER_BLOCK_v262
+    }
+
+    const files = (req.files as Express.Multer.File[]) ?? [];
+    if (files.length === 0) return res.status(400).json({ error: "no_files" }); // BI_SERVER_BLOCK_v262
+
+    const docTypesRaw = req.body?.doc_types;
+    const docTypes = Array.isArray(docTypesRaw) ? docTypesRaw : typeof docTypesRaw === "string" ? [docTypesRaw] : [];
+
+    const store = getStorage();
+    const created: Array<{ id: string; doc_type: string; filename: string }> = [];
+
+    for (const [idx, file] of files.entries()) {
+      const docType = typeof docTypes[idx] === "string" && docTypes[idx].trim() ? docTypes[idx].trim() : "other";
+      let put;
+      try {
+        put = await store.put({ buffer: file.buffer, filename: file.originalname, contentType: file.mimetype, pathPrefix: `applications/${app.id}` }); // BI_SERVER_BLOCK_v262
+      } catch (err) {
+        return res.status(502).json({ error: "storage_failed", detail: String((err as Error)?.message ?? err) }); // BI_SERVER_BLOCK_v262
+      }
+      let inserted;
+      try {
+        inserted = await pool.query<{ id: string }>(
+          `INSERT INTO bi_documents
+             (application_id, doc_type, original_filename, storage_key, blob_name, blob_url, sha256_hash, mime_type, bytes, uploaded_by_actor, doc_slot)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'lender',$10)
+           RETURNING id`,
+          [app.id, docType, file.originalname, put.blobName, put.blobName, put.url, put.hash, file.mimetype, put.sizeBytes, docType]
+        );
+      } catch (err) {
+        return res.status(400).json({ error: "invalid_doc_type", doc_type: docType, detail: String((err as Error)?.message ?? err) });
+      }
+      created.push({ id: inserted.rows[0].id, doc_type: docType, filename: file.originalname });
+      await pool.query(`INSERT INTO bi_activity(application_id, actor_type, event_type, summary) VALUES($1,'lender','document_uploaded',$2)`, [app.id, `Document uploaded: ${file.originalname}`]).catch(() => {});
+    }
+    return res.json({ ok: true, documents: created });
+  }
+);
+
 export default router;
