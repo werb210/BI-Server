@@ -68,14 +68,56 @@ router.patch("/pipeline/:id/stage", async (req, res) => {
   return ok(res, { success: true });
 });
 
+// BI_SERVER_BLOCK_v260_CARRIER_PATH_E2E_FIX_v1
+// GET /applications/:id must return all_docs_accepted (boolean) and an
+// effective stage so the portal's "Forward to carrier" button works.
+//
+// (1) all_docs_accepted: TRUE iff there's ≥1 bi_documents row AND
+//     every (non-purged) row has review_status='accepted'. Without
+//     this the portal's gate is undefined → falsy → button hidden.
+//
+// (2) effective_stage: the public flow only writes the `status` TEXT
+//     column, never the `stage` ENUM. The portal reads `app.stage`.
+//     We pass through the status value when present so portal checks
+//     like `app.stage === 'document_review'` match reality.
+//
+// (3) company_name COALESCE: the original `co.legal_name AS company_name`
+//     collided with the new a.company_name column added by the v260
+//     migration. node-pg drops the earlier value, leaving null for
+//     lender apps that don't have a bi_companies row. COALESCE all
+//     three sources so the field is populated regardless of path.
 router.get("/applications/:id", async (req, res) => {
   const { id } = req.params;
 
   const result = await pool.query(
     `SELECT a.*,
             c.full_name AS primary_contact_name,
-            co.legal_name AS company_name,
-            COALESCE(pa.data->>'status', a.stage::text) AS pgi_status
+            COALESCE(a.company_name, co.legal_name, a.business_name) AS company_name,
+            COALESCE(pa.data->>'status', a.stage::text) AS pgi_status,
+            (EXISTS (
+               SELECT 1 FROM bi_documents
+               WHERE application_id = a.id AND purged_at IS NULL
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM bi_documents
+               WHERE application_id = a.id
+                 AND purged_at IS NULL
+                 AND COALESCE(review_status, 'pending') != 'accepted'
+             )) AS all_docs_accepted,
+            COALESCE(
+              CASE
+                WHEN a.status = 'created'               THEN 'new_application'
+                WHEN a.status = 'in_progress'           THEN 'documents_pending'
+                WHEN a.status = 'document_review'       THEN 'document_review'
+                WHEN a.status = 'ready_for_submission'  THEN 'submitted'
+                WHEN a.status = 'submitted'             THEN 'submitted'
+                WHEN a.status = 'under_review'          THEN 'under_review'
+                WHEN a.status = 'declined'              THEN 'declined'
+                WHEN a.status = 'approved'              THEN 'bound'
+                ELSE NULL
+              END,
+              a.stage::text
+            ) AS effective_stage
      FROM bi_applications a
      LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
      LEFT JOIN bi_companies co ON co.id = a.company_id
@@ -88,20 +130,46 @@ router.get("/applications/:id", async (req, res) => {
     return badRequest(res, "Not found");
   }
 
+  const row = result.rows[0];
   const payload = {
-    ...result.rows[0],
-    pgiStatus: result.rows[0].pgi_status
+    ...row,
+    pgiStatus: row.pgi_status,
+    // Override `stage` with the derived value so portal-side gates
+    // (BIApplicationDetail / ApplicationTab.canSubmit) compare against
+    // the right value. Raw stage column is still in row but gets
+    // shadowed by this spread+override.
+    stage: row.effective_stage,
   };
   delete payload.pgi_status;
+  delete payload.effective_stage;
   return ok(res, payload);
 });
 
+// BI_SERVER_BLOCK_v260_CARRIER_PATH_E2E_FIX_v1
+// The portal's DocumentsTab reads:
+//   const r = await api<{documents: Doc[]}>(...); setDocs(r.documents);
+// and renders fields (status, doc_type, doc_slot, period_end, ocr_status)
+// that the previous handler never returned. Two fixes:
+//   (1) Enrich the SELECT with review_status (aliased to 'status' so
+//       the portal type lines up), doc_type, doc_slot, period_end,
+//       ocr_status.
+//   (2) Wrap the response in {documents: [...]} so r.documents is
+//       populated. The old shape was a bare array, which made
+//       r.documents undefined and setDocs(undefined) eventually
+//       crashed the tab on render.
 router.get("/applications/:id/documents", async (req, res) => {
   const { id } = req.params;
   const baseUrl = `${req.protocol}://${req.get("host")}`;
 
   const result = await pool.query(
-    `SELECT id, original_filename, created_at
+    `SELECT id,
+            original_filename,
+            created_at,
+            doc_type::text   AS doc_type,
+            doc_slot,
+            period_end,
+            COALESCE(review_status, 'pending') AS status,
+            ocr_status::text AS ocr_status
      FROM bi_documents
      WHERE application_id=$1
        AND purged_at IS NULL
@@ -113,10 +181,15 @@ router.get("/applications/:id/documents", async (req, res) => {
     id: row.id,
     file_name: row.original_filename,
     url: `${baseUrl}/api/v1/bi/documents/${row.id}`,
-    uploaded_at: row.created_at
+    uploaded_at: row.created_at,
+    doc_type: row.doc_type,
+    doc_slot: row.doc_slot,
+    period_end: row.period_end,
+    status: row.status,
+    ocr_status: row.ocr_status,
   }));
 
-  return ok(res, documents);
+  return ok(res, { documents });
 });
 
 router.post("/application/:id/submit-pgi", async (req, res) => {
