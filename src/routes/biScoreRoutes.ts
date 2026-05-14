@@ -6,16 +6,34 @@ import { pgiScore, pgiSubmit } from "../services/pgiAdapter";
 
 const router = Router();
 
+// BI_SERVER_BLOCK_v274_SCORE_ROUTES_NULL_GUARDS_v1
+// formation_date may arrive as Date (when column is set), string
+// (when read from JSONB / older shapes), or null (BF→BI handoff
+// mirrors don't populate the column). Throw a clear error to the
+// route handler so we return 400 instead of crashing with TypeError.
+function formationDateIsoOrThrow(v: unknown): string {
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === "string" && v.length >= 10) return v.slice(0, 10);
+  throw new Error("formation_date_missing");
+}
+
 router.post("/applications/:id/score", requireAuth, async (req, res) => {
   const { id } = req.params;
   const r = await pool.query(`SELECT * FROM bi_applications WHERE id = $1`, [id]);
   const app = r.rows[0];
   if (!app) return res.status(404).json({ error: "not_found" });
 
+  let formationDateIso: string;
+  try {
+    formationDateIso = formationDateIsoOrThrow(app.formation_date);
+  } catch {
+    return res.status(400).json({ error: "formation_date_missing" });
+  }
+
   try {
     const score = await pgiScore({
       country: app.country, naics_code: app.naics_code,
-      formation_date: app.formation_date.toISOString().slice(0, 10),
+      formation_date: formationDateIso,
       loan_amount: Number(app.loan_amount), pgi_limit: Number(app.pgi_limit),
       annual_revenue: Number(app.annual_revenue), ebitda: Number(app.ebitda),
       total_debt: Number(app.total_debt), monthly_debt_service: Number(app.monthly_debt_service),
@@ -41,6 +59,14 @@ router.post("/applications/:id/submit-to-pgi", requireAuth, async (req, res) => 
   if (!app) return res.status(404).json({ error: "not_found" });
   if (app.pgi_application_id) return res.status(409).json({ error: "already_submitted", pgi_application_id: app.pgi_application_id });
 
+  // BI_SERVER_BLOCK_v274_SCORE_ROUTES_NULL_GUARDS_v1
+  let formationDateIso: string;
+  try {
+    formationDateIso = formationDateIsoOrThrow(app.formation_date);
+  } catch {
+    return res.status(400).json({ error: "formation_date_missing" });
+  }
+
   const submit = await pgiSubmit({
     guarantor_name: app.guarantor_name,
     guarantor_email: app.guarantor_email,
@@ -48,7 +74,7 @@ router.post("/applications/:id/submit-to-pgi", requireAuth, async (req, res) => 
     lender_name: app.lender_name ?? undefined,
     form_data: {
       country: app.country, naics_code: app.naics_code,
-      formation_date: app.formation_date.toISOString().slice(0, 10),
+      formation_date: formationDateIso,
       loan_amount: Number(app.loan_amount), pgi_limit: Number(app.pgi_limit),
       annual_revenue: Number(app.annual_revenue), ebitda: Number(app.ebitda),
       total_debt: Number(app.total_debt), monthly_debt_service: Number(app.monthly_debt_service),
