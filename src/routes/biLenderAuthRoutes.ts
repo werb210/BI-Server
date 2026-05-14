@@ -6,7 +6,7 @@ import express, { type Request, type Response } from "express";
 import jwt from "jsonwebtoken";
 import { pool } from "../db";
 import { env } from "../platform/env";
-import { sendOtp, verifyOtp } from "../services/otpService";
+import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
 
 const router = express.Router();
 
@@ -47,7 +47,8 @@ router.post("/api/v1/lender/otp/start", async (req: Request, res: Response) => {
     [phone],
   );
   if (!r.rows[0]) return res.status(404).json({ error: "lender_not_provisioned" });
-  await sendOtp(phone);
+  const sr = await sendOtpSafe(phone);
+  if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
   return res.json({ ok: true });
 });
 router.post("/api/v1/lender/otp/verify", async (req: Request, res: Response) => {
@@ -55,8 +56,9 @@ router.post("/api/v1/lender/otp/verify", async (req: Request, res: Response) => 
   const code = String(req.body?.code ?? "").trim();
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
   if (!code) return res.status(400).json({ error: "missing_code" });
-  const okOtp = await verifyOtp(phone, code);
-  if (!okOtp) return res.status(401).json({ error: "invalid_otp" });
+  const vr = await verifyOtpSafe(phone, code);
+  if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+  if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
 
   const r = await pool.query<{
     id: string; company_name: string | null;

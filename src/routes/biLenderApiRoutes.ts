@@ -6,7 +6,8 @@ import { notifyStaff } from "../services/staffNotifyService"; // BI_SERVER_BLOCK
 import { pool } from "../db";
 import { env } from "../platform/env";
 import { pgiScore, pgiSubmit } from "../services/pgiAdapter"; // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1
-import { sendOtp, verifyOtp } from "../services/otpService";
+// BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1 — typed wrappers
+import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
 import { normalizeE164 } from "../util/phoneE164";
 import { generatePublicId } from "../util/publicId";
@@ -184,7 +185,7 @@ router.get("/lender/applications", authLender, async (req: any, res) => {
 // Auth (lender JWT): /lender/me, /lender/applications/mine
 
 router.post("/lender/otp/start", async (req, res) => {
-  // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
+  // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1 / v278
   const phone = normalizeE164(req.body?.phone);
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
 
@@ -194,11 +195,15 @@ router.post("/lender/otp/start", async (req, res) => {
     [phone],
   );
   if (r.rows[0]) {
-    await sendOtp(phone);
+    const sr = await sendOtpSafe(phone);
+    if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
     return res.json({ ok: true });
   }
   const primary = await pool.query(`SELECT id FROM bi_lenders WHERE contact_phone_e164 = $1 AND is_active = TRUE LIMIT 1`, [phone]);
-  if (primary.rows[0]) await sendOtp(phone);
+  if (primary.rows[0]) {
+    const sr = await sendOtpSafe(phone);
+    if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
+  }
   res.json({ ok: true });
 });
 
@@ -241,8 +246,10 @@ router.post("/lender/otp/verify", async (req, res) => {
     }
   }
   if (!row) return res.status(401).json({ error: "phone_not_registered" });
-  const ok = await verifyOtp(phone, code);
-  if (!ok) return res.status(401).json({ error: "invalid_otp" });
+  // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1
+  const vr = await verifyOtpSafe(phone, code);
+  if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+  if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
   if (row.contact_id) await pool.query(`UPDATE bi_lender_contacts SET last_login_at=NOW(), updated_at=NOW() WHERE id=$1`, [row.contact_id]).catch(()=>{});
   const token = jwt.sign({ kind: "lender", id: row.lender_id, user_id: row.contact_id }, env.JWT_SECRET || "dev-missing-jwt-secret", { expiresIn: "7d" });
   res.json({ token, lender: { id: row.lender_id, company_name: row.company_name }, user: { id: row.contact_id, full_name: row.full_name, email: row.email, role: row.role } });
