@@ -48,6 +48,22 @@ router.get("/api/v1/lender/applications/:code", async (req: Request, res: Respon
   if (result.rows.length === 0) return res.status(404).json({ error: "not_found" });
 
   const app = result.rows[0];
+
+  // BI_SERVER_BLOCK_v275_LENDER_DETAIL_DOCUMENTS_v1
+  // Real documents query — replaces the v215 stub. Excludes purged
+  // rows. Returns the fields the lender portal already renders plus
+  // the metadata a future "open document" link will need (blob_url
+  // for direct download, doc_type / mime_type / bytes for display).
+  const docsResult = await pool.query(
+    `SELECT id, doc_type, document_type, original_filename, mime_type,
+            bytes, blob_url, uploaded_by_actor, created_at
+       FROM bi_documents
+      WHERE application_id = $1
+        AND purged_at IS NULL
+      ORDER BY created_at DESC`,
+    [app.id]
+  );
+
   return res.json({
     id: app.id,
     application_code: app.application_code,
@@ -63,7 +79,7 @@ router.get("/api/v1/lender/applications/:code", async (req: Request, res: Respon
     lender_notes: app.lender_notes,
     created_at: app.created_at,
     updated_at: app.updated_at,
-    documents: [], // stub; v217 will populate
+    documents: docsResult.rows,
   });
 });
 
