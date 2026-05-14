@@ -7,6 +7,8 @@ import { requiredSlotsFor, type BiDocSlot } from "../lib/biDocumentRequirements"
 
 type ApplicationRow = {
   id: string;
+  // BI_SERVER_BLOCK_v264_ORCHESTRATOR_PGI_APP_ID_v1
+  pgi_application_id: string | null;
   pgi_external_id: string | null;
   stage: string;
   data: Record<string, unknown> | null;
@@ -71,8 +73,13 @@ function buildBIApplicationFromRow(row: ApplicationRow): BIApplication {
 }
 
 export async function submitApplicationToPGI(applicationId: string): Promise<{ externalId: string; status: string; alreadySubmitted: boolean }> {
+  // BI_SERVER_BLOCK_v264_ORCHESTRATOR_PGI_APP_ID_v1
+  // Read both pgi_application_id (canonical, webhooks key off it) and
+  // pgi_external_id (legacy, populated by the old version of this
+  // function). Either being non-null means the carrier has already
+  // received this app — short-circuit idempotently.
   const appResult = await pool.query<ApplicationRow>(
-    `SELECT a.id, a.pgi_external_id, a.stage, a.data, a.applicant_phone_e164, a.lender_name, a.guarantor_name, a.guarantor_email,
+    `SELECT a.id, a.pgi_application_id, a.pgi_external_id, a.stage, a.data, a.applicant_phone_e164, a.lender_name, a.guarantor_name, a.guarantor_email,
             co.legal_name AS company_name,
             c.full_name AS primary_contact_name,
             c.email AS primary_contact_email
@@ -89,17 +96,20 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
     throw new Error("Application not found");
   }
 
-  if (app.pgi_external_id) {
+  // BI_SERVER_BLOCK_v264_ORCHESTRATOR_PGI_APP_ID_v1 — idempotency reads
+  // the canonical column first, falls through to legacy.
+  const existingCarrierId = app.pgi_application_id ?? app.pgi_external_id ?? null;
+  if (existingCarrierId) {
     const statusResult = await pool.query<{ status: string | null }>(
       `SELECT data->>'status' AS status
        FROM pgi_applications
        WHERE id::text = $1 OR data->>'externalId' = $1
        LIMIT 1`,
-      [app.pgi_external_id]
+      [existingCarrierId]
     );
 
     return {
-      externalId: app.pgi_external_id,
+      externalId: existingCarrierId,
       status: statusResult.rows[0]?.status || app.stage,
       alreadySubmitted: true
     };
@@ -115,13 +125,31 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
 
   const result = await submitToPGI(payload);
 
+  // BI_SERVER_BLOCK_v264_ORCHESTRATOR_PGI_APP_ID_v1
+  // Write the canonical pgi_application_id column so pgiWebhookRoutes
+  // can correlate every later event (.received, .quoted, .declined,
+  // .approved, policy.bound, policy.issued). Also write status='submitted'
+  // so the pipeline LIST CASE moves the card from Doc Review to Submitted,
+  // set carrier_received_at so the Forward-to-carrier button is hidden
+  // on next portal load, capture the request/response payloads for audit,
+  // and lock the application against double-submit. pgi_external_id is
+  // kept in sync for any tooling still keyed on it.
   await pool.query(
     `UPDATE bi_applications
-     SET pgi_external_id = $2,
+     SET pgi_application_id = $2,
+         pgi_external_id = $2,
+         status = 'submitted',
          stage = 'under_review',
+         carrier_received_at = COALESCE(carrier_received_at, NOW()),
+         carrier_submission_request = $3::jsonb,
+         carrier_submission_response = $4::jsonb,
+         carrier_last_event = 'application.submitted',
+         carrier_last_event_at = NOW(),
+         submission_locked = TRUE,
+         submitted_at = COALESCE(submitted_at, NOW()),
          updated_at = NOW()
      WHERE id = $1`,
-    [applicationId, result.externalId]
+    [applicationId, result.externalId, JSON.stringify(payload), JSON.stringify(result)]
   );
 
   await pool.query(
