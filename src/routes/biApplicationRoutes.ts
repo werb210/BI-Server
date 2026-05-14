@@ -170,15 +170,22 @@ router.get("/applications/:id", async (req, res) => {
             c.full_name AS primary_contact_name,
             COALESCE(a.company_name, co.legal_name, a.business_name) AS company_name,
             COALESCE(pa.data->>'status', a.stage::text) AS pgi_status,
+            -- BI_SERVER_BLOCK_v276_REJECTED_DOCS_DONT_BLOCK_GATE_v1
+            -- Gate flips TRUE iff there's ≥1 accepted doc AND no
+            -- doc is still pending review. 'rejected' rows are
+            -- neither — they stay visible to staff but a replacement
+            -- + accept on the new doc lets the gate flip.
             (EXISTS (
                SELECT 1 FROM bi_documents
-               WHERE application_id = a.id AND purged_at IS NULL
+               WHERE application_id = a.id
+                 AND purged_at IS NULL
+                 AND review_status = 'accepted'
              )
              AND NOT EXISTS (
                SELECT 1 FROM bi_documents
                WHERE application_id = a.id
                  AND purged_at IS NULL
-                 AND COALESCE(review_status, 'pending') != 'accepted'
+                 AND COALESCE(review_status, 'pending') NOT IN ('accepted', 'rejected')
              )) AS all_docs_accepted,
             -- BI_SERVER_BLOCK_v265_PIPELINE_CASE_ALIGN_BI_STAGES_v1 (detail)
             COALESCE(
@@ -422,14 +429,16 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
   }
 
   // (5) all docs accepted
-  const docs = await pool.query<{ pending: string }>(
-    `SELECT COUNT(*)::text AS pending
+  const docs = await pool.query<{ pending: string; accepted: string }>(
+    `SELECT
+        COUNT(*) FILTER (WHERE COALESCE(review_status, 'pending') NOT IN ('accepted', 'rejected'))::text AS pending,
+        COUNT(*) FILTER (WHERE review_status = 'accepted')::text AS accepted
        FROM bi_documents
       WHERE application_id = $1
-        AND COALESCE(review_status, 'pending') != 'accepted'`,
+        AND purged_at IS NULL`,
     [id]
   );
-  if (Number(docs.rows[0]?.pending ?? 0) > 0) {
+  if (Number(docs.rows[0]?.accepted ?? 0) === 0 || Number(docs.rows[0]?.pending ?? 0) > 0) {
     return res.status(400).json({ ok: false, error: "DOCS_NOT_ALL_ACCEPTED" });
   }
 

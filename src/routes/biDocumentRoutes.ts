@@ -172,10 +172,15 @@ router.post("/:id/accept", requireAuth, requireStaffOrAdmin, async (req, res) =>
     [doc.application_id, userId, `Document accepted: ${doc.doc_type}`, JSON.stringify({ docId: id })]
   );
 
-  // BI_HARDENING_v44 — accept-all gate. total > 0 AND every row is accepted.
-  const counts = await pool.query<{ pending: string; total: string }>(
+  // BI_HARDENING_v44 / BI_SERVER_BLOCK_v276_REJECTED_DOCS_DONT_BLOCK_GATE_v1
+  // Accept-all gate. ≥1 accepted doc AND no pending docs. 'rejected'
+  // rows are neither — they stay visible in the docs tab so staff
+  // can see the rejection history but don't block the gate after a
+  // replacement is accepted.
+  const counts = await pool.query<{ pending: string; accepted: string; total: string }>(
     `SELECT
-       COUNT(*) FILTER (WHERE review_status IS DISTINCT FROM 'accepted') AS pending,
+       COUNT(*) FILTER (WHERE COALESCE(review_status, 'pending') NOT IN ('accepted', 'rejected')) AS pending,
+       COUNT(*) FILTER (WHERE review_status = 'accepted') AS accepted,
        COUNT(*) AS total
      FROM bi_documents
      WHERE application_id = $1 AND purged_at IS NULL`,
@@ -183,13 +188,14 @@ router.post("/:id/accept", requireAuth, requireStaffOrAdmin, async (req, res) =>
   );
   const total = Number(counts.rows[0]?.total ?? 0);
   const pending = Number(counts.rows[0]?.pending ?? 0);
+  const acceptedCount = Number(counts.rows[0]?.accepted ?? 0);
   // BI_SERVER_BLOCK_v178_DOC_ACCEPT_HARDENING_v1
   // Auto-PGI removed — v160 Submit-to-Carrier endpoint is now the only
   // path to carrier. On accept-all we ONLY advance the stage so the
   // manual button surfaces in the BI portal.
   let stageAdvanced = false;
   let nextStage: "document_review" | "ready_for_submission" | null = null;
-  if (total > 0 && pending === 0) {
+  if (acceptedCount > 0 && pending === 0) {
     const stageRow = await pool.query<{ source_type: string | null; status: string | null }>(
       `SELECT source_type, status FROM bi_applications WHERE id=$1 LIMIT 1`,
       [doc.application_id]
@@ -220,7 +226,8 @@ router.post("/:id/accept", requireAuth, requireStaffOrAdmin, async (req, res) =>
     }
   }
 
-  return ok(res, { success: true, accepted: { total, pending }, stageAdvanced, nextStage });
+  // BI_SERVER_BLOCK_v276_REJECTED_DOCS_DONT_BLOCK_GATE_v1 — include accepted
+  return ok(res, { success: true, accepted: { total, pending, accepted: acceptedCount }, stageAdvanced, nextStage });
 });
 
 router.post("/:id/reject", requireAuth, requireStaffOrAdmin, async (req, res) => {
