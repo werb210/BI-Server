@@ -9,6 +9,9 @@ const router = Router({ mergeParams: true });
 
 const SHAPE = `id, application_id, body, owner_user_id, mentions, created_at, updated_at`;
 
+// BI_SERVER_BLOCK_v261_CARRIER_PATH_E2E_FIX_v2
+// Portal NotesTab reads r.notes; previous handler returned `items`
+// → setNotes(undefined) → tab crashed on .map.
 router.get("/", async (req, res) => {
   const appId = String((req.params as { id?: string }).id ?? "").trim();
   if (!appId) return badRequest(res, "application id required");
@@ -16,7 +19,7 @@ router.get("/", async (req, res) => {
     `SELECT ${SHAPE} FROM bi_notes WHERE application_id=$1 AND is_deleted=false ORDER BY created_at DESC LIMIT 200`,
     [appId]
   );
-  return ok(res, { ok: true, items: r.rows });
+  return ok(res, { ok: true, notes: r.rows });
 });
 
 router.post("/", async (req, res) => {
