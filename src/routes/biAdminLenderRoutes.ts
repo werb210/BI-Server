@@ -77,9 +77,13 @@ router.delete("/admin/lenders/:id", async (req, res) => {
 // BI_SERVER_BLOCK_v65_LENDER_API_KEY_MINT_v1 — staff mints/lists/revokes
 // API keys for a given BI-lender. Secret is shown ONCE on creation, hashed
 // at rest. Bearer auth on biLenderApiRoutes verifies via key_hash.
+// BI_SERVER_BLOCK_v266_LENDER_ADMIN_FIXES_v1
+// Show the wire prefix (key_prefix column, e.g. "bk_a1b2c3...") not
+// a slice of the SHA-256 hash. The hash bytes are meaningless to the
+// operator and don't match the secret they saved when minting.
 router.get("/admin/lenders/:id/api-keys", async (req, res) => {
   const r = await pool.query(
-    `SELECT id, key_hash, key_prefix, is_active, last_used_at, created_at
+    `SELECT id, key_prefix, is_active, last_used_at, created_at
        FROM bi_lender_api_keys
       WHERE lender_id = $1
       ORDER BY created_at DESC`,
@@ -87,8 +91,8 @@ router.get("/admin/lenders/:id/api-keys", async (req, res) => {
   );
   const items = r.rows.map((row: any) => ({
     id: row.id,
-    prefix: typeof row.key_hash === "string" ? row.key_hash.slice(0, 8) : "",
-    is_active: row.is_active,  // BI_SERVER_BLOCK_v245_LIVE_TEST_FIXES_PT2_v1
+    prefix: typeof row.key_prefix === "string" ? row.key_prefix : "",
+    is_active: row.is_active,
     last_used_at: row.last_used_at,
     created_at: row.created_at,
   }));
@@ -119,13 +123,20 @@ router.post("/admin/lenders/:id/api-keys", async (req, res) => {
   });
 });
 
+// BI_SERVER_BLOCK_v266_LENDER_ADMIN_FIXES_v1
+// Live column is `is_active` (master schema 20260428). Old `active`
+// column lives only in the duplicate CREATE TABLE in 2026_05_03 which
+// is a no-op. Also set revoked_at so audit matches bulk revoke (see
+// revokeLenderKeys helper earlier in this file).
 router.post("/admin/lenders/:id/api-keys/:keyId/revoke", async (req, res) => {
-  await pool.query(
-    `UPDATE bi_lender_api_keys SET active = FALSE
-       WHERE id = $1 AND lender_id = $2`,
+  const r = await pool.query(
+    `UPDATE bi_lender_api_keys
+        SET is_active = FALSE, revoked_at = NOW()
+      WHERE id = $1 AND lender_id = $2 AND is_active = TRUE
+    RETURNING id`,
     [req.params.keyId, req.params.id]
   );
-  return ok(res, { revoked: true });
+  return ok(res, { revoked: (r.rowCount ?? 0) > 0 });
 });
 
 
