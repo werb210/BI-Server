@@ -66,6 +66,8 @@ import { startDocReminderJob } from "./services/docReminderService";
 
 import biNotesRoutes from "./routes/biNotesRoutes";
 import biApolloRoutes from "./routes/biApolloRoutes";
+// BI_SERVER_BLOCK_v281_APOLLO_ENROLLMENT_WEBHOOK_v1
+import biApolloWebhookRoutes from "./routes/biApolloWebhookRoutes";
 // BI_PGI_ALIGNMENT_v56
 import biAdminLenderRoutes from "./routes/biAdminLenderRoutes";
 import biContactFormRoutes from "./routes/biContactFormRoutes";
@@ -288,6 +290,10 @@ app.use("/api/v1/bi/underwriting", requireAuth, biUnderwritingRoutes);
 app.use("/api/v1/bi", biLenderApiRoutes);
 // BI_V1_FINAL_v47 — application-scoped notes (BI silo).
 app.use("/api/v1/bi/applications/:id/notes", requireAuth, biNotesRoutes);
+// BI_SERVER_BLOCK_v281_APOLLO_ENROLLMENT_WEBHOOK_v1 — unauthenticated
+// webhook mounted BEFORE the requireAuth Apollo routes so the
+// POST /apollo/webhook path isn't gated by staff JWT.
+app.use(biApolloWebhookRoutes);
 app.use("/api/v1/bi", requireAuth, biApolloRoutes);
 // BI_PGI_ALIGNMENT_v56
 app.use("/api/v1/bi", requireAuth, biAdminLenderRoutes);
