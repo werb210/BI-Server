@@ -40,7 +40,22 @@ router.get("/applications", async (req, res) => {
     `SELECT a.id,
             a.public_id,
             a.application_code,
-            COALESCE(a.status, a.stage::text) AS stage,
+            COALESCE(
+              CASE
+                WHEN a.status = 'created'              THEN 'new_application'
+                WHEN a.status = 'in_progress'          THEN 'in_progress'
+                WHEN a.status = 'document_review'      THEN 'document_review'
+                WHEN a.status = 'ready_for_submission' THEN 'submitted'
+                WHEN a.status = 'submitted'            THEN 'submitted'
+                WHEN a.status = 'under_review'         THEN 'under_review'
+                WHEN a.status = 'information_required' THEN 'under_review'
+                WHEN a.status = 'approved'             THEN 'approved'
+                WHEN a.status = 'declined'             THEN 'declined'
+                WHEN a.status = 'policy_issued'        THEN 'policy_issued'
+                ELSE NULL
+              END,
+              a.stage::text
+            ) AS stage,
             a.source,
             a.source_type,
             a.bankruptcy_flag,
@@ -153,7 +168,22 @@ router.get("/applications/:id", async (req, res) => {
                  AND purged_at IS NULL
                  AND COALESCE(review_status, 'pending') != 'accepted'
              )) AS all_docs_accepted,
-            COALESCE(a.status, a.stage::text) AS effective_stage
+            COALESCE(
+              CASE
+                WHEN a.status = 'created'              THEN 'new_application'
+                WHEN a.status = 'in_progress'          THEN 'in_progress'
+                WHEN a.status = 'document_review'      THEN 'document_review'
+                WHEN a.status = 'ready_for_submission' THEN 'submitted'
+                WHEN a.status = 'submitted'            THEN 'submitted'
+                WHEN a.status = 'under_review'         THEN 'under_review'
+                WHEN a.status = 'information_required' THEN 'under_review'
+                WHEN a.status = 'approved'             THEN 'approved'
+                WHEN a.status = 'declined'             THEN 'declined'
+                WHEN a.status = 'policy_issued'        THEN 'policy_issued'
+                ELSE NULL
+              END,
+              a.stage::text
+            ) AS effective_stage
      FROM bi_applications a
      LEFT JOIN bi_contacts c ON c.id = a.primary_contact_id
      LEFT JOIN bi_companies co ON co.id = a.company_id
