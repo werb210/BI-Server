@@ -32,9 +32,15 @@ async function enqueuePurgeIfTerminal(applicationId: string, stage: string) {
 // column is never written by the public flow.
 router.get("/applications", async (req, res) => {
   const hideDemo = String(req.query.hide_demo ?? "").toLowerCase() === "true";
-  const lenderId = typeof req.query.lender_id === "string" && req.query.lender_id.trim()
-    ? req.query.lender_id.trim()
-    : null;
+  // BI_SERVER_BLOCK_v268_CLEANUP_v1 — F-1: validate UUID format before
+  // letting it reach the $2::uuid cast, which throws 22P02 and 500s
+  // the whole listing if a malformed value comes in.
+  const UUID_RE_v268 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const rawLenderId = typeof req.query.lender_id === "string" ? req.query.lender_id.trim() : "";
+  if (rawLenderId && !UUID_RE_v268.test(rawLenderId)) {
+    return res.status(400).json({ error: "lender_id_not_uuid" });
+  }
+  const lenderId = rawLenderId || null;
 
   const result = await pool.query(
     `SELECT a.id,
