@@ -48,15 +48,51 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
   const publicId = s(req.params.public_id);
   if (!publicId) return res.status(400).json({ ok: false, error: "public_id_required" });
 
+  // BI_SERVER_BLOCK_v269_DOC_MIRROR_COLUMN_FIX_v1
+  // Parse the BF payload against the live bi_documents schema (master
+  // schema 20260222 + 20260428 blob_storage + v249 bf_provenance).
+  // We do NOT have a column for uploaded_by_name today; if BF needs
+  // its uploader name preserved a follow-up migration can add one.
   const b: any = req.body ?? {};
   const bfDocumentId = s(b.bf_document_id);
   const bfApplicationId = s(b.bf_application_id);
-  const documentType = s(b.document_type) ?? "other";
-  const fileName = s(b.file_name) ?? "document";
+  const bfDocumentTypeRaw = s(b.document_type) ?? "other";
+  const originalFilename = s(b.file_name) ?? "document";
   const mimeType = s(b.mime_type) ?? "application/octet-stream";
-  const fileSize = typeof b.file_size === "number" && Number.isFinite(b.file_size) ? b.file_size : null;
-  const storageUrl = s(b.storage_url);
-  const uploadedByName = s(b.uploaded_by_name);
+  const bytes = typeof b.file_size === "number" && Number.isFinite(b.file_size) ? b.file_size : null;
+  const blobUrl = s(b.storage_url);
+
+  // Best-effort mapping from BF's free-form document_type strings to
+  // bi_document_type ENUM. Fallback is 'enforcement_notice' because the
+  // ENUM has no generic "other" value and that bucket is least loaded
+  // for downstream filters. The original BF string is preserved in the
+  // document_type TEXT mirror column.
+  const BF_TO_BI_DOC_TYPE: Record<string, string> = {
+    loan_agreement: "loan_agreement_signed",
+    loan_agreement_signed: "loan_agreement_signed",
+    personal_guarantee: "personal_guarantee_copy",
+    personal_guarantee_copy: "personal_guarantee_copy",
+    financial_statement: "financial_statements",
+    financial_statements: "financial_statements",
+    bank_statement: "financial_statements",
+    tax_return: "financial_statements",
+    pl_12mo: "financial_statements",
+    forecast: "financial_statements",
+    annual_y1: "financial_statements",
+    annual_y2: "financial_statements",
+    annual_y3: "financial_statements",
+    proof_of_id: "proof_of_id",
+    id_verification: "id_verification",
+    drivers_license: "proof_of_id",
+    passport: "proof_of_id",
+    gov_id_primary: "proof_of_id",
+    gov_id_secondary: "proof_of_id",
+    corporate_registration: "corporate_registration_docs",
+    corporate_registration_docs: "corporate_registration_docs",
+    articles_of_incorporation: "corporate_registration_docs",
+    enforcement_notice: "enforcement_notice",
+  };
+  const docTypeEnum = BF_TO_BI_DOC_TYPE[bfDocumentTypeRaw.toLowerCase()] ?? "enforcement_notice";
 
   if (!bfDocumentId) {
     return res.status(400).json({ ok: false, error: "bf_document_id_required" });
@@ -94,16 +130,25 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
 
   const id = randomUUID();
   try {
+    // BI_SERVER_BLOCK_v269_DOC_MIRROR_COLUMN_FIX_v1
+    // Real columns per master schema + 20260428_bi_blob_storage + v249:
+    //   id, application_id, doc_type (NOT NULL enum), original_filename,
+    //   mime_type, bytes, blob_url, uploaded_by_actor (NOT NULL enum),
+    //   document_type (TEXT, BF's original string), source, bf_document_id,
+    //   bf_application_id, created_at.
+    // No updated_at column on bi_documents. No uploaded_by_name column.
     await pool.query(
       `INSERT INTO bi_documents
-         (id, application_id, document_type, file_name, mime_type, file_size,
-          storage_url, uploaded_by_name,
-          source, bf_document_id, bf_application_id,
-          created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'bf_mirror',$9,$10,NOW(),NOW())`,
+         (id, application_id, doc_type, original_filename, mime_type, bytes,
+          blob_url, uploaded_by_actor,
+          document_type, source, bf_document_id, bf_application_id,
+          created_at)
+       VALUES ($1,$2,$3::bi_document_type,$4,$5,$6,$7,'system'::bi_actor_type,
+               $8,'bf_mirror',$9,$10,NOW())`,
       [
-        id, biApplicationId, documentType, fileName, mimeType, fileSize,
-        storageUrl, uploadedByName,
+        id, biApplicationId, docTypeEnum, originalFilename, mimeType, bytes,
+        blobUrl,
+        bfDocumentTypeRaw,
         bfDocumentId, bfApplicationId,
       ],
     );
