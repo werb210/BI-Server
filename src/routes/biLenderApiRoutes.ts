@@ -60,6 +60,11 @@ async function authLender(req: any, res: any, next: any) {
       if (claims && claims.kind === "lender" && claims.id) {
         req.lenderId = claims.id;
         if (claims.user_id) req.lenderUserId = String(claims.user_id);
+        // BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1 — surface is_demo
+        // claim so per-route handlers can scope pipeline queries to the
+        // lender's current session mode. Demo sessions see ONLY demo
+        // apps; real sessions never see demo apps.
+        req.isDemo = claims.is_demo === true;
         return next();
       }
     } catch {
@@ -171,7 +176,14 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* BI_SERVER_BL
 });
 
 router.get("/lender/applications", authLender, async (req: any, res) => {
-  const r = await pool.query(`SELECT id, status, business_name, loan_amount, pgi_limit, annual_premium, quote_id, underwriter_ref, created_at, updated_at FROM bi_applications WHERE lender_id=$1 ORDER BY updated_at DESC LIMIT 200`, [req.lenderId]);
+  // BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1 — demo sessions see
+  // ONLY demo-flagged apps; real sessions never see demo apps. The
+  // is_demo column on bi_applications was added in v226; it's already
+  // populated correctly on INSERT for lender submissions. The bug was
+  // that the pipeline GET ignored it, so demo submissions appeared in
+  // the real lender's pipeline (and vice versa) until the user reloaded.
+  const demoFilter = req.isDemo === true ? "AND is_demo IS TRUE" : "AND is_demo IS NOT TRUE";
+  const r = await pool.query(`SELECT id, status, business_name, loan_amount, pgi_limit, annual_premium, quote_id, underwriter_ref, created_at, updated_at FROM bi_applications WHERE lender_id=$1 ${demoFilter} ORDER BY updated_at DESC LIMIT 200`, [req.lenderId]);
   return res.json({ applications: r.rows });
 });
 

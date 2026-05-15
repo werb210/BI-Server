@@ -63,6 +63,54 @@ router.get("/referrer/me", requireReferrer, async (req: any, res) => {
   res.json({ referrer: ref, intake_complete: Boolean(ref.intake_complete) });
 });
 router.post("/referrer/intake", requireReferrer, async (req: any, res) => { const b = req.body ?? {}; const required = ["first_name","last_name","email","address_line1","city","province","postal_code","country"]; const missing = required.filter((k) => !b[k]); if (missing.length) return res.status(400).json({ error: "missing_fields", fields: missing }) ; await pool.query(`UPDATE bi_referrers SET first_name=$1, last_name=$2, email=$3, company_name=$4, address_line1=$5, address_line2=$6, city=$7, province=$8, postal_code=$9, country=$10, etransfer_email=$11, intake_complete=TRUE, updated_at=NOW() WHERE id=$12`, [b.first_name,b.last_name,b.email,b.company_name ?? null,b.address_line1,b.address_line2 ?? null,b.city,b.province,b.postal_code,b.country,b.etransfer_email ?? null,req.referrerId]); res.json({ ok: true }); });
+// BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1 — RESTful PUT alias for
+// the intake update. The ReferrerPortal frontend has called PUT
+// /referrer/me since the page was first written; we only ever had POST
+// /referrer/intake on the server, so every save returned 401 (the
+// generic Express 404-on-unknown-method-for-known-path response, which
+// our requireReferrer-protected router surfaces as 401). The frontend
+// posts { profile: {...} } as the body, where profile contains the
+// flat key/value map the ReferrerPortal intake form collects (note:
+// keys are legal_name / business_name / etransfer_email / etc., not
+// the first_name/last_name/address_line1 the intake POST expects).
+// We map the legacy frontend keys to the bi_referrers columns. If the
+// frontend later switches to first_name/last_name/etc., both shapes
+// will work because we accept both.
+router.put("/referrer/me", requireReferrer, async (req: any, res) => {
+  const body = req.body ?? {};
+  const p = body.profile ?? body;
+  // Accept both new (first_name) and legacy (legal_name "First Last") shapes.
+  let first_name = p.first_name ?? "";
+  let last_name = p.last_name ?? "";
+  if (!first_name && !last_name && typeof p.legal_name === "string") {
+    const parts = p.legal_name.trim().split(/\s+/);
+    first_name = parts.shift() ?? "";
+    last_name = parts.join(" ");
+  }
+  const email = p.email ?? "";
+  const company_name = p.business_name ?? p.company_name ?? null;
+  const etransfer_email = p.etransfer_email ?? null;
+  const province = p.province ?? "";
+  const city = p.city ?? "";
+  const postal_code = p.postal_code ?? "";
+  const country = p.country ?? "CA";
+  const address_line1 = p.address ?? p.address_line1 ?? "";
+  const address_line2 = p.address_line2 ?? null;
+  // Minimum viable to flip intake_complete=TRUE: legal name + email.
+  if (!first_name || !email) {
+    return res.status(400).json({ error: "missing_fields", fields: ["legal_name", "email"].filter((k) => k === "legal_name" ? !first_name : !email) });
+  }
+  await pool.query(
+    `UPDATE bi_referrers
+        SET first_name=$1, last_name=$2, email=$3, company_name=$4,
+            address_line1=$5, address_line2=$6, city=$7, province=$8,
+            postal_code=$9, country=$10, etransfer_email=$11,
+            intake_complete=TRUE, updated_at=NOW()
+      WHERE id=$12`,
+    [first_name, last_name, email, company_name, address_line1, address_line2, city, province, postal_code, country, etransfer_email, req.referrerId]
+  );
+  res.json({ ok: true });
+});
 // BI_SERVER_BLOCK_v259_REAL_SUBMISSION_FIX_v2
 // bi_referrals.phone column does not exist; alias phone_e164 AS phone
 // to keep the response payload contract unchanged.
