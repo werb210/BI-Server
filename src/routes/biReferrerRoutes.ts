@@ -36,6 +36,32 @@ router.post("/referrer/otp/verify", async (req, res) => {
   res.json({ token, intake_complete: ref.intake_complete });
 });
 function requireReferrer(req: any, res: any, next: any) { const auth = String(req.headers.authorization ?? ""); if (!auth.startsWith("Bearer ")) return res.status(401).json({ error: "missing_token" }); try { const claims: any = jwt.verify(auth.slice(7), env.JWT_SECRET || "dev-missing-jwt-secret"); if (claims.kind !== "referrer") return res.status(403).json({ error: "wrong_session" }); req.referrerId = claims.id; next(); } catch { return res.status(401).json({ error: "invalid_token" }); } }
+
+// BI_SERVER_BLOCK_v333_REFERRER_ME_HANDLER_v1
+// Pre-fix GET /api/v1/referrer/me 404'd because no handler existed in this
+// router. The BI-Website /referrer portal calls /referrer/me immediately
+// post-OTP to populate the logged-in referrer's profile (name, intake
+// completion status). The 404 left the portal stuck on a "loading…" state
+// with no user object. Adding the handler -- mirrors GET /lender/me at
+// biLenderApiRoutes.ts:258. requireReferrer JWT-verifies the bearer token
+// and binds claims.id to req.referrerId; we then load the row from
+// bi_referrers and return the public profile shape the portal expects
+// ({ referrer, intake_complete }).
+router.get("/referrer/me", requireReferrer, async (req: any, res) => {
+  const r = await pool.query(
+    `SELECT id, first_name, last_name, full_name, company_name, email,
+            phone_e164 AS phone, address_line1, address_line2, city,
+            province, postal_code, country, etransfer_email,
+            intake_complete, created_at
+       FROM bi_referrers
+      WHERE id = $1
+      LIMIT 1`,
+    [req.referrerId],
+  );
+  if (!r.rows[0]) return res.status(404).json({ error: "referrer_not_found" });
+  const ref = r.rows[0];
+  res.json({ referrer: ref, intake_complete: Boolean(ref.intake_complete) });
+});
 router.post("/referrer/intake", requireReferrer, async (req: any, res) => { const b = req.body ?? {}; const required = ["first_name","last_name","email","address_line1","city","province","postal_code","country"]; const missing = required.filter((k) => !b[k]); if (missing.length) return res.status(400).json({ error: "missing_fields", fields: missing }) ; await pool.query(`UPDATE bi_referrers SET first_name=$1, last_name=$2, email=$3, company_name=$4, address_line1=$5, address_line2=$6, city=$7, province=$8, postal_code=$9, country=$10, etransfer_email=$11, intake_complete=TRUE, updated_at=NOW() WHERE id=$12`, [b.first_name,b.last_name,b.email,b.company_name ?? null,b.address_line1,b.address_line2 ?? null,b.city,b.province,b.postal_code,b.country,b.etransfer_email ?? null,req.referrerId]); res.json({ ok: true }); });
 // BI_SERVER_BLOCK_v259_REAL_SUBMISSION_FIX_v2
 // bi_referrals.phone column does not exist; alias phone_e164 AS phone
