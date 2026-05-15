@@ -115,6 +115,30 @@ router.put("/referrer/me", requireReferrer, async (req: any, res) => {
 // bi_referrals.phone column does not exist; alias phone_e164 AS phone
 // to keep the response payload contract unchanged.
 router.get("/referrer/dashboard", requireReferrer, async (req: any, res) => { const r = await pool.query(`SELECT r.id, r.full_name, r.company_name, r.email, r.phone_e164 AS phone, r.status, r.created_at, a.id AS application_id, a.status AS application_status, a.annual_premium, a.business_name FROM bi_referrals r LEFT JOIN bi_applications a ON a.id = r.application_id WHERE r.referrer_id=$1 ORDER BY r.created_at DESC LIMIT 500`, [req.referrerId]); res.json({ referrals: r.rows }); });
+// BI_SERVER_BLOCK_v244_DEMO_REFERRER_STORAGE_v1 — alias for the
+// pre-existing /referrer/dashboard. The BI-Website ReferrerPortal has
+// always hit GET /referrer/referrals; that path 404'd, the catch block
+// in ReferrerPortal.tsx's auth-bootstrap useEffect treated the 404 as
+// a session failure and wiped the localStorage token, and the
+// subsequent PUT /referrer/me 401'd with missing_token. Adding this
+// alias is the server-side half of the fix; the client-side half
+// (don't kill the token when /referrer/referrals fails) lives in
+// BI-Website v179.
+router.get("/referrer/referrals", requireReferrer, async (req: any, res) => {
+  const r = await pool.query(
+    `SELECT r.id, r.full_name, r.company_name, r.email, r.phone_e164 AS phone, r.status, r.created_at,
+            a.id AS application_id, a.status AS application_status, a.annual_premium, a.business_name
+       FROM bi_referrals r
+       LEFT JOIN bi_applications a ON a.id = r.application_id
+      WHERE r.referrer_id = $1
+      ORDER BY r.created_at DESC
+      LIMIT 500`,
+    [req.referrerId]
+  );
+  // Return both shapes — the frontend probes for `items` first, then
+  // falls back to treating the response as a plain array.
+  res.json({ items: r.rows, referrals: r.rows });
+});
 // BI_SERVER_BLOCK_v259_REAL_SUBMISSION_FIX_v2
 // bi_referrals.phone -> phone_e164. bi_contacts has no company_name or
 // updated_at column (per master schema 20260222_00 — bi_contacts joins

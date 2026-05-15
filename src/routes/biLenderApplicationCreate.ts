@@ -24,6 +24,17 @@ function num(v: any): number | null { if (v === null || v === undefined || v ===
 function bool(v: any): boolean { if (v === true || v === false) return v; if (typeof v === "string") return v.toLowerCase() === "yes" || v.toLowerCase() === "true"; return Boolean(v); }
 function getLenderId(req: Request): string | null { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return null; const secret = process.env.JWT_SECRET; if (!secret) return null; try { const payload = jwt.verify(m[1], secret) as any; if (payload?.kind !== "lender" || !payload?.id) return null; return String(payload.id); } catch { return null; } }
 function getLenderUserId(req: Request): string | null { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return null; const secret = process.env.JWT_SECRET; if (!secret) return null; try { const payload = jwt.verify(m[1], secret) as any; if (payload?.kind !== "lender" || !payload?.user_id) return null; return String(payload.user_id); } catch { return null; } }
+// BI_SERVER_BLOCK_v244_DEMO_REFERRER_STORAGE_v1 — JWT carries is_demo
+// for demo sessions (minted by /lender/demo/session). Reading the flag
+// from the token rather than re-querying bi_lenders.is_demo is the
+// authoritative source: the demo lender row's is_demo column had been
+// silently flipped FALSE in at least one prod deploy (likely a manual
+// SQL touch or a partial v226 rollback), which caused demo INSERTs to
+// store is_demo=FALSE and disappear from the demo pipeline filter
+// while showing up in the real pipeline as soon as the user hit
+// "Exit demo". Trusting the JWT claim makes the demo flag depend
+// solely on which session the user is in, not on row drift.
+function getLenderIsDemo(req: Request): boolean { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return false; const secret = process.env.JWT_SECRET; if (!secret) return false; try { const payload = jwt.verify(m[1], secret) as any; return payload?.is_demo === true; } catch { return false; } }
 
 router.post("/api/v1/lender/applications", async (req: Request, res: Response, next: NextFunction) => {
   if (!req.body || typeof req.body !== "object" || !req.body.guarantor || typeof req.body.guarantor !== "object") {
@@ -42,9 +53,16 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
   try {
     const lr = await pool.query(`SELECT company_name, is_demo FROM bi_lenders WHERE id = $1 LIMIT 1`, [lenderId]);
     lenderCompanyName = (lr.rows[0]?.company_name as string | undefined) || null;
-    lenderIsDemo = lr.rows[0]?.is_demo === true;
+    // BI_SERVER_BLOCK_v244_DEMO_REFERRER_STORAGE_v1 — JWT claim wins
+    // when set; bi_lenders.is_demo is fallback for non-demo-session
+    // paths (e.g. API-key auth for a lender flagged as demo at the
+    // row level). OR semantics: a demo session can never store a
+    // non-demo row, even if the bi_lenders row's flag is wrong.
+    lenderIsDemo = (lr.rows[0]?.is_demo === true) || getLenderIsDemo(req);
   } catch {
-    // Non-fatal: row still saved without lender_name.
+    // Non-fatal: row still saved without lender_name. Fall back to JWT
+    // claim alone if the bi_lenders SELECT threw (e.g. transient DB).
+    lenderIsDemo = getLenderIsDemo(req);
   }
   // BI_SERVER_BLOCK_v262_CARRIER_PATH_E2E_FIX_v3 — added source_type='lender'.
   const result = await pool.query(`INSERT INTO bi_applications (entity_type, status, source, source_type, lender_id, created_by_lender_id, created_by_lender_user_id, application_code, company_name, guarantor_name, guarantor_phone, guarantor_email, lender_name, is_demo, core_inputs, consents, lender_notes, created_by_actor, created_at, updated_at) VALUES ('applicant', 'new_application', 'lender', 'lender', $1, $1, $12, $2, $3, $4, $5, $6, $10, $11, $7::jsonb, $8::jsonb, $9, 'lender', NOW(), NOW()) RETURNING id, application_code`, [lenderId, applicationCode, b.company_name, b.guarantor?.name, b.guarantor?.phone, b.guarantor?.email || null, JSON.stringify(coreInputs), JSON.stringify({ data_use: true, credit_pull: true, info_accurate: true, source: "lender_attestation" }), b.lender_notes || null, lenderCompanyName, lenderIsDemo, lenderUserId]);
