@@ -68,10 +68,13 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
     }
     pgi_application_id = submit.application_id;
     pgi_status = submit.status || "received";
+    // BI_SERVER_BLOCK_v243_LENDER_STAGE_ROUTING_v1 — was status='submitted';
+    // now sent_to_pgi to land in the v47 8-stage operator-spec column.
+    // Migration v243 also remaps existing legacy 'submitted' lender rows.
     await pool.query(
       `UPDATE bi_applications
           SET pgi_application_id=$1,
-              status='submitted',
+              status='sent_to_pgi',
               carrier_received_at=NOW(),
               carrier_last_event='application.submitted',
               carrier_last_event_at=NOW(),
