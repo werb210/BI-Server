@@ -85,8 +85,7 @@ router.get("/crm/contacts", async (req, res) => {
            c.outreach_updated_at,
            c.company_id,
            co.legal_name AS company_name,
-           c.created_at,
-           c.updated_at
+           c.created_at
       FROM bi_contacts c
       LEFT JOIN bi_companies co ON co.id = c.company_id
      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
@@ -126,7 +125,6 @@ router.get("/crm/contacts/:id", async (req, res) => {
               co.legal_name AS company_name,
               co.operating_name AS company_operating_name,
               c.created_at,
-              c.updated_at,
               (SELECT COUNT(*)::int FROM bi_contact_activity a WHERE a.contact_id = c.id) AS activity_count
          FROM bi_contacts c
          LEFT JOIN bi_companies co ON co.id = c.company_id
