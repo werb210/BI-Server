@@ -113,7 +113,17 @@ router.get("/required-documents", async (_req, res) => {
   ok(res, { documents: result.rows });
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", async (req, res, next) => {
+  // BI_SERVER_BLOCK_v247_BI_API_FIXES_v1 -- UUID guard. This router is
+  // ALSO mounted at the bare /api/v1/bi prefix (server.ts line 259) for
+  // legacy callers, which means non-UUID paths like /carrier-health,
+  // /admin/referrers, /crm/contacts etc. would hit THIS handler with
+  // req.params.id="carrier-health" and crash the SQL query with
+  // "invalid input syntax for type uuid". Skip + next() if :id doesn't
+  // look like a UUID, letting downstream routers try.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id ?? "")) {
+    return next();
+  }
   // BI_HARDENING_v44 — prefer blob_name (new uploads); fall back to legacy disk
   // path for documents written before this block.
   const result = await pool.query(
