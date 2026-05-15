@@ -1,0 +1,35 @@
+# BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1
+# Daily Mon-Fri trigger for the docs-reminder cron endpoint on
+# BI-Server. Runs at 13:00 UTC = 07:00 MT. The endpoint itself is
+# idempotent (24-hour gate inside the SQL query), so a missed run or
+# accidental double-trigger is harmless.
+#
+# Required repo secrets:
+#   BI_SERVER_URL    e.g. https://bi-server-cse0apamgkheb9d5.canadacentral-01.azurewebsites.net
+#   JOB_AUTH_TOKEN   matches the JOB_AUTH_TOKEN env var on BI-Server's
+#                    Azure App Service config. Rotate by changing both
+#                    places at once.
+#
+# Trigger manually via the Actions tab "Run workflow" button for testing.
+
+name: BI docs reminder cron
+
+on:
+  schedule:
+    - cron: "0 13 * * 1-5"  # 13:00 UTC Mon-Fri = 07:00 MT
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/v1/jobs/docs-reminder
+        run: |
+          set -euo pipefail
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${{ secrets.JOB_AUTH_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.BI_SERVER_URL }}/api/v1/jobs/docs-reminder" \
+            | tee response.json
+          # Fail the job if BI-Server responded but with ok=false in body.
+          test "$(jq -r '.ok' response.json)" = "true"

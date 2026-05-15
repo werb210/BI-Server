@@ -37,6 +37,8 @@ import biPayoutRoutes from "./routes/biPayoutRoutes";
 import biPolicyRoutes from "./routes/biPolicyRoutes";
 import biQuoteRoutes from "./routes/biQuoteRoutes";
 import biReferrerRoutes from "./routes/biReferrerRoutes";
+// BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1
+import biJobs from "./routes/biJobs";
 import biReportRoutes from "./routes/biReportRoutes";
 import biRoutes from "./routes/biRoutes";
 import biUnderwritingRoutes from "./routes/biUnderwritingRoutes";
@@ -223,6 +225,10 @@ app.use(biLenderApplicationCreate);
 app.use("/api/v1", biCors, biLenderApiRoutes);
 app.use("/api/v1", biCors, biApplicantOtpRoutes);
 app.use("/api/v1", biCors, biReferrerRoutes);
+// BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1 — cron-triggered job
+// endpoints. Mounted under /api/v1 alongside other public routes; auth
+// is enforced per-route via JOB_AUTH_TOKEN bearer (see biJobs.ts).
+app.use("/api/v1", biCors, biJobs);
 app.use("/api/v1", biCors, requireAuth, biScoreRoutes);
 
 // Authenticated BI endpoints — every BI route lives under /api/v1/bi
