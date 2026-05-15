@@ -47,20 +47,29 @@ router.get("/applications", async (req, res) => {
             a.public_id,
             a.application_code,
             -- BI_SERVER_BLOCK_v265_PIPELINE_CASE_ALIGN_BI_STAGES_v1
+            -- BI_SERVER_BLOCK_v243_LENDER_STAGE_ROUTING_v1
             -- Every value here must exist in BI_STAGES (BF-portal
-            -- biStages.ts): new_application, documents_pending,
-            -- under_review, submitted, quoted, bound, declined, claim.
-            -- Anything else is invisible in the silo Pipeline kanban
-            -- because PipelinePage groups by stage === column.id.
+            -- biStages.ts). After v47's 8-stage realignment the visible
+            -- columns are: new_application, documents_pending,
+            -- under_review, docs_rejected, sent_to_pgi, quoted, bound,
+            -- declined. The legacy 'submitted' status (used by
+            -- biLenderApplicationCreate pre-v243) is now remapped to
+            -- 'sent_to_pgi' so pre-v243 lender rows surface in the new
+            -- "Sent to PGI" column. 'ready_for_submission' likewise
+            -- routes to sent_to_pgi as it represents the same
+            -- "forwarded to carrier" state.
             COALESCE(
               CASE
                 WHEN a.status = 'created'              THEN 'new_application'
+                WHEN a.status = 'new_application'      THEN 'new_application'
                 WHEN a.status = 'in_progress'          THEN 'documents_pending'
                 WHEN a.status = 'document_review'      THEN 'under_review'
-                WHEN a.status = 'ready_for_submission' THEN 'submitted'
-                WHEN a.status = 'submitted'            THEN 'submitted'
                 WHEN a.status = 'under_review'         THEN 'under_review'
                 WHEN a.status = 'information_required' THEN 'under_review'
+                WHEN a.status = 'docs_rejected'        THEN 'docs_rejected'
+                WHEN a.status = 'ready_for_submission' THEN 'sent_to_pgi'
+                WHEN a.status = 'submitted'            THEN 'sent_to_pgi'
+                WHEN a.status = 'sent_to_pgi'          THEN 'sent_to_pgi'
                 WHEN a.status = 'approved'             THEN 'quoted'
                 WHEN a.status = 'declined'             THEN 'declined'
                 WHEN a.status = 'policy_issued'        THEN 'bound'
@@ -188,15 +197,19 @@ router.get("/applications/:id", async (req, res) => {
                  AND COALESCE(review_status, 'pending') NOT IN ('accepted', 'rejected')
              )) AS all_docs_accepted,
             -- BI_SERVER_BLOCK_v265_PIPELINE_CASE_ALIGN_BI_STAGES_v1 (detail)
+            -- BI_SERVER_BLOCK_v243_LENDER_STAGE_ROUTING_v1
             COALESCE(
               CASE
                 WHEN a.status = 'created'              THEN 'new_application'
+                WHEN a.status = 'new_application'      THEN 'new_application'
                 WHEN a.status = 'in_progress'          THEN 'documents_pending'
                 WHEN a.status = 'document_review'      THEN 'under_review'
-                WHEN a.status = 'ready_for_submission' THEN 'submitted'
-                WHEN a.status = 'submitted'            THEN 'submitted'
                 WHEN a.status = 'under_review'         THEN 'under_review'
                 WHEN a.status = 'information_required' THEN 'under_review'
+                WHEN a.status = 'docs_rejected'        THEN 'docs_rejected'
+                WHEN a.status = 'ready_for_submission' THEN 'sent_to_pgi'
+                WHEN a.status = 'submitted'            THEN 'sent_to_pgi'
+                WHEN a.status = 'sent_to_pgi'          THEN 'sent_to_pgi'
                 WHEN a.status = 'approved'             THEN 'quoted'
                 WHEN a.status = 'declined'             THEN 'declined'
                 WHEN a.status = 'policy_issued'        THEN 'bound'
