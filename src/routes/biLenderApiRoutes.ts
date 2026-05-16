@@ -11,8 +11,21 @@ import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
 import { normalizeE164 } from "../util/phoneE164";
 import { generatePublicId } from "../util/publicId";
+// BI_SERVER_BLOCK_BI_ROUND7_LENDER_DOCS_v1 -- needed by the new
+// POST /lender/applications/:code/documents endpoint below.
+import multer from "multer";
+import { getStorage } from "../lib/storage";
 
 const router = Router();
+
+// BI_SERVER_BLOCK_BI_ROUND7_LENDER_DOCS_v1
+// Multer instance for lender uploads. Same 5MB-per-file cap as
+// the public docs endpoint (biPublicApplicationRoutes.ts:354) to
+// stay consistent with PGI carrier policy.
+const lenderDocUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
 // BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1 — Per-key (or per-IP fallback) rate limit.
 const _lenderLimitPerMin = Number(process.env.RATE_LIMIT_LENDER_PER_MIN || 60);
 const lenderRateLimit = rateLimit({
@@ -142,6 +155,26 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* BI_SERVER_BL
      score.score_id, ("score" in score) ? score.score : null, score.decision,
      b,
      req.lenderUserId ?? null]);
+
+  // BI_SERVER_BLOCK_BI_ROUND7_LENDER_DOCS_v1
+  // Populate application_code so the row can be looked up by code
+  // post-creation. Migration v227 added the column + backfilled
+  // existing rows from public_id, but every INSERT path needs to
+  // set it explicitly for new rows -- the migration is one-shot.
+  // public_id is reused as the code value: it's already generated,
+  // already unique (Crockford 8-char), and the v227 backfill set
+  // the precedent that they're interchangeable. Future codes can
+  // diverge from public_id once we have a separate generator.
+  await pool.query(
+    `UPDATE bi_applications SET application_code = public_id WHERE id = $1 AND application_code IS NULL`,
+    [id]
+  ).catch((err: any) => {
+    // eslint-disable-next-line no-console
+    console.warn("lender.applications.application_code_backfill_failed", {
+      id, message: err?.message, code: err?.code,
+    });
+  });
+
   // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1 — BUG #1 fix: auto-forward to carrier after
   let lenderCompanyName: string | null = null;
   let lenderIsDemo = false;
@@ -163,9 +196,14 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* BI_SERVER_BL
     pgi_error = String(e?.message ?? e);
   }
 
+  // BI_SERVER_BLOCK_BI_ROUND7_LENDER_DOCS_v1 -- include
+  // application_code in the response so the frontend (BI-Website
+  // src/pages/LenderApplicationNew.tsx:84) can use it for the
+  // follow-up document upload.
   return res.status(201).json({
     public_id: publicId,
     application_id: id,
+    application_code: publicId,
     status: pgi_application_id ? "submitted" : "ready_for_submission",
     score_id: score.score_id,
     score: "score" in score ? score.score : null,
@@ -362,6 +400,162 @@ router.get("/lender/applications/mine", authLender, async (req: any, res) => {
 
 
 // BI_SERVER_BLOCK_v225_CARRIER_VISIBILITY_v1 — lender-scoped timeline.
+// BI_SERVER_BLOCK_BI_ROUND7_LENDER_DOCS_v1
+// POST /lender/applications/:code/documents
+// Lender uploads documents for an application they own. Multer
+// parses multipart bodies with `files` (multi) + `doc_types`
+// (parallel index). Each file is persisted to blob storage and
+// then to bi_documents with uploaded_by_actor='lender'. Behaves
+// like the public docs handler (biPublicApplicationRoutes.ts:359)
+// minus the score_decision gate -- lender apps don't go through
+// the score-approve gate, they're carrier-direct.
+router.post(
+  "/lender/applications/:code/documents",
+  authLender,
+  lenderRateLimit,
+  lenderDocUpload.array("files"),
+  async (req: any, res: any) => {
+    const code = String(req.params.code ?? "").trim();
+    if (!code) return res.status(400).json({ error: "missing_code" });
+
+    // Ownership + state check. application_code lookup also catches
+    // public_id (post-v227 backfill they're equal); created_by_lender_id
+    // ensures lenders can't upload to each other's apps.
+    const ownerCheck = await pool.query(
+      `SELECT id, status FROM bi_applications
+        WHERE application_code = $1 AND created_by_lender_id = $2
+        LIMIT 1`,
+      [code, req.lenderId],
+    );
+    const app = ownerCheck.rows[0];
+    if (!app) return res.status(404).json({ error: "not_found" });
+
+    // Status gate: uploads allowed in ready_for_submission OR submitted.
+    // Beyond that (document_review / under_review / approved / declined /
+    // policy_issued) staff own the document set. Reject 409 with the
+    // current status so the frontend can surface a clear error.
+    const status = String(app.status ?? "").toLowerCase();
+    if (status !== "ready_for_submission" && status !== "submitted") {
+      return res.status(409).json({
+        error: "wrong_status",
+        current: status,
+        message: "Lender document upload only allowed in ready_for_submission or submitted",
+      });
+    }
+
+    const files = (req.files as Express.Multer.File[]) ?? [];
+    if (files.length === 0) return res.status(400).json({ error: "no_files" });
+
+    const docTypesRaw = req.body?.doc_types;
+    const docTypes = Array.isArray(docTypesRaw)
+      ? docTypesRaw
+      : typeof docTypesRaw === "string" ? [docTypesRaw] : [];
+
+    const store = getStorage();
+    const created: Array<{ id: string; doc_type: string; filename: string }> = [];
+
+    for (const [idx, file] of files.entries()) {
+      const docType = typeof docTypes[idx] === "string" && docTypes[idx].trim()
+        ? docTypes[idx].trim()
+        : "other";
+
+      let put;
+      try {
+        put = await store.put({
+          buffer: file.buffer,
+          filename: file.originalname,
+          contentType: file.mimetype,
+          pathPrefix: `applications/${app.id}`,
+        });
+      } catch (err) {
+        return res.status(502).json({
+          error: "storage_failed",
+          detail: String((err as Error)?.message ?? err),
+        });
+      }
+
+      let inserted;
+      try {
+        inserted = await pool.query(
+          `INSERT INTO bi_documents
+             (application_id, doc_type, original_filename, storage_key,
+              blob_name, blob_url, sha256_hash, mime_type, bytes,
+              uploaded_by_actor, uploaded_by_user_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'lender', $10)
+           RETURNING id`,
+          [
+            app.id, docType, file.originalname, put.blobName,
+            put.blobName, put.url, put.hash, file.mimetype, put.sizeBytes,
+            req.lenderUserId ?? null,
+          ],
+        );
+      } catch (err) {
+        return res.status(400).json({
+          error: "invalid_doc_type",
+          doc_type: docType,
+          detail: String((err as Error)?.message ?? err),
+        });
+      }
+
+      created.push({
+        id: inserted.rows[0].id as string,
+        doc_type: docType,
+        filename: file.originalname,
+      });
+
+      await pool.query(
+        `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
+         VALUES($1, 'lender', 'document_uploaded', $2)`,
+        [app.id, `Lender uploaded document: ${file.originalname}`],
+      ).catch(() => { /* non-fatal, doc is already stored */ });
+    }
+
+    return res.status(200).json({ ok: true, documents: created });
+  },
+);
+
+// BI_SERVER_BLOCK_BI_ROUND7_LENDER_DOCS_v1
+// GET /lender/applications/:code/documents
+// List documents for a lender's application. Excludes purged rows
+// (purged_at IS NULL) so post-decision purged docs don't leak.
+router.get(
+  "/lender/applications/:code/documents",
+  authLender,
+  async (req: any, res: any) => {
+    const code = String(req.params.code ?? "").trim();
+    if (!code) return res.status(400).json({ error: "missing_code" });
+
+    const ownerCheck = await pool.query(
+      `SELECT id FROM bi_applications
+        WHERE application_code = $1 AND created_by_lender_id = $2
+        LIMIT 1`,
+      [code, req.lenderId],
+    );
+    const app = ownerCheck.rows[0];
+    if (!app) return res.status(404).json({ error: "not_found" });
+
+    const docs = await pool.query(
+      `SELECT id, doc_type, original_filename, bytes, mime_type, created_at
+         FROM bi_documents
+        WHERE application_id = $1 AND purged_at IS NULL
+        ORDER BY created_at DESC`,
+      [app.id],
+    );
+
+    return res.status(200).json({
+      application_code: code,
+      documents: docs.rows.map((d: any) => ({
+        id: d.id,
+        doc_type: d.doc_type,
+        filename: d.original_filename,
+        bytes: Number(d.bytes ?? 0),
+        mime_type: d.mime_type ?? null,
+        created_at: d.created_at,
+      })),
+    });
+  },
+);
+
 router.get("/lender/applications/:code/timeline", authLender, async (req: any, res) => {
   const { code } = req.params;
   const ownerCheck = await pool.query(
