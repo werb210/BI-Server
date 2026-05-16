@@ -435,4 +435,42 @@ router.get("/analytics", async (req, res) => {
   }
 });
 
+// BI_SERVER_BLOCK_BI_ROUND8_MARKETING_v1
+router.post("/internal/reply", async (req, res) => {
+  const tok = String(req.headers["x-backend-token"] || "");
+  if (!tok || tok !== process.env.BI_BACKEND_TOKEN) {
+    return res.status(401).json({ error: { code: "unauthorized" } });
+  }
+  const b = (req.body || {}) as any;
+  const phone = String(b.from_phone || "").trim();
+  if (!phone) return res.status(400).json({ error: { code: "bad_request", message: "from_phone required" } });
+  try {
+    const cr = await pool.query(`SELECT id FROM bi_contacts WHERE phone_e164 = $1 LIMIT 1`, [phone]);
+    if (cr.rowCount === 0) return res.json({ matched: false });
+    const contactId = cr.rows[0].id;
+    const er = await pool.query(
+      `UPDATE bi_sequence_enrollments e
+          SET status = 'paused', paused_reason = 'replied'
+         FROM bi_sequences s
+        WHERE e.sequence_id = s.id
+          AND e.contact_id = $1
+          AND e.status = 'active'
+          AND s.pause_on_reply = TRUE
+        RETURNING e.id, e.sequence_id`,
+      [contactId],
+    );
+    for (const row of er.rows) {
+      await pool.query(
+        `INSERT INTO bi_sequence_events (enrollment_id, event_type, channel, metadata)
+              VALUES ($1, 'replied', 'sms', $2::jsonb)`,
+        [row.id, JSON.stringify({ inbound_from: phone, body: b.body ?? null })],
+      );
+    }
+    return res.json({ matched: true, paused: er.rowCount, contact_id: contactId });
+  } catch (err) {
+    logger.error({ err }, "bi.marketing.internal.reply.failed");
+    return res.status(500).json({ error: { code: "internal" } });
+  }
+});
+
 export default router;
