@@ -28,6 +28,7 @@ import biOutreachCrmRoutes from "./routes/biOutreachCrmRoutes";
 import biAuthRoutes, { biAppApplicantRoutes } from "./routes/biAuthRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
+import biMarketingRoutes from "./routes/biMarketingRoutes";
 // BI_SERVER_BLOCK_v257_STAFF_DIRECTORY_v1
 import biStaffRoutes from "./routes/biStaffRoutes";
 import biDocumentRoutes from "./routes/biDocumentRoutes";
@@ -265,6 +266,8 @@ app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
 // BF-portal calls /api/v1/bi/crm/contacts and friends; mount at /api/v1/bi
 // so the absolute URL matches the router's path.
 app.use("/api/v1/bi", requireAuth, biCrmRoutes);
+// BI_SERVER_BLOCK_BI_ROUND8_MARKETING_v1
+app.use("/api/v1/bi/marketing", requireAuth, biMarketingRoutes);
 // BI_SERVER_BLOCK_v257_STAFF_DIRECTORY_v1
 app.use("/api/v1/bi/staff", requireAuth, biStaffRoutes);
 // BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — outreach endpoints under /api/v1/bi/crm/outreach/*.
