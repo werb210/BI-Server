@@ -83,6 +83,65 @@ router.get("/admin/referrers", async (_req, res) => {
     return ok(res, { referrers: [] });
   }
 });
+
+// BI_SERVER_BLOCK_BI_ADMIN_REFERRER_DETAIL_v1
+// Staff portal drills into a referrer to see the four related sets the
+// detail panel expects: the referrer row itself, the referrals they
+// generated, the BI applications matched to them, and the commission
+// ledger entries. Shape mirrors BIReferrerManagement.tsx Detail type.
+// Unknown ids return 404 so the portal can render an empty state
+// instead of a generic API_ERROR. All queries are read-only and
+// capped at 500 rows.
+router.get("/admin/referrers/:id/detail", async (req, res) => {
+  const id = req.params.id;
+  try {
+    const refRow = await pool.query(`SELECT * FROM bi_referrers WHERE id = $1 LIMIT 1`, [id]);
+    if (refRow.rowCount === 0) {
+      return res.status(404).json({ status: "error", error: "REFERRER_NOT_FOUND" });
+    }
+    const referrals = await pool.query(
+      `SELECT id, full_name, company_name, email, phone_e164, ref_code, sms_sent_at,
+              application_id, application_created, matched_at, status, created_at
+         FROM bi_referrals
+        WHERE referrer_id = $1
+        ORDER BY created_at DESC NULLS LAST
+        LIMIT 500`,
+      [id],
+    );
+    const applications = await pool.query(
+      `SELECT a.id, a.application_code,
+              COALESCE(a.business_name, a.company_name) AS business_name,
+              a.stage, a.status, a.annual_premium, a.policy_id, a.updated_at
+         FROM bi_applications a
+        WHERE a.referrer_id = $1
+        ORDER BY a.updated_at DESC NULLS LAST
+        LIMIT 500`,
+      [id],
+    );
+    const commissions = await pool.query(
+      `SELECT c.id, c.amount, c.status, c.accrued_at, c.payable_at, c.paid_at,
+              c.application_id,
+              COALESCE(a.business_name, a.company_name) AS business_name
+         FROM bi_referrer_commissions c
+         LEFT JOIN bi_applications a ON a.id = c.application_id
+        WHERE c.referrer_id = $1
+        ORDER BY c.accrued_at DESC NULLS LAST
+        LIMIT 500`,
+      [id],
+    );
+    return ok(res, {
+      detail: {
+        referrer: refRow.rows[0],
+        referrals: referrals.rows,
+        applications: applications.rows,
+        commissions: commissions.rows,
+      },
+    });
+  } catch (err) {
+    logger.error({ err, id }, "referrer detail failed");
+    return res.status(500).json({ status: "error", error: "REFERRER_DETAIL_FAILED" });
+  }
+});
 router.post("/admin/lenders", async (req, res) => { const b = (req.body ?? {}) as Record<string, unknown>; const company_name = String(b.company_name ?? "").trim(); const contact_full_name = String(b.contact_full_name ?? "").trim(); const contact_email = String(b.contact_email ?? "").trim().toLowerCase(); const contact_phone_e164 = String(b.contact_phone_e164 ?? "").trim(); const country = String(b.country ?? "CA").toUpperCase(); if (!company_name) return badRequest(res, "company_name required"); if (!contact_full_name) return badRequest(res, "contact_full_name required"); if (!contact_email) return badRequest(res, "contact_email required"); if (!contact_phone_e164) return badRequest(res, "contact_phone_e164 required"); if (!COUNTRY_RE.test(country)) return badRequest(res, "country must be CA or US"); try { const r = await pool.query<{ id: string }>(`INSERT INTO bi_lenders (company_name, website_url, address_line1, city, province, postal_code, country, contact_full_name, contact_email, contact_phone_e164, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE) RETURNING id`, [company_name,(b.website_url as string) || null,(b.address_line1 as string) || null,(b.city as string) || null,(b.province as string) || null,(b.postal_code as string) || null,country,contact_full_name, contact_email, contact_phone_e164]); const lender_id = r.rows[0]!.id; await mirrorToContact({ source: "lender_contact", full_name: contact_full_name, email: contact_email, phone_e164: contact_phone_e164, company_name, extra_tags: [`lender:${lender_id}`] }); /* BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 */ void sendBiSms(contact_phone_e164, `Boreal Risk: ${contact_full_name}, you have been added as a lender. Sign in to the lender portal: https://www.boreal.insure/lender/login. Use this mobile number when prompted. Reply STOP to opt out.`); return ok(res, { id: lender_id }); } catch (err) { logger.error({ err }, "create lender failed"); return badRequest(res, "create failed"); } });
 router.patch("/admin/lenders/:id", async (req, res) => { const id = req.params.id; const b = (req.body ?? {}) as Record<string, unknown>; if (b.country !== undefined && !COUNTRY_RE.test(String(b.country).toUpperCase())) return badRequest(res, "country must be CA or US"); const setSql: string[] = []; const vals: unknown[] = [id]; let i = 2; const cols = ["company_name","website_url","address_line1","city","province","postal_code","country","contact_full_name","contact_email","contact_phone_e164","is_active"]; for (const c of cols) { if (b[c] !== undefined) { setSql.push(`${c} = $${i++}`); vals.push(c === "country" ? String(b[c]).toUpperCase() : b[c]); }} if (!setSql.length) return badRequest(res, "no fields to update"); await pool.query(`UPDATE bi_lenders SET ${setSql.join(", ")} WHERE id = $1`, vals); /* BI_SERVER_BLOCK_v237_REVOKE_KEYS_ON_DEACTIVATE_v1 */ let _keysRevoked = 0; if (b.is_active === false) { _keysRevoked = await revokeLenderKeys(id); } return ok(res, { updated: true, keys_revoked: _keysRevoked }); });
 /* BI_SERVER_BLOCK_v237_REVOKE_KEYS_ON_DEACTIVATE_v1 — atomically revoke API keys on lender deactivation */
