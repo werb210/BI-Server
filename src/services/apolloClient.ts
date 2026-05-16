@@ -7,7 +7,7 @@
 //
 // Apollo API surface used by Phase 1:
 //   POST /api/v1/people/match              — person enrichment
-//   GET  /api/v1/emailer_campaigns         — sequences list
+//   POST /api/v1/emailer_campaigns/search  — sequences list
 //   POST /api/v1/emailer_campaigns/:id/add_contact_ids — enroll contact(s)
 //   GET  /api/v1/email_accounts            — mailbox health
 //
@@ -148,9 +148,17 @@ export async function listSequences(): Promise<ApolloSequencesResult> {
       raw: { mock: true },
     };
   }
+  // BI_SERVER_BLOCK_BI_APOLLO_LIST_SEQUENCES_v1
+  // Apollo does not serve GET /api/v1/emailer_campaigns -- that path
+  // returns 404, which is exactly what BI Issues 9 logs captured. The
+  // documented endpoint for listing sequences is
+  // POST /api/v1/emailer_campaigns/search and it requires a MASTER API
+  // key (Pro plan or above). If the key is not a master key Apollo
+  // responds 403 and apolloFetch surfaces apollo_http_403 -- a clearer
+  // signal than a stale 404.
   const data = await apolloFetch<{ emailer_campaigns?: any[] }>(
-    "/api/v1/emailer_campaigns",
-    { method: "GET" },
+    "/api/v1/emailer_campaigns/search",
+    { method: "POST", body: { page: 1, per_page: 100 } },
   );
   const campaigns = Array.isArray(data?.emailer_campaigns) ? data.emailer_campaigns : [];
   return {

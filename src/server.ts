@@ -449,7 +449,11 @@ app.use(biLenderApplicationDetail);
 // www.boreal.insure passes (this endpoint is public-facing).
 app.use("/api/v1", biCors, biApplicantDocFlowRoutes); // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
 app.use(biSmsInboundRoutes);    // BI_SERVER_BLOCK_v234_OPS_HARDENING_v1
-app.use(biCarrierHealthRoutes); // BI_SERVER_BLOCK_v234_OPS_HARDENING_v1
+// BI_SERVER_BLOCK_BI_CARRIER_HEALTH_MOUNT_FIX_v1 -- router declares
+// "/bi/carrier-health" internally; mount must add the /api/v1 prefix or
+// the URL is /bi/carrier-health, not /api/v1/bi/carrier-health, and the
+// portal 404s every refresh.
+app.use("/api/v1", biCarrierHealthRoutes); // BI_SERVER_BLOCK_v234_OPS_HARDENING_v1
 // BI_SERVER_BLOCK_v268_CLEANUP_v1 — D-3: removed dead mount. All four
 // endpoints (/lender/otp/start, /verify, /me, /applications/mine) are
 // already served by biLenderApiRoutes at /api/v1 (line 219), which wins
