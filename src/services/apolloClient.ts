@@ -278,3 +278,34 @@ export async function listMailboxes(): Promise<ApolloMailboxResult> {
     raw: data,
   };
 }
+
+// BI_SERVER_BLOCK_BI_ROUND8_APOLLO_v1 -- single-contact lookup by
+// email. Apollo's people/match endpoint returns one canonical row
+// per email. Returns null when no match (HTTP 404 from Apollo) so
+// the route handler can distinguish "no data" from "API failed".
+async function enrichByEmail(email: string): Promise<Record<string, unknown> | null> {
+  if (!process.env.APOLLO_API_KEY) {
+    throw new Error("APOLLO_API_KEY not configured");
+  }
+  const url = "https://api.apollo.io/api/v1/people/match";
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Api-Key": process.env.APOLLO_API_KEY,
+      "Cache-Control": "no-cache",
+    },
+    body: JSON.stringify({ email, reveal_personal_emails: false }),
+  });
+  if (r.status === 404) return null;
+  if (!r.ok) {
+    const body = await r.text();
+    throw new Error(`Apollo ${r.status}: ${body.slice(0, 200)}`);
+  }
+  const json = (await r.json()) as { person?: Record<string, unknown> };
+  return json.person ?? null;
+}
+
+export const apolloClient = {
+  enrichByEmail,
+};
