@@ -583,4 +583,159 @@ router.get("/crm/lenders", async (_req, res) => {
   ok(res, result.rows);
 });
 
+
+// BI_SERVER_BLOCK_BI_ROUND8_APOLLO_v1 -- Apollo enrichment +
+// engagement payload for the BI contact drawer. The portal calls
+// these via apolloMarketing.ts; they 404 today because they weren't
+// implemented.
+
+// GET /api/v1/bi/contacts/:id/marketing
+// Returns the ApolloContactPayload shape the portal expects.
+router.get("/contacts/:id/marketing", async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const cr = await pool.query(
+      `SELECT id, full_name, email,
+              apollo_contact_id, apollo_data, apollo_stage,
+              apollo_sequence_names, apollo_last_synced_at
+         FROM bi_contacts
+        WHERE id = $1
+        LIMIT 1`,
+      [id],
+    );
+    if (cr.rowCount === 0) {
+      return res.status(404).json({ error: { code: "not_found", message: "Contact not found" } });
+    }
+    const contact = cr.rows[0];
+    const er = await pool.query(
+      `SELECT id, event_type, sequence_name, occurred_at, metadata
+         FROM bi_crm_engagement_events
+        WHERE contact_id = $1
+        ORDER BY occurred_at DESC
+        LIMIT 200`,
+      [id],
+    );
+    return res.json({
+      contact: {
+        id: contact.id,
+        full_name: contact.full_name,
+        email: contact.email,
+        apollo_contact_id: contact.apollo_contact_id,
+        apollo_data: contact.apollo_data,
+        apollo_stage: contact.apollo_stage,
+        apollo_sequence_names: contact.apollo_sequence_names || [],
+        apollo_last_synced_at: contact.apollo_last_synced_at,
+      },
+      events: er.rows.map((r) => ({
+        id: r.id,
+        event_type: r.event_type,
+        sequence_name: r.sequence_name,
+        occurred_at: r.occurred_at,
+        metadata: r.metadata || {},
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "bi.contacts.marketing.failed");
+    return res.status(500).json({ error: { code: "internal", message: "Failed to load marketing payload" } });
+  }
+});
+
+// POST /api/v1/bi/contacts/:id/enrich[?force=1]
+// Triggers Apollo enrichment. Uses the existing Apollo client. The
+// 24h cache rule: if apollo_last_synced_at is < 24h ago and force is
+// not set, return the cached row without calling Apollo. This keeps
+// us under the Apollo rate limit for batch operations on the same
+// contact list.
+router.post("/contacts/:id/enrich", async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const force = String(req.query.force || "") === "1";
+    const cr = await pool.query(
+      `SELECT id, email, apollo_data, apollo_last_synced_at
+         FROM bi_contacts
+        WHERE id = $1
+        LIMIT 1`,
+      [id],
+    );
+    if (cr.rowCount === 0) {
+      return res.status(404).json({ error: { code: "not_found", message: "Contact not found" } });
+    }
+    const c = cr.rows[0];
+    if (!c.email) {
+      return res.status(400).json({ error: { code: "no_email", message: "Contact has no email" } });
+    }
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    const lastMs = c.apollo_last_synced_at ? new Date(c.apollo_last_synced_at).getTime() : 0;
+    if (!force && lastMs > dayAgo && c.apollo_data) {
+      return res.json({ cached: true, apollo_data: c.apollo_data });
+    }
+
+    // Call Apollo. The apolloClient is the same one biOutreachCrmRoutes
+    // uses for sequence search; it has the API key + retry logic baked in.
+    const { apolloClient } = await import("../services/apolloClient");
+    let apolloPayload: Record<string, unknown> | null = null;
+    try {
+      apolloPayload = await apolloClient.enrichByEmail(c.email);
+    } catch (err: any) {
+      logger.warn({ err, contactId: id }, "apollo.enrich.failed");
+      return res.status(502).json({
+        error: { code: "apollo_failed", message: err?.message || "Apollo enrichment failed" },
+      });
+    }
+    if (!apolloPayload) {
+      return res.status(404).json({ error: { code: "no_match", message: "Apollo returned no match for that email" } });
+    }
+
+    // Extract Apollo identity + stage / sequences from the payload.
+    const apolloContactId = (apolloPayload as any)?.id ?? null;
+    const sequenceNames = Array.isArray((apolloPayload as any)?.contact_campaign_statuses)
+      ? (apolloPayload as any).contact_campaign_statuses
+          .map((s: any) => s?.emailer_campaign?.name)
+          .filter(Boolean)
+      : [];
+    const stage = (apolloPayload as any)?.contact_stage?.name ?? null;
+
+    await pool.query(
+      `UPDATE bi_contacts
+          SET apollo_contact_id     = $2,
+              apollo_data           = $3::jsonb,
+              apollo_stage          = $4,
+              apollo_sequence_names = $5::text[],
+              apollo_last_synced_at = NOW()
+        WHERE id = $1`,
+      [id, apolloContactId, JSON.stringify(apolloPayload), stage, sequenceNames],
+    );
+
+    return res.json({ cached: false, apollo_data: apolloPayload });
+  } catch (err) {
+    logger.error({ err }, "bi.contacts.enrich.failed");
+    return res.status(500).json({ error: { code: "internal", message: "Enrichment failed" } });
+  }
+});
+
+// GET /api/v1/bi/crm/contacts/:id/timeline
+// Mirrors the BF-Server timeline fix from Block 32. Unions BI
+// CRM activity (bi_contact_activity, post-v251) with comms-side
+// events. Today bi_communications_messages and bi_call_logs may
+// not exist in this silo (BI comms still piggybacks on BF-Server
+// per the user direction), so the query gracefully returns just
+// the bi_contact_activity rows when the comms tables are absent.
+router.get("/crm/contacts/:id/timeline", async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const r = await pool.query(
+      `SELECT id, occurred_at, event_type, summary, metadata
+         FROM bi_contact_activity
+        WHERE contact_id = $1
+        ORDER BY occurred_at DESC
+        LIMIT 200`,
+      [id],
+    );
+    return res.json({ events: r.rows });
+  } catch (err) {
+    logger.error({ err }, "bi.contacts.timeline.failed");
+    return res.status(500).json({ error: { code: "internal", message: "Failed to load timeline" } });
+  }
+});
+
 export default router;
