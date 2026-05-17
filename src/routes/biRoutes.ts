@@ -6,6 +6,18 @@ import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
 
+// BI_SERVER_BLOCK_48_v1 -- minimal /me endpoint for BI portal bootstrap.
+router.get("/me", (req: any, res) => {
+  const u = req.user ?? {};
+  res.json({
+    id: u.id ?? u.userId ?? u.staffUserId ?? null,
+    email: u.email ?? null,
+    name: u.name ?? u.fullName ?? null,
+    roles: Array.isArray(u.roles) ? u.roles : (u.role ? [u.role] : []),
+    silo: String(u.silo ?? "BI").toUpperCase(),
+  });
+});
+
 if (ENV.SENDGRID_API_KEY) {
   sgMail.setApiKey(ENV.SENDGRID_API_KEY);
 }

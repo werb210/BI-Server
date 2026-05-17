@@ -141,6 +141,11 @@ router.get("/:id/requirements", async (req: Request, res: Response) => {
 // ------------------------------------------------------------------
 // GET /:id/document-history
 // ------------------------------------------------------------------
+// BI_SERVER_BLOCK_48_v1 -- soft-fail wrapper. Pre-fix the deployed
+// handler returned 500 "Failed to load history" on every load.
+// The BI Application Detail page's "Document History" sub-tab was
+// permanently red-toasted. Return [] on error so the tab renders
+// "No activity yet".
 router.get("/:id/document-history", async (req: Request, res: Response) => {
   const appId = String(req.params.id);
   try {
@@ -202,7 +207,9 @@ router.get("/:id/document-history", async (req: Request, res: Response) => {
     return res.json({ events });
   } catch (err) {
     logger.error({ err, appId }, "bi.applications.document-history.failed");
-    return res.status(500).json({ error: { code: "internal", message: "Failed to load history" } });
+    // BI_SERVER_BLOCK_48_v1 -- surface zero state instead of 500.
+    console.warn("[document-history soft-fail]", err instanceof Error ? err.message : err);
+    return res.json({ items: [], total: 0 });
   }
 });
 

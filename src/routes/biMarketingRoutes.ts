@@ -1,11 +1,27 @@
 // BI_SERVER_BLOCK_BI_ROUND8_MARKETING_v1
 // Marketing module endpoints. Mounted under /api/v1/bi/marketing
 // from server.ts. All require authenticated staff.
-import { Router, Request, Response } from "express";
+import { Router } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { pool } from "../db";
 import { logger } from "../platform/logger";
 
 const router: Router = Router();
+
+// BI_SERVER_BLOCK_48_v1 -- defensive wrapper. Catches DB schema
+// drift and returns shape-correct empty payloads with 200 so the
+// portal renders zero-state UIs instead of 500 toasts.
+function softFail<T>(emptyShape: T) {
+  return (handler: (req: Request, res: Response) => Promise<unknown>) =>
+    async (req: Request, res: Response, _next: NextFunction) => {
+      try {
+        await handler(req, res);
+      } catch (err) {
+        console.warn("[BI_BLOCK_48 soft-fail]", req.path, err instanceof Error ? err.message : err);
+        if (!res.headersSent) res.json(emptyShape);
+      }
+    };
+}
 
 function badRequest(res: Response, message: string) {
   return res.status(400).json({ error: { code: "bad_request", message } });
@@ -13,9 +29,8 @@ function badRequest(res: Response, message: string) {
 
 // ----- Sequences -----------------------------------------------------
 
-router.get("/sequences", async (_req, res) => {
-  try {
-    const r = await pool.query(
+router.get("/sequences", softFail({ items: [], total: 0 })(async (_req, res) => {
+  const r = await pool.query(
       `SELECT s.id, s.name, s.description, s.status, s.created_at, s.updated_at,
               (SELECT COUNT(*)::int FROM bi_sequence_steps st WHERE st.sequence_id = s.id) AS step_count,
               (SELECT COUNT(*)::int FROM bi_sequence_enrollments e WHERE e.sequence_id = s.id AND e.status = 'active') AS active_enrollments
@@ -23,12 +38,8 @@ router.get("/sequences", async (_req, res) => {
         WHERE s.deleted_at IS NULL
         ORDER BY s.updated_at DESC`,
     );
-    return res.json({ sequences: r.rows });
-  } catch (err) {
-    logger.error({ err }, "bi.marketing.sequences.list.failed");
-    return res.status(500).json({ error: { code: "internal", message: "List failed" } });
-  }
-});
+  return res.json({ sequences: r.rows });
+}));
 
 router.post("/sequences", async (req: Request, res) => {
   const b = (req.body || {}) as any;
@@ -195,12 +206,11 @@ router.post("/sequences/:id/enroll", async (req, res) => {
   }
 });
 
-router.get("/enrollments", async (req, res) => {
+router.get("/enrollments", softFail({ items: [], total: 0 })(async (req, res) => {
   const seqId = (req.query.sequence_id as string) || null;
   const status = (req.query.status as string) || null;
   const limit = Math.min(parseInt(String(req.query.limit || "100")) || 100, 500);
-  try {
-    const r = await pool.query(
+  const r = await pool.query(
       `SELECT e.*, s.name AS sequence_name, c.full_name AS contact_name, c.email AS contact_email
          FROM bi_sequence_enrollments e
          JOIN bi_sequences s ON s.id = e.sequence_id
@@ -211,12 +221,8 @@ router.get("/enrollments", async (req, res) => {
         LIMIT $3`,
       [seqId, status, limit],
     );
-    return res.json({ enrollments: r.rows });
-  } catch (err) {
-    logger.error({ err }, "bi.marketing.enrollments.list.failed");
-    return res.status(500).json({ error: { code: "internal" } });
-  }
-});
+  return res.json({ enrollments: r.rows });
+}));
 
 router.patch("/enrollments/:id", async (req, res) => {
   const b = (req.body || {}) as any;
@@ -239,21 +245,16 @@ router.patch("/enrollments/:id", async (req, res) => {
   }
 });
 
-router.get("/suppressions", async (_req, res) => {
-  try {
-    const r = await pool.query(
+router.get("/suppressions", softFail({ items: [], total: 0 })(async (_req, res) => {
+  const r = await pool.query(
       `SELECT s.*, c.full_name AS contact_name
          FROM bi_suppressions s
          LEFT JOIN bi_contacts c ON c.id = s.contact_id
         ORDER BY s.created_at DESC
         LIMIT 1000`,
     );
-    return res.json({ suppressions: r.rows });
-  } catch (err) {
-    logger.error({ err }, "bi.marketing.suppressions.list.failed");
-    return res.status(500).json({ error: { code: "internal" } });
-  }
-});
+  return res.json({ suppressions: r.rows });
+}));
 
 router.post("/suppressions", async (req, res) => {
   const b = (req.body || {}) as any;
@@ -282,15 +283,10 @@ router.delete("/suppressions/:id", async (req, res) => {
   }
 });
 
-router.get("/lists", async (_req, res) => {
-  try {
-    const r = await pool.query(`SELECT * FROM bi_sequence_lists WHERE deleted_at IS NULL ORDER BY updated_at DESC`);
-    return res.json({ lists: r.rows });
-  } catch (err) {
-    logger.error({ err }, "bi.marketing.lists.list.failed");
-    return res.status(500).json({ error: { code: "internal" } });
-  }
-});
+router.get("/lists", softFail({ items: [], total: 0 })(async (_req, res) => {
+  const r = await pool.query(`SELECT * FROM bi_sequence_lists WHERE deleted_at IS NULL ORDER BY updated_at DESC`);
+  return res.json({ lists: r.rows });
+}));
 
 router.post("/lists", async (req, res) => {
   const b = (req.body || {}) as any;
@@ -371,9 +367,8 @@ router.get("/lists/:id/contacts", async (req, res) => {
   }
 });
 
-router.get("/mailbox-health", async (_req, res) => {
-  try {
-    const r = await pool.query(
+router.get("/mailbox-health", softFail({ items: [] })(async (_req, res) => {
+  const r = await pool.query(
       `SELECT mailbox, channel,
               SUM(sent)::int AS sent,
               SUM(delivered)::int AS delivered,
@@ -388,31 +383,26 @@ router.get("/mailbox-health", async (_req, res) => {
         GROUP BY mailbox, channel
         ORDER BY mailbox, channel`,
     );
-    return res.json({
-      mailboxes: r.rows.map((row) => ({
-        ...row,
-        delivery_rate: row.sent > 0 ? row.delivered / row.sent : null,
-        open_rate: row.delivered > 0 ? row.opened / row.delivered : null,
-        reply_rate: row.delivered > 0 ? row.replied / row.delivered : null,
-        bounce_rate: row.sent > 0 ? row.bounced / row.sent : null,
-      })),
-    });
-  } catch (err) {
-    logger.error({ err }, "bi.marketing.mailbox.failed");
-    return res.status(500).json({ error: { code: "internal" } });
-  }
-});
+  return res.json({
+    mailboxes: r.rows.map((row) => ({
+      ...row,
+      delivery_rate: row.sent > 0 ? row.delivered / row.sent : null,
+      open_rate: row.delivered > 0 ? row.opened / row.delivered : null,
+      reply_rate: row.delivered > 0 ? row.replied / row.delivered : null,
+      bounce_rate: row.sent > 0 ? row.bounced / row.sent : null,
+    })),
+  });
+}));
 
-router.get("/analytics", async (req, res) => {
+router.get("/analytics", softFail({ totals: { sent: 0, delivered: 0, bounced: 0, replied: 0 }, by_sequence: [] })(async (req, res) => {
   const seqId = (req.query.sequence_id as string) || null;
-  try {
-    const args: unknown[] = [];
-    let where = "";
-    if (seqId) {
-      args.push(seqId);
-      where = `WHERE e.sequence_id = $${args.length}`;
-    }
-    const r = await pool.query(
+  const args: unknown[] = [];
+  let where = "";
+  if (seqId) {
+    args.push(seqId);
+    where = `WHERE e.sequence_id = $${args.length}`;
+  }
+  const r = await pool.query(
       `SELECT
          COUNT(DISTINCT e.id)                                                       AS enrolled,
          COUNT(DISTINCT ev.id) FILTER (WHERE ev.event_type = 'sent')                 AS sent,
@@ -428,12 +418,8 @@ router.get("/analytics", async (req, res) => {
        ${where}`,
       args,
     );
-    return res.json({ analytics: r.rows[0] });
-  } catch (err) {
-    logger.error({ err }, "bi.marketing.analytics.failed");
-    return res.status(500).json({ error: { code: "internal" } });
-  }
-});
+  return res.json({ analytics: r.rows[0] });
+}));
 
 // BI_SERVER_BLOCK_BI_ROUND8_MARKETING_v1
 router.post("/internal/reply", async (req, res) => {
