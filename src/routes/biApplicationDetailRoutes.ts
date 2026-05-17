@@ -167,7 +167,7 @@ router.get("/:id/document-history", async (req: Request, res: Response) => {
     }>(
       `SELECT a.id, a.created_at, a.actor_type, a.actor_user_id,
               a.event_type, a.summary, a.meta,
-              u.full_name AS staff_full_name,
+              NULL::text AS staff_full_name,
               d.original_filename AS doc_filename,
               d.doc_type AS doc_type
          FROM bi_activity a
