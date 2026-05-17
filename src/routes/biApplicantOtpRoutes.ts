@@ -37,11 +37,22 @@ router.post("/applicants/otp/verify", async (req, res) => {
     if (sel.rows[0]) {
       contactId = sel.rows[0].id;
     } else {
+      // BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1
+      // Try to lift a real name from any in-flight application with this
+      // phone as the guarantor. Fall back to a non-placeholder label that
+      // makes it obvious in the CRM list the contact needs enrichment.
+      const guarantor = await pool.query<{ guarantor_name: string | null; guarantor_email: string | null }>(
+        `SELECT guarantor_name, guarantor_email FROM bi_applications WHERE guarantor_phone = $1 ORDER BY created_at DESC LIMIT 1`,
+        [phone],
+      ).catch(() => ({ rows: [] as Array<{ guarantor_name: string | null; guarantor_email: string | null }> }));
+      const guarantorName = guarantor.rows[0]?.guarantor_name?.trim() || null;
+      const guarantorEmail = guarantor.rows[0]?.guarantor_email?.trim() || null;
+      const displayName = guarantorName ?? `New applicant (${phone})`;
       const ins = await pool.query(
-        `INSERT INTO bi_contacts (id, full_name, phone_e164, tags, created_at)
-         VALUES (gen_random_uuid(), $1, $2, ARRAY['applicant_otp']::text[], NOW())
+        `INSERT INTO bi_contacts (id, full_name, email, phone_e164, tags, created_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, ARRAY['applicant_otp']::text[], NOW())
          RETURNING id`,
-        [`Applicant ${phone}`, phone],
+        [displayName, guarantorEmail, phone],
       );
       contactId = ins.rows[0]?.id ?? null;
     }

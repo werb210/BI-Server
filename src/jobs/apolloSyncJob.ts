@@ -43,14 +43,24 @@ async function setWatermark(field: "last_contact_sync_at" | "last_engagement_syn
 
 /* ── Contact sync ──────────────────────────────────────────────────── */
 
-export async function runContactSyncOnce(): Promise<{ pages: number; upserted: number }> {
+// BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1
+// Accept optional opts so the manual admin trigger can pull contacts
+// regardless of sequence enrollment. Operator complaint: lists created
+// in Apollo aren't syncing because contacts in those lists may not have
+// been enrolled into any active sequence yet.
+export async function runContactSyncOnce(opts: { includeNotInSequence?: boolean; sinceOverride?: string | null } = {}): Promise<{ pages: number; upserted: number }> {
   if (!syncEnabled()) {
     logger.info("apollo contact sync skipped — APOLLO_SYNC_ENABLED=false or APOLLO_API_KEY missing");
     return { pages: 0, upserted: 0 };
   }
 
-  const since = await getWatermark("last_contact_sync_at");
-  const updated_at_min = since ? since.toISOString() : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  let updated_at_min: string;
+  if (opts.sinceOverride !== undefined) {
+    updated_at_min = opts.sinceOverride ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  } else {
+    const since = await getWatermark("last_contact_sync_at");
+    updated_at_min = since ? since.toISOString() : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  }
   const runStartedAt = new Date();
 
   let page = 1;
@@ -61,7 +71,7 @@ export async function runContactSyncOnce(): Promise<{ pages: number; upserted: n
     while (page <= totalPages && page <= MAX_PAGES_PER_RUN) {
       const { contacts, pagination } = await searchContacts({
         page, per_page: CONTACT_PAGE_SIZE,
-        currently_in_sequence: true,
+        currently_in_sequence: opts.includeNotInSequence ? undefined : true,
         updated_at_min,
       });
       totalPages = pagination.total_pages || 1;
@@ -81,7 +91,7 @@ export async function runContactSyncOnce(): Promise<{ pages: number; upserted: n
     return { pages: page - 1, upserted };
   } catch (err) {
     const message = err instanceof ApolloError ? `apollo ${err.status}` : err instanceof Error ? err.message : "unknown";
-    await setWatermark("last_contact_sync_at", since ?? runStartedAt, "error", message);
+    await setWatermark("last_contact_sync_at", runStartedAt, "error", message);
     logger.error({ err }, "apollo contact sync failed");
     throw err;
   }

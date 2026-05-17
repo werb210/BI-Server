@@ -7,7 +7,7 @@ import { pool } from "../db";
 import { env } from "../platform/env";
 import { pgiScore, pgiSubmit } from "../services/pgiAdapter"; // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1
 // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1 — typed wrappers
-import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
+import { sendOtpSafe, verifyOtpSafe, sendEmailOtpSafe, verifyEmailOtpSafe } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
 import { normalizeE164 } from "../util/phoneE164";
 import { generatePublicId } from "../util/publicId";
@@ -235,11 +235,42 @@ router.get("/lender/applications", authLender, async (req: any, res) => {
 // Auth (lender JWT): /lender/me, /lender/applications/mine
 
 router.post("/lender/otp/start", async (req, res) => {
-  // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1 / v278
-  const phone = normalizeE164(req.body?.phone);
+  // BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1
+  // Channel can be implicit (phone present → sms, email present → email)
+  // or explicit via channel:"sms"|"email". Lenders captured in the build-
+  // a-lender form may not have phones and may prefer email.
+  const phoneRaw = req.body?.phone;
+  const emailRaw = req.body?.email;
+  const channel = String(req.body?.channel ?? "").toLowerCase();
+  const wantsEmail = channel === "email" || (!phoneRaw && typeof emailRaw === "string" && emailRaw.includes("@"));
+
+  if (wantsEmail) {
+    const email = typeof emailRaw === "string" ? emailRaw.trim().toLowerCase() : "";
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: "invalid_email" });
+    }
+    // Look up contact by email; either contact-level or lender-primary.
+    const contact = await pool.query(
+      `SELECT c.id FROM bi_lender_contacts c
+         JOIN bi_lenders l ON l.id = c.lender_id
+        WHERE LOWER(c.email) = $1 AND c.is_active = TRUE AND l.is_active = TRUE
+        LIMIT 1`,
+      [email],
+    );
+    const primary = contact.rows[0]
+      ? null
+      : await pool.query(`SELECT id FROM bi_lenders WHERE LOWER(contact_email) = $1 AND is_active = TRUE LIMIT 1`, [email]);
+    if (contact.rows[0] || primary?.rows[0]) {
+      const sr = await sendEmailOtpSafe(email);
+      if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
+    }
+    return res.json({ ok: true, channel: "email" });
+  }
+
+  // SMS path — original behaviour.
+  const phone = normalizeE164(phoneRaw);
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
 
-  // Multi-tenant contact lookup first; legacy primary fallback below.
   const r = await pool.query(
     `SELECT c.id FROM bi_lender_contacts c JOIN bi_lenders l ON l.id = c.lender_id WHERE c.phone_e164 = $1 AND c.is_active = TRUE AND l.is_active = TRUE LIMIT 1`,
     [phone],
@@ -247,14 +278,14 @@ router.post("/lender/otp/start", async (req, res) => {
   if (r.rows[0]) {
     const sr = await sendOtpSafe(phone);
     if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
-    return res.json({ ok: true });
+    return res.json({ ok: true, channel: "sms" });
   }
   const primary = await pool.query(`SELECT id FROM bi_lenders WHERE contact_phone_e164 = $1 AND is_active = TRUE LIMIT 1`, [phone]);
   if (primary.rows[0]) {
     const sr = await sendOtpSafe(phone);
     if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
   }
-  res.json({ ok: true });
+  res.json({ ok: true, channel: "sms" });
 });
 
 // BI_SERVER_BLOCK_v226_DEMO_SANDBOX_v1
@@ -280,10 +311,57 @@ router.post("/lender/demo-session", demoSessionHandler);
 router.post("/lender/demo/session", demoSessionHandler);
 
 router.post("/lender/otp/verify", async (req, res) => {
-  const phone = normalizeE164(req.body?.phone);
+  // BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1 — accept email or phone.
   const code = String(req.body?.code ?? "").trim();
-  if (!phone) return res.status(400).json({ error: "invalid_phone" });
   if (!code) return res.status(400).json({ error: "missing_code" });
+
+  const emailRaw = req.body?.email;
+  const channel = String(req.body?.channel ?? "").toLowerCase();
+  const isEmail = channel === "email" || (typeof emailRaw === "string" && emailRaw.includes("@"));
+  if (isEmail) {
+    const email = String(emailRaw).trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "invalid_email" });
+    const vr = await verifyEmailOtpSafe(email, code);
+    if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+    if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
+
+    let row: any;
+    const cr = await pool.query(
+      `SELECT c.id AS contact_id, l.id AS lender_id, l.company_name, c.full_name, c.email, c.role
+         FROM bi_lender_contacts c JOIN bi_lenders l ON l.id = c.lender_id
+        WHERE LOWER(c.email) = $1 AND c.is_active = TRUE AND l.is_active = TRUE LIMIT 1`,
+      [email],
+    );
+    if (cr.rows[0]) row = cr.rows[0];
+    else {
+      const lr = await pool.query(
+        `SELECT id AS lender_id, company_name, contact_full_name AS full_name, contact_email AS email
+           FROM bi_lenders WHERE LOWER(contact_email) = $1 AND is_active = TRUE LIMIT 1`,
+        [email],
+      );
+      if (!lr.rows[0]) return res.status(404).json({ error: "lender_not_found" });
+      const ins = await pool.query(
+        `INSERT INTO bi_lender_contacts (lender_id, full_name, email, role, is_primary, is_active)
+         VALUES ($1, COALESCE(NULLIF(TRIM($2), ''), '(primary)'), LOWER(TRIM($3)), 'primary', TRUE, TRUE)
+         RETURNING id`,
+        [lr.rows[0].lender_id, lr.rows[0].full_name, lr.rows[0].email],
+      );
+      row = { contact_id: ins.rows[0].id, lender_id: lr.rows[0].lender_id, company_name: lr.rows[0].company_name, full_name: lr.rows[0].full_name, email: lr.rows[0].email, role: "primary" };
+    }
+    if (row.contact_id) await pool.query(`UPDATE bi_lender_contacts SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1`, [row.contact_id]).catch(() => {});
+
+    const secret = process.env.JWT_SECRET || "dev-missing-jwt-secret";
+    const token = jwt.sign(
+      { kind: "lender", id: row.lender_id, contactId: row.contact_id, role: row.role },
+      secret,
+      { expiresIn: "12h" },
+    );
+    return res.json({ token, channel: "email", lender: { id: row.lender_id, company_name: row.company_name }, user: { id: row.contact_id, full_name: row.full_name, email: row.email, role: row.role } });
+  }
+
+  // Phone path — original logic preserved below.
+  const phone = normalizeE164(req.body?.phone);
+  if (!phone) return res.status(400).json({ error: "invalid_phone" });
 
   let row: any;
   const cr = await pool.query(`SELECT c.id AS contact_id, l.id AS lender_id, l.company_name, c.full_name, c.email, c.role FROM bi_lender_contacts c JOIN bi_lenders l ON l.id=c.lender_id WHERE c.phone_e164=$1 AND c.is_active=TRUE AND l.is_active=TRUE LIMIT 1`, [phone]);
