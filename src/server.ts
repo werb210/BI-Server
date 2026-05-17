@@ -32,6 +32,8 @@ import biMarketingRoutes from "./routes/biMarketingRoutes";
 // BI_SERVER_BLOCK_v257_STAFF_DIRECTORY_v1
 import biStaffRoutes from "./routes/biStaffRoutes";
 import biDocumentRoutes from "./routes/biDocumentRoutes";
+// BI_SERVER_BLOCK_BI_ROUND8_DETAIL_ENDPOINTS_v1
+import biApplicationDetailRoutes from "./routes/biApplicationDetailRoutes";
 import biEventsRoutes from "./routes/biEvents";
 import biLenderRoutes from "./routes/biLenderRoutes";
 import biPayoutRoutes from "./routes/biPayoutRoutes";
@@ -257,6 +259,7 @@ app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biApp
 // application document handlers (under /applications/:id/...) AND the
 // required-doc catalog (under /required-documents). Mount both places.
 app.use("/api/v1/bi/applications", requireAuth, biDocumentRoutes);
+app.use("/api/v1/bi/applications", requireAuth, biApplicationDetailRoutes);
 app.use("/api/v1/bi", requireAuth, biDocumentRoutes);
 app.use("/api/v1/bi/documents", requireAuth, biDocumentRoutes);
 app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
