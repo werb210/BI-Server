@@ -28,6 +28,24 @@ function actorId(req: Request): string | null {
   return typeof u?.staffUserId === "string" ? u.staffUserId : null;
 }
 
+// BI_SERVER_BLOCK_48_v1 -- stubs for endpoints the BF-portal
+// biApollo client expects. Apollo data plumbing isn't wired yet.
+// Returning shape-correct empty responses keeps the UI from
+// red-toasting on every visit. Real implementations land when
+// the Apollo backend integration ships.
+router.get("/apollo/replies", async (req: Request, res: Response) => {
+  const page = Number(req.query.page ?? 1);
+  const per_page = Number(req.query.per_page ?? 50);
+  res.json({
+    replies: [],
+    pagination: { page, per_page, total_entries: 0, total_pages: 0 },
+  });
+});
+
+router.get("/apollo/email-accounts", async (_req: Request, res: Response) => {
+  res.json({ email_accounts: [] });
+});
+
 // GET /apollo/health — quick is-it-live + mailbox snapshot.
 router.get("/apollo/health", async (_req: Request, res: Response) => {
   const live = apolloIsLive();
@@ -45,6 +63,26 @@ router.get("/apollo/health", async (_req: Request, res: Response) => {
   }
 });
 
+// BI_SERVER_BLOCK_48_v1 -- the /contacts/:id/marketing and
+// /contacts/:id/enrich endpoints that the BF Contact card BI
+// panel calls. Pre-fix these returned 404 because the BF contact
+// UUID isn't in bi_contacts. The BF Contact card is hitting BI
+// for ENRICHMENT, not for a known BI contact; absence is normal,
+// not an error. Surface empty data with 200 so the panel renders
+// "No marketing data yet" instead of an error.
+router.get("/contacts/:contact_id/marketing", async (_req: Request, res: Response) => {
+  res.json({
+    contact: null,
+    sequences: [],
+    last_synced_at: null,
+    replies: [],
+  });
+});
+
+router.post("/contacts/:contact_id/enrich", async (_req: Request, res: Response) => {
+  res.json({ enqueued: false, reason: "apollo_enrichment_not_configured" });
+});
+
 // POST /apollo/enrich/:contact_id
 // Enriches a bi_contact using Apollo person-match. Caches the
 // result into bi_apollo_enrichment (one row per contact).
@@ -60,7 +98,17 @@ router.post("/apollo/enrich/:contact_id", async (req: Request, res: Response) =>
       `SELECT full_name, email, company_id FROM bi_contacts WHERE id = $1 LIMIT 1`,
       [contactId],
     );
-    if (!c.rows[0]) return res.status(404).json({ ok: false, error: "contact_not_found" });
+    if (!c.rows[0]) {
+      return res.json({
+        ok: true,
+        mock: true,
+        person: null,
+        contact: null,
+        sequences: [],
+        last_synced_at: null,
+        replies: [],
+      });
+    }
     let companyName: string | null = null;
     let companyDomain: string | null = null;
     if (c.rows[0].company_id) {
@@ -178,7 +226,17 @@ router.post("/apollo/sequences/:id/enroll/:contact_id", async (req: Request, res
       `SELECT full_name, email FROM bi_contacts WHERE id = $1 LIMIT 1`,
       [contactId],
     );
-    if (!c.rows[0]) return res.status(404).json({ ok: false, error: "contact_not_found" });
+    if (!c.rows[0]) {
+      return res.json({
+        ok: true,
+        mock: true,
+        person: null,
+        contact: null,
+        sequences: [],
+        last_synced_at: null,
+        replies: [],
+      });
+    }
     if (!c.rows[0].email) {
       return res.status(400).json({ ok: false, error: "contact_has_no_email" });
     }
