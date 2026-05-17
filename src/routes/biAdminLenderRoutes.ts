@@ -1,5 +1,7 @@
 // BI_PGI_ALIGNMENT_v56 — staff CRUD for lenders.
 import { Router } from "express";
+// BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1 — manual Apollo sync trigger.
+import { runContactSyncOnce } from "../jobs/apolloSyncJob";
 import { pool } from "../db";
 import { ok, badRequest } from "../utils/apiResponse";
 import { mirrorToContact } from "../services/crmMirrorService";
@@ -249,6 +251,22 @@ router.post("/admin/lenders/:id/approve-live-keys", async (req, res) => {
 
 
 // BI_SERVER_BLOCK_v243_LENDER_USERS_v1
+// BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1
+// POST /admin/apollo/sync-now — kick the contact sync NOW. Accepts
+// { include_not_in_sequence?: boolean, since?: string|null }. Use this
+// after creating a list in Apollo to pull contacts that aren't yet
+// enrolled into a sequence.
+router.post("/admin/apollo/sync-now", async (req, res) => {
+  const include = req.body?.include_not_in_sequence === true;
+  const sinceOverride = typeof req.body?.since === "string" ? req.body.since : (req.body?.since === null ? null : undefined);
+  try {
+    const result = await runContactSyncOnce({ includeNotInSequence: include, sinceOverride });
+    return res.json({ ok: true, ...result, opts: { includeNotInSequence: include, since: sinceOverride === undefined ? "watermark" : sinceOverride } });
+  } catch (e) {
+    return res.status(500).json({ error: "apollo_sync_failed", message: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 router.get("/admin/lenders/:id/contacts", async (req, res) => {
   const r = await pool.query(`SELECT id, lender_id, full_name, email, phone_e164, role, is_primary, is_active, last_login_at, created_at, updated_at FROM bi_lender_contacts WHERE lender_id = $1 ORDER BY is_primary DESC, created_at DESC`, [req.params.id]);
   return ok(res, { contacts: r.rows });

@@ -35,6 +35,31 @@ export async function verifyOtp(phone: string, code: string) {
   return result.status === "approved";
 }
 
+// BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1 — email channel.
+// Requires the Twilio Verify Service to have email channel configured
+// (Twilio Console → Verify → Services → <SID> → Email → Enable). The
+// dev fallback path mirrors sendOtp/verifyOtp so local tests still work.
+export async function sendEmailOtp(email: string) {
+  if (!client || !serviceSid) {
+    if (env.NODE_ENV === "production") {
+      throw new Error("OTP service not configured in production");
+    }
+    return { sid: "mock-otp", to: email, status: "pending" };
+  }
+  return client.verify.v2.services(serviceSid).verifications.create({ to: email, channel: "email" });
+}
+
+export async function verifyEmailOtp(email: string, code: string) {
+  if (!client || !serviceSid) {
+    if (env.NODE_ENV === "production") {
+      throw new Error("OTP service not configured in production");
+    }
+    return env.ALLOW_DEV_OTP === "true" && code === "000000";
+  }
+  const result = await client.verify.v2.services(serviceSid).verificationChecks.create({ to: email, code });
+  return result.status === "approved";
+}
+
 // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1
 // Discriminated-result wrappers. Never throw — Twilio failures
 // become {ok:false, error} which route handlers convert to a 502
@@ -55,6 +80,27 @@ export async function sendOtpSafe(phone: string): Promise<OtpSendResult> {
 export async function verifyOtpSafe(phone: string, code: string): Promise<OtpVerifyResult> {
   try {
     const approved = await verifyOtp(phone, code);
+    return { ok: true, approved };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg.slice(0, 200) };
+  }
+}
+
+// BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1 — email-channel wrappers.
+export async function sendEmailOtpSafe(email: string): Promise<OtpSendResult> {
+  try {
+    await sendEmailOtp(email);
+    return { ok: true };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg.slice(0, 200) };
+  }
+}
+
+export async function verifyEmailOtpSafe(email: string, code: string): Promise<OtpVerifyResult> {
+  try {
+    const approved = await verifyEmailOtp(email, code);
     return { ok: true, approved };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
