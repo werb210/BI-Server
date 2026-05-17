@@ -459,4 +459,67 @@ router.post("/internal/reply", async (req, res) => {
   }
 });
 
+// BI_SERVER_BLOCK_60_MAILBOX_ENGAGEMENT_TEMPLATES_v1
+// Email templates CRUD. Snippets/templates referenced by name from sequences.
+router.get("/templates", softFail({ items: [] })(async (req, res) => {
+  const includeInactive = String(req.query.include_inactive || "") === "true";
+  const where = includeInactive ? "" : "WHERE is_active = TRUE";
+  const r = await pool.query(`SELECT id, name, subject, body_text, body_html, category, is_active, created_at, updated_at FROM bi_email_templates ${where} ORDER BY name ASC`);
+  return res.json({ items: r.rows, total: r.rows.length });
+}));
+
+router.post("/templates", async (req, res) => {
+  const b = req.body ?? {};
+  const name = String(b.name ?? "").trim();
+  if (!name) return res.status(400).json({ error: "name_required" });
+  try {
+    const r = await pool.query(
+      `INSERT INTO bi_email_templates (name, subject, body_text, body_html, category, is_active)
+       VALUES ($1, $2, $3, $4, $5, COALESCE($6, TRUE))
+       RETURNING id, name, subject, body_text, body_html, category, is_active, created_at, updated_at`,
+      [name, b.subject ?? null, b.body_text ?? null, b.body_html ?? null, b.category ?? null, b.is_active ?? null],
+    );
+    return res.status(201).json(r.rows[0]);
+  } catch (e) {
+    return res.status(500).json({ error: "create_failed", message: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+router.patch("/templates/:id", async (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ error: "missing_id" });
+  const b = req.body ?? {};
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  let i = 1;
+  for (const col of ["name", "subject", "body_text", "body_html", "category", "is_active"]) {
+    if (b[col] !== undefined) {
+      sets.push(`${col} = $${i++}`);
+      params.push(b[col]);
+    }
+  }
+  if (!sets.length) return res.status(400).json({ error: "no_updates" });
+  sets.push(`updated_at = NOW()`);
+  params.push(id);
+  try {
+    const r = await pool.query(`UPDATE bi_email_templates SET ${sets.join(", ")} WHERE id = $${i} RETURNING id, name, subject, body_text, body_html, category, is_active, created_at, updated_at`, params);
+    if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
+    return res.json(r.rows[0]);
+  } catch (e) {
+    return res.status(500).json({ error: "update_failed", message: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+router.delete("/templates/:id", async (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ error: "missing_id" });
+  try {
+    const r = await pool.query(`DELETE FROM bi_email_templates WHERE id = $1 RETURNING id`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: "delete_failed", message: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 export default router;
