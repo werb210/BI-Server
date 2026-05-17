@@ -145,11 +145,14 @@ export async function searchContacts(args: {
   updated_at_min?: string;
   contact_stage_names?: string[];
   currently_in_sequence?: boolean;
+  // BI_SERVER_BLOCK_58_APOLLO_LIST_IMPORT_v1
+  label_ids?: string[];
 }): Promise<{ contacts: ApolloPerson[]; pagination: { page: number; per_page: number; total_entries: number; total_pages: number } }> {
   const body: Json = { page: args.page ?? 1, per_page: Math.min(args.per_page ?? 100, 100) };
   if (args.contact_stage_names?.length) body.contact_stage_names = args.contact_stage_names;
   if (args.currently_in_sequence) body.currently_in_sequence = true;
   if (args.updated_at_min) body.updated_at_min = args.updated_at_min;
+  if (args.label_ids?.length) body.label_ids = args.label_ids;
 
   const res = await apolloRequest<{ contacts?: ApolloPerson[]; pagination?: { page: number; per_page: number; total_entries: number; total_pages: number } }>("/contacts/search", { method: "POST", body });
   return {
@@ -198,3 +201,21 @@ export async function listEmailAccounts(){ const res=await apolloRequest<any>("/
 export type ApolloSequence={id:string; name?:string; active?:boolean; archived?:boolean; num_steps?:number};
 export async function listSequences(args:{page?:number; per_page?:number}={}){ const res=await apolloRequest<any>("/emailer_campaigns/search", {method:"POST", body:{page:args.page??1, per_page:Math.min(args.per_page??100,100)}}); return {sequences:res?.emailer_campaigns??[], pagination:res?.pagination ?? {page:1, per_page:100,total_entries:0,total_pages:0}};}
 export async function createApolloContact(p:{ first_name?: string; last_name?: string; email?: string; title?: string; organization_name?: string; phone?: string; }){ const res=await apolloRequest<any>("/contacts", {method:"POST", body:p as any}); return res?.contact ?? null; }
+
+// BI_SERVER_BLOCK_58_APOLLO_LIST_IMPORT_v1 — Apollo "labels" (saved lists).
+// Apollo's internal name for a user-saved list is "label". The list page in
+// the Apollo UI maps 1:1 to a label row. count_modifier holds the live
+// member count (Apollo recalculates lazily). Some Apollo plans return
+// `labels` (Pro+) and others wrap it as { labels: [...] } — handle both.
+export type ApolloLabel = {
+  id: string;
+  name: string;
+  created_at?: string;
+  updated_at?: string;
+  cached_count?: number;
+};
+export async function listLabels(): Promise<{ labels: ApolloLabel[] }> {
+  const res = await apolloRequest<any>("/labels", { method: "GET" });
+  const labels: ApolloLabel[] = Array.isArray(res) ? res : (res?.labels ?? []);
+  return { labels };
+}

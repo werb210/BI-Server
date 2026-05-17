@@ -2,6 +2,8 @@
 import { Router } from "express";
 // BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1 — manual Apollo sync trigger.
 import { runContactSyncOnce } from "../jobs/apolloSyncJob";
+import { listLabels as _apolloListLabels, searchContacts as _apolloSearchContactsByLabel } from "../integrations/apollo/apolloClient";
+import { upsertApolloContact as _apolloUpsertByLabel } from "../integrations/apollo/apolloContactSync";
 import { pool } from "../db";
 import { ok, badRequest } from "../utils/apiResponse";
 import { mirrorToContact } from "../services/crmMirrorService";
@@ -264,6 +266,58 @@ router.post("/admin/apollo/sync-now", async (req, res) => {
     return res.json({ ok: true, ...result, opts: { includeNotInSequence: include, since: sinceOverride === undefined ? "watermark" : sinceOverride } });
   } catch (e) {
     return res.status(500).json({ error: "apollo_sync_failed", message: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// BI_SERVER_BLOCK_58_APOLLO_LIST_IMPORT_v1
+// GET /admin/apollo/lists  — proxy to Apollo /labels with our key
+// POST /admin/apollo/lists/:id/import — pull every contact in that list,
+//   upsert into bi_contacts (creating bi_companies on first sighting),
+//   tag each contact's apollo_label_ids with the source list id.
+router.get("/admin/apollo/lists", async (_req, res) => {
+  if (process.env.APOLLO_API_KEY == null || process.env.APOLLO_API_KEY === "") {
+    return res.status(503).json({ error: "apollo_not_configured", message: "APOLLO_API_KEY missing" });
+  }
+  try {
+    const r = await _apolloListLabels();
+    return res.json({ lists: r.labels.map((l) => ({ id: l.id, name: l.name, count: l.cached_count ?? null, updated_at: l.updated_at ?? null })) });
+  } catch (e) {
+    return res.status(502).json({ error: "apollo_lists_failed", message: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+router.post("/admin/apollo/lists/:id/import", async (req, res) => {
+  if (process.env.APOLLO_API_KEY == null || process.env.APOLLO_API_KEY === "") {
+    return res.status(503).json({ error: "apollo_not_configured" });
+  }
+  const labelId = String(req.params.id || "").trim();
+  if (!labelId) return res.status(400).json({ error: "missing_label_id" });
+  const MAX_PAGES = 100; // 100 * 100 = 10,000 contacts ceiling per import call
+  const startedAt = Date.now();
+  let page = 1;
+  let totalPages = 1;
+  let upserted = 0;
+  let created = 0;
+  let errors = 0;
+  try {
+    while (page <= totalPages && page <= MAX_PAGES) {
+      const { contacts, pagination } = await _apolloSearchContactsByLabel({ page, per_page: 100, label_ids: [labelId] });
+      totalPages = pagination.total_pages || 1;
+      for (const person of contacts) {
+        try {
+          const r = await _apolloUpsertByLabel(person, { sourceLabelId: labelId });
+          upserted += 1;
+          if (r.created) created += 1;
+        } catch {
+          errors += 1;
+        }
+      }
+      page += 1;
+    }
+    const elapsed_ms = Date.now() - startedAt;
+    return res.json({ ok: true, label_id: labelId, pages: page - 1, total_pages: totalPages, upserted, created, errors, elapsed_ms, capped: totalPages > MAX_PAGES });
+  } catch (e) {
+    return res.status(502).json({ error: "apollo_import_failed", upserted, created, errors, message: e instanceof Error ? e.message : String(e) });
   }
 });
 
