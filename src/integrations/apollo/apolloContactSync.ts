@@ -22,17 +22,20 @@ async function findCompanyId(p: ApolloPerson): Promise<string | null> {
   return ins.rows[0]?.id ?? null;
 }
 
-export async function upsertApolloContact(p: ApolloPerson): Promise<UpsertedContact> {
+export async function upsertApolloContact(p: ApolloPerson, opts: { sourceLabelId?: string | null } = {}): Promise<UpsertedContact> {
+  // BI_SERVER_BLOCK_58_APOLLO_LIST_IMPORT_v1
   const email = safeEmail(p);
   const name = fullName(p);
   const phone = primaryPhone(p);
   const seqs = sequenceNames(p);
   const stage = p.contact_stage?.name ?? null;
   const companyId = await findCompanyId(p);
+  const labelId = opts.sourceLabelId ?? null;
 
   const byId = await pool.query<{ id: string }>(`SELECT id FROM bi_contacts WHERE apollo_contact_id = $1 LIMIT 1`, [p.id]);
   if (byId.rows[0]) {
     await pool.query(`UPDATE bi_contacts SET full_name = $2, email = COALESCE($3, email), phone_e164 = COALESCE($4, phone_e164), company_id = COALESCE($5, company_id), apollo_data = $6::jsonb, apollo_stage = $7, apollo_sequence_names = $8::text[], apollo_last_synced_at = NOW() WHERE id = $1`, [byId.rows[0].id, name, email, phone, companyId, JSON.stringify(p), stage, seqs]);
+    if (labelId) await pool.query(`UPDATE bi_contacts SET apollo_label_ids = (SELECT ARRAY(SELECT DISTINCT unnest(COALESCE(apollo_label_ids, ARRAY[]::text[]) || ARRAY[$2]::text[]))) WHERE id = $1`, [byId.rows[0].id, labelId]);
     return { contact_id: byId.rows[0].id, created: false, apollo_contact_id: p.id };
   }
 
