@@ -2,7 +2,7 @@
 import { Router } from "express";
 // BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1 — manual Apollo sync trigger.
 import { runContactSyncOnce } from "../jobs/apolloSyncJob";
-import { listLabels as _apolloListLabels, searchContacts as _apolloSearchContactsByLabel } from "../integrations/apollo/apolloClient";
+import { listEmailAccounts as _apolloListEmailAccounts, listLabels as _apolloListLabels, searchContacts as _apolloSearchContactsByLabel } from "../integrations/apollo/apolloClient";
 import { upsertApolloContact as _apolloUpsertByLabel } from "../integrations/apollo/apolloContactSync";
 import { pool } from "../db";
 import { ok, badRequest } from "../utils/apiResponse";
@@ -318,6 +318,45 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
     return res.json({ ok: true, label_id: labelId, pages: page - 1, total_pages: totalPages, upserted, created, errors, elapsed_ms, capped: totalPages > MAX_PAGES });
   } catch (e) {
     return res.status(502).json({ error: "apollo_import_failed", upserted, created, errors, message: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// BI_SERVER_BLOCK_60_MAILBOX_ENGAGEMENT_TEMPLATES_v1
+// Apollo mailbox connect status. Pulls live from Apollo's /v1/email_accounts
+// and falls back to the cached bi_apollo_email_accounts row when Apollo is
+// rate-limited or unreachable. The "status" column tracks Apollo's own
+// designation (active / paused / disconnected / warming).
+router.get("/admin/apollo/mailboxes", async (_req, res) => {
+  if (!process.env.APOLLO_API_KEY) {
+    return res.status(503).json({ error: "apollo_not_configured" });
+  }
+  try {
+    const r = await _apolloListEmailAccounts();
+    const live = Array.isArray(r.email_accounts) ? r.email_accounts : [];
+    for (const acct of live) {
+      await pool.query(
+        `INSERT INTO bi_apollo_email_accounts (apollo_account_id, email, daily_send_count, bounce_rate_30d, reply_rate_30d, status, raw_data, last_synced_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW(), NOW())
+         ON CONFLICT (apollo_account_id) DO UPDATE
+         SET email = EXCLUDED.email, daily_send_count = EXCLUDED.daily_send_count, bounce_rate_30d = EXCLUDED.bounce_rate_30d, reply_rate_30d = EXCLUDED.reply_rate_30d, status = EXCLUDED.status, raw_data = EXCLUDED.raw_data, last_synced_at = NOW()`,
+        [acct.id, acct.email ?? "", acct.emails_sent_today ?? 0, acct.bounce_rate ?? null, acct.reply_rate ?? null, acct.status ?? "unknown", JSON.stringify(acct)],
+      ).catch(() => {});
+    }
+    return res.json({
+      mailboxes: live.map((a: any) => ({
+        id: a.id,
+        email: a.email ?? null,
+        status: a.status ?? "unknown",
+        daily_limit: a.send_limit_per_day ?? null,
+        sent_today: a.emails_sent_today ?? 0,
+        bounce_rate: a.bounce_rate ?? null,
+        reply_rate: a.reply_rate ?? null,
+      })),
+      source: "live",
+    });
+  } catch (e) {
+    const fallback = await pool.query(`SELECT apollo_account_id AS id, email, status, daily_send_count AS sent_today, bounce_rate_30d AS bounce_rate, reply_rate_30d AS reply_rate, last_synced_at FROM bi_apollo_email_accounts ORDER BY email`).catch(() => ({ rows: [] }));
+    return res.json({ mailboxes: fallback.rows, source: "cache", error: e instanceof Error ? e.message : String(e) });
   }
 });
 

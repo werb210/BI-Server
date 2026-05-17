@@ -27,6 +27,27 @@ const CONTACTS_SORT_COLS: Record<string, string> = {
   created_at: "c.created_at",
 };
 
+// BI_SERVER_BLOCK_60_MAILBOX_ENGAGEMENT_TEMPLATES_v1
+// Per-contact Apollo engagement events (opens/clicks/replies/bounces).
+router.get("/crm/contacts/:id/engagement", async (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) return badRequest(res, "missing_contact_id");
+  const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+  try {
+    const r = await pool.query(
+      `SELECT id, event_type, source, apollo_message_id, sequence_name, occurred_at, metadata
+         FROM bi_crm_engagement_events
+        WHERE contact_id = $1
+        ORDER BY occurred_at DESC
+        LIMIT $2`,
+      [id, limit],
+    );
+    return res.json({ events: r.rows });
+  } catch (e) {
+    return res.status(500).json({ error: "engagement_query_failed", message: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 router.get("/crm/contacts", async (req, res) => {
   const search =
     typeof req.query.q === "string"
