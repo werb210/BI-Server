@@ -61,6 +61,7 @@ import { badRequest } from "./utils/apiResponse";
 import { httpLogger } from "./utils/httpLogger";
 // BI_V1_FINAL_v47 — lender direct API + bi_notes
 import biLenderApiRoutes from "./routes/biLenderApiRoutes";
+import biLenderOpenApi from "./routes/biLenderOpenApi"; // BI_SERVER_BLOCK_69_LENDER_OPENAPI_SPEC_v1
 import biApplicantOtpRoutes from "./routes/biApplicantOtpRoutes";
 // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
 import biApplicantDocFlowRoutes from "./routes/biApplicantDocFlowRoutes";
@@ -226,6 +227,7 @@ app.use("/api/v1", biCors, biQuoteRoutes);
 // flat body and runs pgiScore), otherwise Express resolves to the wrong handler.
 app.use(biLenderApplicationCreate);
 app.use("/api/v1", biCors, biLenderApiRoutes);
+app.use("/api/v1", biCors, biLenderOpenApi); // BI_SERVER_BLOCK_69_LENDER_OPENAPI_SPEC_v1
 app.use("/api/v1", biCors, biApplicantOtpRoutes);
 app.use("/api/v1", biCors, biReferrerRoutes);
 // BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1 — cron-triggered job
