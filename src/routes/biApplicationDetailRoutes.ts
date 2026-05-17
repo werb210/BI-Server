@@ -308,8 +308,11 @@ router.post("/:id/documents/:docId/accept", requireStaffOrAdmin, async (req: Req
       [appId, userId, `Document accepted: ${doc.doc_type}`, JSON.stringify({ docId })],
     );
 
-    // Accept-all gate (BI_SERVER_BLOCK_v178). >=1 accepted AND no
-    // pending. Rejected docs neither block nor advance.
+    // BI_SERVER_BLOCK_BI_ROUND8_AUTOFWD_v1 -- accept-all gate with
+    // auto-PGI submission for public-source apps. Reverts v178.
+    // >=1 accepted AND no pending = gate fires. Rejected docs are
+    // neither (don't block, don't trigger). Lender path was never
+    // affected (already auto-submits at application creation).
     const counts = await pool.query<{ pending: string; accepted: string; total: string }>(
       `SELECT
          COUNT(*) FILTER (WHERE COALESCE(review_status, 'pending') NOT IN ('accepted', 'rejected')) AS pending,
@@ -324,29 +327,81 @@ router.post("/:id/documents/:docId/accept", requireStaffOrAdmin, async (req: Req
     const acceptedCount = Number(counts.rows[0]?.accepted ?? 0);
 
     let stageAdvanced = false;
-    let nextStage: "document_review" | "ready_for_submission" | null = null;
+    let finalStatus: string | null = null;
+    let autoSubmittedToPgi = false;
+    let pgiSubmitError: string | null = null;
+
     if (acceptedCount > 0 && pending === 0) {
-      // Public source -> document_review (staff still review).
-      // Lender source -> ready_for_submission (already guarded above
-      // but kept for completeness if the rule loosens later).
-      nextStage = doc.source_type === "lender" ? "ready_for_submission" : "document_review";
-      const updated = await pool.query(
+      // Step 1: advance to ready_for_submission. Accept both
+      // in_progress and document_review as source states -- the
+      // app may already be at document_review if a prior accept
+      // path put it there before this block deployed.
+      const advance = await pool.query(
         `UPDATE bi_applications
-            SET status=$2, updated_at=NOW()
-          WHERE id=$1 AND status='in_progress'`,
-        [appId, nextStage],
+            SET status = 'ready_for_submission', updated_at = NOW()
+          WHERE id = $1
+            AND status IN ('in_progress', 'document_review')
+          RETURNING id`,
+        [appId],
       );
-      stageAdvanced = (updated.rowCount ?? 0) > 0;
+      stageAdvanced = (advance.rowCount ?? 0) > 0;
+      finalStatus = stageAdvanced ? "ready_for_submission" : null;
+
       if (stageAdvanced) {
         await pool.query(
           `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
                 VALUES($1, 'system', $2, 'application_stage_changed', $3, $4::jsonb)`,
           [
             appId, userId,
-            `Application advanced to ${nextStage} after all documents were accepted`,
-            JSON.stringify({ trigger: "all_documents_accepted", from: "in_progress", to: nextStage }),
+            `Application advanced to ready_for_submission after all documents accepted`,
+            JSON.stringify({
+              trigger: "all_documents_accepted",
+              to: "ready_for_submission",
+              source_type: doc.source_type,
+            }),
           ],
         );
+      }
+
+      // Step 2: for public-source apps, fire submitApplicationToPGI.
+      // Lender + referrer paths submit at creation, not here.
+      // submitApplicationToPGI is atomic + idempotent; on success
+      // it sets status='submitted'. On failure it leaves the row
+      // at ready_for_submission so the manual Submit-to-carrier
+      // button surfaces for retry.
+      if (doc.source_type === "public") {
+        const { submitApplicationToPGI } = await import("../services/biPgiSubmissionService");
+        try {
+          const result = await submitApplicationToPGI(appId);
+          autoSubmittedToPgi = true;
+          finalStatus = "submitted";
+          await pool.query(
+            `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
+                  VALUES($1, 'system', $2, 'auto_submitted_to_pgi', $3, $4::jsonb)`,
+            [
+              appId, userId,
+              `Auto-forwarded to PGI after last document accepted (external_id=${result.externalId})`,
+              JSON.stringify({
+                trigger: "auto_pgi_on_last_accept",
+                external_id: result.externalId,
+                pgi_status: result.status,
+                already_submitted: result.alreadySubmitted,
+              }),
+            ],
+          );
+        } catch (err) {
+          pgiSubmitError = err instanceof Error ? err.message : "PGI submission failed";
+          logger.warn({ err, appId }, "bi.applications.accept.auto_pgi_failed");
+          await pool.query(
+            `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
+                  VALUES($1, 'system', $2, 'auto_submit_to_pgi_failed', $3, $4::jsonb)`,
+            [
+              appId, userId,
+              `Auto-PGI submission failed: ${pgiSubmitError}. Manual retry available.`,
+              JSON.stringify({ error: pgiSubmitError }),
+            ],
+          ).catch(() => {});
+        }
       }
     }
 
@@ -354,7 +409,9 @@ router.post("/:id/documents/:docId/accept", requireStaffOrAdmin, async (req: Req
       success: true,
       accepted: { total, pending, accepted: acceptedCount },
       stageAdvanced,
-      nextStage,
+      finalStatus,
+      autoSubmittedToPgi,
+      pgiSubmitError,
     });
   } catch (err) {
     logger.error({ err, appId, docId }, "bi.applications.documents.accept.failed");
