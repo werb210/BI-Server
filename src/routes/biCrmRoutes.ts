@@ -92,6 +92,17 @@ router.get("/crm/contacts", async (req, res) => {
     where.push(`c.outreach_status = $${i++}`);
     params.push(leadStatus);
   }
+  const tagsQuery = typeof req.query.tags === "string" ? req.query.tags : "";
+  if (tagsQuery) {
+    const tags = tagsQuery
+      .split(",")
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+    if (tags.length) {
+      where.push(`c.tags && $${i++}::text[]`);
+      params.push(tags);
+    }
+  }
 
   const sql = `
     SELECT c.id,
@@ -236,6 +247,22 @@ router.patch("/crm/contacts/:id", async (req, res) => {
     const companyId = b.company_id === null ? null : v255S(b.company_id);
     sets.push(`company_id = $${i++}`);
     params.push(companyId);
+  }
+  if (b.tags !== undefined) {
+    if (b.tags === null) {
+      sets.push(`tags = $${i++}`);
+      params.push(null);
+    } else if (Array.isArray(b.tags)) {
+      const tags = b.tags
+        .map((t) => (typeof t === "string" ? t.trim() : ""))
+        .filter((t) => t.length > 0)
+        .filter((t) => t.length <= 60)
+        .slice(0, 20);
+      sets.push(`tags = $${i++}::text[]`);
+      params.push(tags);
+    } else {
+      return res.status(400).json({ error: "tags_must_be_array_or_null" });
+    }
   }
 
   if (sets.length === 0) {
