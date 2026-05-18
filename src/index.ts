@@ -21,6 +21,7 @@ import { env } from "./platform/env";
 import { logger } from "./platform/logger";
 import { pool } from "./db";
 import { startMarketingWorker } from "./workers/marketingWorker";
+import { startSequenceSendWorker } from "./workers/sequenceSendWorker";
 import { startMailboxHealthRollup } from "./workers/mailboxHealthRollup";
 
 // eslint-disable-next-line no-console
@@ -40,6 +41,7 @@ console.log("Starting BI-Server bootstrap...");
 
 const server = app.listen(port, "0.0.0.0", () => {
   startMarketingWorker();
+startSequenceSendWorker();
   startMailboxHealthRollup();
   logger.info({ port }, "BI server running");
   // eslint-disable-next-line no-console
