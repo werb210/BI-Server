@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import { env } from "../platform/env";
 
 import { badRequest, ok } from "../utils/apiResponse";
+import { hasCapability } from "../platform/capabilities";
 
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
@@ -796,6 +797,19 @@ router.get("/crm/contacts/:id/timeline", async (req, res) => {
     logger.error({ err }, "bi.contacts.timeline.failed");
     return res.status(500).json({ error: { code: "internal", message: "Failed to load timeline" } });
   }
+});
+
+router.post("/crm/contacts/bulk-update", async (req, res) => {
+  if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
+  const ids: string[] = Array.isArray(req.body?.contact_ids) ? req.body.contact_ids : [];
+  const set = req.body?.set ?? {};
+  await pool.query(`UPDATE bi_contacts SET outreach_stage = COALESCE($1,outreach_stage), owner_user_id = COALESCE($2,owner_user_id), tags = COALESCE(array(SELECT DISTINCT unnest(COALESCE(tags,'{}'::text[]) || $3::text[])), tags) WHERE id = ANY($4::uuid[])`, [set.outreach_stage ?? null, set.owner_user_id ?? null, Array.isArray(set.add_tags) ? set.add_tags : [], ids]);
+  return res.json({ ok: true, updated: ids.length });
+});
+
+router.get("/crm/contacts/:id/activity", async (req, res) => {
+  const r = await pool.query(`SELECT a.*, p.email AS actor_email FROM bi_contact_activity a LEFT JOIN bi_staff_profile p ON p.staff_user_id = a.actor_user_id WHERE a.contact_id = $1 ORDER BY occurred_at DESC`, [req.params.id]);
+  return res.json({ items: r.rows });
 });
 
 export default router;

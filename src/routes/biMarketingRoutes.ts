@@ -5,6 +5,7 @@ import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
 import { pool } from "../db";
 import { logger } from "../platform/logger";
+import { hasCapability } from "../platform/capabilities";
 
 const router: Router = Router();
 
@@ -520,6 +521,35 @@ router.delete("/templates/:id", async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: "delete_failed", message: e instanceof Error ? e.message : String(e) });
   }
+});
+
+function requireMarketing(cap: "marketing:admin" | "marketing:outreach") {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!hasCapability((req as any).user, cap)) return res.status(403).json({ error: "forbidden", capability: cap });
+    next();
+  };
+}
+
+router.get("/stages", async (_req, res) => {
+  const r = await pool.query(`SELECT id, label, ordinal, is_terminal, hidden_by_default, color, created_at FROM bi_outreach_stages ORDER BY ordinal ASC`);
+  return res.json({ items: r.rows });
+});
+
+router.get("/industry-routing-rules", requireMarketing("marketing:admin"), async (_req, res) => {
+  const r = await pool.query(`SELECT id, industry, owner_user_id, created_at, updated_at FROM bi_industry_routing_rules ORDER BY industry ASC`);
+  return res.json({ rules: r.rows });
+});
+
+router.put("/industry-routing-rules", requireMarketing("marketing:admin"), async (req, res) => {
+  const rules = Array.isArray(req.body?.rules) ? req.body.rules : [];
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`DELETE FROM bi_industry_routing_rules`);
+    for (const rule of rules) await client.query(`INSERT INTO bi_industry_routing_rules (industry, owner_user_id) VALUES ($1,$2)`, [rule.industry, rule.owner_user_id]);
+    await client.query("COMMIT");
+    return res.json({ ok: true, count: rules.length });
+  } catch (e) { await client.query("ROLLBACK"); return res.status(400).json({ error: "replace_failed", message: e instanceof Error ? e.message : String(e) }); } finally { client.release(); }
 });
 
 export default router;

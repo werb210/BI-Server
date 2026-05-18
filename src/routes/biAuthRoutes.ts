@@ -6,6 +6,7 @@ import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
 import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
 import { calculatePremium } from "../services/premiumService";
 import { badRequest, ok } from "../utils/apiResponse";
+import { capabilitiesForEmail } from "../platform/capabilities";
 
 const publicRouter = Router();
 export const biAppApplicantRoutes = Router();
@@ -188,7 +189,8 @@ publicRouter.post("/staff/login", async (req, res) => {
   const token = signStaffToken({
     staffUserId: process.env.ADMIN_EMAIL,
     role: "staff",
-    userType: "staff"
+    userType: "staff",
+    capabilities: capabilitiesForEmail(email),
   });
 
   return ok(res, { token, tokenType: "Bearer", expiresIn: 28800 });

@@ -304,15 +304,15 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
   if (process.env.APOLLO_API_KEY == null || process.env.APOLLO_API_KEY === "") {
     return res.status(503).json({ error: "apollo_not_configured" });
   }
-  const labelId = String(req.params.id || "").trim();
-  if (!labelId) return res.status(400).json({ error: "missing_label_id" });
-  const MAX_PAGES = 100; // 100 * 100 = 10,000 contacts ceiling per import call
-  const startedAt = Date.now();
-  let page = 1;
-  let totalPages = 1;
-  let upserted = 0;
-  let created = 0;
-  let errors = 0;
+    const labelId = String(req.params.id || "").trim();
+    if (!labelId) return res.status(400).json({ error: "missing_label_id" });
+    const MAX_PAGES = 100; // 100 * 100 = 10,000 contacts ceiling per import call
+    const startedAt = Date.now();
+    let page = 1;
+    let totalPages = 1;
+    let upserted = 0;
+    let created = 0;
+    let errors = 0;
   // BI_SERVER_BLOCK_73_APOLLO_LIST_FORK_v1 - label may be People or Companies; try people first, fall through to companies.
   let source: "people" | "companies" | "empty" = "empty";
   let errorPath: "none" | "people_search" | "people_upsert" | "companies_search" | "companies_upsert" = "none";
@@ -434,8 +434,9 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
       error_path: errorPath,
     }, "apollo list import finished");
     return res.json({ ok: true, label_id: labelId, source, pages: page - 1, total_pages: totalPages, upserted, created, errors, elapsed_ms, capped: totalPages > MAX_PAGES });
-  } catch (e) {
+  } catch (e: any) {
     const message = getApolloErrorMessage(e);
+    req.log?.error?.({ err: e, listId: req.params.id, stack: e?.stack }, "apollo_import_failed");
     logger.error({
       err: e,
       label_id: labelId,
@@ -448,7 +449,7 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
       error_path: errorPath,
       apollo_message: message,
     }, "apollo list import failed");
-    return res.status(502).json({ error: "apollo_import_failed", source, upserted, created, errors, error_path: errorPath, message });
+    return res.status(422).json({ error: "apollo_import_failed", source, upserted, created, errors, error_path: errorPath, message });
   }
 });
 
