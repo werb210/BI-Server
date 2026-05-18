@@ -128,7 +128,7 @@ export async function matchPerson(args: {
 }): Promise<{ person: ApolloPerson | null }> {
   const res = await apolloRequest<{ person?: ApolloPerson }>("/people/match", {
     method: "POST",
-    query: { reveal_personal_emails: args.reveal_personal_emails ?? false },
+    query: { email: args.email, reveal_personal_emails: args.reveal_personal_emails ?? false },
     body: {
       email: args.email,
       first_name: args.first_name,

@@ -62,7 +62,10 @@ export async function runMigrations(pool: Pool): Promise<{ applied: string[]; sk
     return { applied, skipped };
   }
   const sqlFiles = entries.filter((f) => f.endsWith(".sql")).sort();
-  logger.info({ count: sqlFiles.length, dir: MIGRATIONS_DIR }, "runMigrations: found .sql migrations");
+  logger.info({ count: sqlFiles.length, dir: MIGRATIONS_DIR, files: sqlFiles }, "runMigrations: found .sql migrations");
+  for (const file of sqlFiles) {
+    logger.info({ file }, "runMigrations: scanned migration file");
+  }
 
   // 3. Fetch already-applied set
   const { rows } = await pool.query<{ filename: string }>(`SELECT filename FROM bi_migrations_applied`);
@@ -72,8 +75,10 @@ export async function runMigrations(pool: Pool): Promise<{ applied: string[]; sk
   for (const file of sqlFiles) {
     if (alreadyApplied.has(file)) {
       skipped.push(file);
+      logger.info({ file, reason: "already_applied" }, "runMigrations: skipped");
       continue;
     }
+    logger.info({ file }, "runMigrations: applying");
     const sql = readFileSync(path.join(MIGRATIONS_DIR, file), "utf8");
 
     // BI_SERVER_BLOCK_v66_MIGRATION_RUNNER_ENUM_SAFE_v1 — pre-commit any
