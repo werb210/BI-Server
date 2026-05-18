@@ -2,7 +2,8 @@
 import { Router } from "express";
 // BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1 — manual Apollo sync trigger.
 import { runContactSyncOnce } from "../jobs/apolloSyncJob";
-import { listEmailAccounts as _apolloListEmailAccounts, listLabels as _apolloListLabels, searchContacts as _apolloSearchContactsByLabel } from "../integrations/apollo/apolloClient";
+// BI_SERVER_BLOCK_73_APOLLO_LIST_FORK_v1 - added searchPeople (mixed_people) and searchCompaniesByLabel (mixed_companies).
+import { listEmailAccounts as _apolloListEmailAccounts, listLabels as _apolloListLabels, searchContacts as _apolloSearchContactsByLabel, searchPeople as _apolloSearchPeopleByLabel, searchCompaniesByLabel as _apolloSearchCompaniesByLabel } from "../integrations/apollo/apolloClient";
 import { upsertApolloContact as _apolloUpsertByLabel } from "../integrations/apollo/apolloContactSync";
 import { pool } from "../db";
 import { ok, badRequest } from "../utils/apiResponse";
@@ -299,13 +300,21 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
   let upserted = 0;
   let created = 0;
   let errors = 0;
+  // BI_SERVER_BLOCK_73_APOLLO_LIST_FORK_v1 - label may be People or Companies; try people first, fall through to companies.
+  let source: "people" | "companies" | "empty" = "empty";
   try {
+    // Step 1: try /mixed_people/search with label_ids.
     while (page <= totalPages && page <= MAX_PAGES) {
-      const { contacts, pagination } = await _apolloSearchContactsByLabel({ page, per_page: 100, label_ids: [labelId] });
+      const { people, pagination } = await _apolloSearchPeopleByLabel({ page, per_page: 100, label_ids: [labelId] });
       totalPages = pagination.total_pages || 1;
-      for (const person of contacts) {
+      if (page === 1 && (people?.length ?? 0) === 0 && (pagination.total_entries ?? 0) === 0) {
+        // Empty people set on page 1 means this label points at Companies.
+        break;
+      }
+      source = "people";
+      for (const person of people ?? []) {
         try {
-          const r = await _apolloUpsertByLabel(person, { sourceLabelId: labelId });
+          const r = await _apolloUpsertByLabel(person as any, { sourceLabelId: labelId });
           upserted += 1;
           if (r.created) created += 1;
         } catch {
@@ -314,10 +323,44 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
       }
       page += 1;
     }
+    // Step 2: if people path returned nothing, try /mixed_companies/search.
+    if (source === "empty") {
+      page = 1;
+      totalPages = 1;
+      while (page <= totalPages && page <= MAX_PAGES) {
+        const { organizations, pagination } = await _apolloSearchCompaniesByLabel({ page, per_page: 100, label_ids: [labelId] });
+        totalPages = pagination.total_pages || 1;
+        if (page === 1 && (organizations?.length ?? 0) === 0) break;
+        source = "companies";
+        for (const org of organizations ?? []) {
+          try {
+            const orgName = String(org?.name ?? "").trim();
+            if (!orgName) { errors += 1; continue; }
+            const existing = await pool.query<{ id: string }>(
+              `SELECT id FROM bi_companies WHERE LOWER(legal_name) = LOWER($1) OR LOWER(operating_name) = LOWER($1) LIMIT 1`,
+              [orgName]
+            );
+            if (existing.rows[0]?.id) {
+              upserted += 1;
+            } else {
+              await pool.query(
+                `INSERT INTO bi_companies (legal_name, industry, kind) VALUES ($1, $2, 'lender')`,
+                [orgName, org?.industry ?? null]
+              );
+              upserted += 1;
+              created += 1;
+            }
+          } catch {
+            errors += 1;
+          }
+        }
+        page += 1;
+      }
+    }
     const elapsed_ms = Date.now() - startedAt;
-    return res.json({ ok: true, label_id: labelId, pages: page - 1, total_pages: totalPages, upserted, created, errors, elapsed_ms, capped: totalPages > MAX_PAGES });
+    return res.json({ ok: true, label_id: labelId, source, pages: page - 1, total_pages: totalPages, upserted, created, errors, elapsed_ms, capped: totalPages > MAX_PAGES });
   } catch (e) {
-    return res.status(502).json({ error: "apollo_import_failed", upserted, created, errors, message: e instanceof Error ? e.message : String(e) });
+    return res.status(502).json({ error: "apollo_import_failed", source, upserted, created, errors, message: e instanceof Error ? e.message : String(e) });
   }
 });
 
