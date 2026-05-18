@@ -92,9 +92,9 @@ router.get("/crm/contacts", async (req, res) => {
     where.push(`c.outreach_status = $${i++}`);
     params.push(leadStatus);
   }
-  const tagsQuery = typeof req.query.tags === "string" ? req.query.tags : "";
-  if (tagsQuery) {
-    const tags = tagsQuery
+  const tagsQueryRaw = typeof req.query.tags === "string" ? req.query.tags : "";
+  if (tagsQueryRaw) {
+    const tags = tagsQueryRaw
       .split(",")
       .map((t) => t.trim())
       .filter((t) => t.length > 0);
