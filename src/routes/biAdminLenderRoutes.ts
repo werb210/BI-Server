@@ -14,6 +14,19 @@ import crypto from "node:crypto";
 import twilio from "twilio";
 const router = Router(); const COUNTRY_RE = /^(CA|US)$/;
 
+function getApolloErrorMessage(err: unknown): string {
+  const fallback = err instanceof Error ? err.message : String(err);
+  const e = err as { body?: unknown };
+  if (!e || typeof e !== "object") return fallback;
+  const body = e.body as Record<string, unknown> | undefined;
+  if (!body || typeof body !== "object") return fallback;
+  const msg = body.message ?? body.error ?? body.errors;
+  if (typeof msg === "string") return msg;
+  if (Array.isArray(msg)) return msg.map((m) => (typeof m === "string" ? m : JSON.stringify(m))).join("; ");
+  if (msg && typeof msg === "object") return JSON.stringify(msg);
+  return fallback;
+}
+
 // BI_SERVER_BLOCK_v183_ADMIN_LENDER_ROLE_GATE_v1
 // All routes in this file are admin-only. Mount-level requireAuth
 // only verifies token validity; it does not check role. Without
@@ -302,11 +315,37 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
   let errors = 0;
   // BI_SERVER_BLOCK_73_APOLLO_LIST_FORK_v1 - label may be People or Companies; try people first, fall through to companies.
   let source: "people" | "companies" | "empty" = "empty";
+  let errorPath: "none" | "people_search" | "people_upsert" | "companies_search" | "companies_upsert" = "none";
+  let peopleHttpOk = false;
+  let companiesHttpOk = false;
   try {
     // Step 1: try /mixed_people/search with label_ids.
     while (page <= totalPages && page <= MAX_PAGES) {
-      const { people, pagination } = await _apolloSearchPeopleByLabel({ page, per_page: 100, label_ids: [labelId] });
+      let people: any[] = [];
+      let pagination: { total_pages?: number; total_entries?: number } = { total_pages: 1, total_entries: 0 };
+      try {
+        const peopleRes = await _apolloSearchPeopleByLabel({ page, per_page: 100, label_ids: [labelId] });
+        peopleHttpOk = true;
+        people = peopleRes.people ?? [];
+        pagination = peopleRes.pagination ?? pagination;
+      } catch (err) {
+        errorPath = "people_search";
+        throw err;
+      }
       totalPages = pagination.total_pages || 1;
+      logger.info({
+        label_id: labelId,
+        page,
+        people_http_ok: peopleHttpOk,
+        response_shape: {
+          has_people: Array.isArray(people),
+          people_count: people.length,
+          has_companies: false,
+          companies_count: 0,
+          total_entries: pagination.total_entries ?? null,
+        },
+        error_path: errorPath,
+      }, "apollo list import people response");
       if (page === 1 && (people?.length ?? 0) === 0 && (pagination.total_entries ?? 0) === 0) {
         // Empty people set on page 1 means this label points at Companies.
         break;
@@ -318,6 +357,7 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
           upserted += 1;
           if (r.created) created += 1;
         } catch {
+          errorPath = "people_upsert";
           errors += 1;
         }
       }
@@ -328,8 +368,31 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
       page = 1;
       totalPages = 1;
       while (page <= totalPages && page <= MAX_PAGES) {
-        const { organizations, pagination } = await _apolloSearchCompaniesByLabel({ page, per_page: 100, label_ids: [labelId] });
+        let organizations: any[] = [];
+        let pagination: { total_pages?: number; total_entries?: number } = { total_pages: 1, total_entries: 0 };
+        try {
+          const companyRes = await _apolloSearchCompaniesByLabel({ page, per_page: 100, label_ids: [labelId] });
+          companiesHttpOk = true;
+          organizations = companyRes.organizations ?? [];
+          pagination = companyRes.pagination ?? pagination;
+        } catch (err) {
+          errorPath = "companies_search";
+          throw err;
+        }
         totalPages = pagination.total_pages || 1;
+        logger.info({
+          label_id: labelId,
+          page,
+          companies_http_ok: companiesHttpOk,
+          response_shape: {
+            has_people: false,
+            people_count: 0,
+            has_companies: Array.isArray(organizations),
+            companies_count: organizations.length,
+            total_entries: pagination.total_entries ?? null,
+          },
+          error_path: errorPath,
+        }, "apollo list import companies response");
         if (page === 1 && (organizations?.length ?? 0) === 0) break;
         source = "companies";
         for (const org of organizations ?? []) {
@@ -351,6 +414,7 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
               created += 1;
             }
           } catch {
+            errorPath = "companies_upsert";
             errors += 1;
           }
         }
@@ -358,9 +422,33 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
       }
     }
     const elapsed_ms = Date.now() - startedAt;
+    logger.info({
+      label_id: labelId,
+      source,
+      people_http_ok: peopleHttpOk,
+      companies_http_ok: companiesHttpOk,
+      upserted,
+      created,
+      errors,
+      elapsed_ms,
+      error_path: errorPath,
+    }, "apollo list import finished");
     return res.json({ ok: true, label_id: labelId, source, pages: page - 1, total_pages: totalPages, upserted, created, errors, elapsed_ms, capped: totalPages > MAX_PAGES });
   } catch (e) {
-    return res.status(502).json({ error: "apollo_import_failed", source, upserted, created, errors, message: e instanceof Error ? e.message : String(e) });
+    const message = getApolloErrorMessage(e);
+    logger.error({
+      err: e,
+      label_id: labelId,
+      source,
+      people_http_ok: peopleHttpOk,
+      companies_http_ok: companiesHttpOk,
+      upserted,
+      created,
+      errors,
+      error_path: errorPath,
+      apollo_message: message,
+    }, "apollo list import failed");
+    return res.status(502).json({ error: "apollo_import_failed", source, upserted, created, errors, error_path: errorPath, message });
   }
 });
 
