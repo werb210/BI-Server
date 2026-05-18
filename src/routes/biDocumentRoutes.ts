@@ -360,6 +360,67 @@ router.post("/:id/reject", requireAuth, requireStaffOrAdmin, async (req, res) =>
 });
 
 
+// BI_SERVER_BLOCK_75_DOC_DOWNLOAD_DELETE_v1
+// GET /:id/download - companion to GET /:id; forces attachment disposition.
+// Same UUID guard pattern as GET /:id (router is also mounted at the bare
+// /api/v1/bi prefix per server.ts:259, so non-UUID paths must fall through).
+router.get("/:id/download", async (req, res, next) => {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id ?? "")) {
+    return next();
+  }
+  const result = await pool.query(
+    `SELECT original_filename, storage_key, blob_name, mime_type FROM bi_documents WHERE id=$1 AND purged_at IS NULL LIMIT 1`,
+    [req.params.id]
+  );
+  if (!result.rows.length) return badRequest(res, "Document not found");
+  const row = result.rows[0] as {
+    original_filename: string;
+    storage_key: string | null;
+    blob_name: string | null;
+    mime_type: string;
+  };
+  const safeName = String(row.original_filename || "document").replace(/[\r\n"\\]/g, "_");
+  if (row.blob_name) {
+    const got = await getStorage().get(row.blob_name);
+    if (!got) return badRequest(res, "File missing");
+    res.setHeader("Content-Type", row.mime_type || got.contentType || "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
+    return res.end(got.buffer);
+  }
+  if (!row.storage_key) return badRequest(res, "File missing");
+  const fullPath = path.join(legacyUploadDir, row.storage_key);
+  if (!fs.existsSync(fullPath)) return badRequest(res, "File missing");
+  res.setHeader("Content-Type", row.mime_type || "application/octet-stream");
+  res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
+  return fs.createReadStream(fullPath).pipe(res);
+});
+
+// DELETE /:id - soft-delete. Sets purged_at; existing SELECTs filter on
+// purged_at IS NULL, so the doc disappears from staff UI without touching
+// blob storage (a sweeper can purge later). Staff-or-admin only.
+router.delete("/:id", requireAuth, requireStaffOrAdmin, async (req, res) => {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id ?? "")) {
+    return badRequest(res, "Invalid document id");
+  }
+  const userId = String((req.user as { id?: string } | undefined)?.id ?? "") || null;
+  const r = await pool.query(
+    `UPDATE bi_documents
+        SET purged_at = NOW()
+      WHERE id = $1 AND purged_at IS NULL
+      RETURNING id, application_id, doc_type`,
+    [req.params.id]
+  );
+  if (!r.rows.length) return badRequest(res, "Document not found or already deleted");
+  const row = r.rows[0] as { id: string; application_id: string; doc_type: string };
+  await pool.query(
+    `INSERT INTO bi_activity (application_id, actor, actor_user_id, kind, message, metadata)
+     VALUES ($1, 'staff', $2, 'document_deleted', $3, $4::jsonb)`,
+    [row.application_id, userId, `Document deleted: ${row.doc_type}`, JSON.stringify({ docId: row.id })]
+  ).catch(() => {});
+  return ok(res, { success: true, id: row.id });
+});
+
+
 // BI_SERVER_BLOCK_v273_PUBLIC_UPLOAD_OCR_v1
 // Local runOcrForDocument moved to src/services/ocrRunner.ts.
 // Module-local `pool` here is the legacy per-route Pool — runOcrForDocument
