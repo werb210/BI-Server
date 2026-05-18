@@ -96,6 +96,8 @@ router.get("/crm/contacts", async (req, res) => {
   const sql = `
     SELECT c.id,
            c.full_name,
+           c.first_name,
+           c.last_name,
            c.email,
            c.phone_e164,
            c.title,
@@ -134,6 +136,8 @@ router.get("/crm/contacts/:id", async (req, res) => {
     const r = await pool.query(
       `SELECT c.id,
               c.full_name,
+              c.first_name,
+              c.last_name,
               c.email,
               c.phone_e164,
               c.title,
@@ -198,6 +202,14 @@ router.patch("/crm/contacts/:id", async (req, res) => {
   if (b.full_name !== undefined) {
     sets.push(`full_name = $${i++}`);
     params.push(v255S(b.full_name, 200));
+  }
+  if (b.first_name !== undefined) {
+    sets.push(`first_name = $${i++}`);
+    params.push(v255S(b.first_name, 100));
+  }
+  if (b.last_name !== undefined) {
+    sets.push(`last_name = $${i++}`);
+    params.push(v255S(b.last_name, 100));
   }
   if (b.email !== undefined) {
     const email = b.email === null ? null : v255S(b.email, 200);
