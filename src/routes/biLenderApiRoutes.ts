@@ -72,7 +72,7 @@ async function authLender(req: any, res: any, next: any) {
       const claims: any = jwt.verify(bearerToken, env.JWT_SECRET || "dev-missing-jwt-secret");
       if (claims && claims.kind === "lender" && claims.id) {
         req.lenderId = claims.id;
-        if (claims.user_id) req.lenderUserId = String(claims.user_id);
+        if (claims.user_id || claims.contactId) req.lenderUserId = String(claims.user_id || claims.contactId);
         // BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1 — surface is_demo
         // claim so per-route handlers can scope pipeline queries to the
         // lender's current session mode. Demo sessions see ONLY demo
@@ -249,18 +249,15 @@ router.post("/lender/otp/start", async (req, res) => {
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: "invalid_email" });
     }
-    // Look up contact by email; either contact-level or lender-primary.
+    // Look up login contact by email.
     const contact = await pool.query(
-      `SELECT c.id FROM bi_lender_contacts c
+      `SELECT c.id FROM bi_lender_login_contacts c
          JOIN bi_lenders l ON l.id = c.lender_id
         WHERE LOWER(c.email) = $1 AND c.is_active = TRUE AND l.is_active = TRUE
         LIMIT 1`,
       [email],
     );
-    const primary = contact.rows[0]
-      ? null
-      : await pool.query(`SELECT id FROM bi_lenders WHERE LOWER(contact_email) = $1 AND is_active = TRUE LIMIT 1`, [email]);
-    if (contact.rows[0] || primary?.rows[0]) {
+    if (contact.rows[0]) {
       const sr = await sendEmailOtpSafe(email);
       if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
     }
@@ -272,16 +269,10 @@ router.post("/lender/otp/start", async (req, res) => {
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
 
   const r = await pool.query(
-    `SELECT c.id FROM bi_lender_contacts c JOIN bi_lenders l ON l.id = c.lender_id WHERE c.phone_e164 = $1 AND c.is_active = TRUE AND l.is_active = TRUE LIMIT 1`,
+    `SELECT c.id FROM bi_lender_login_contacts c JOIN bi_lenders l ON l.id = c.lender_id WHERE c.phone_e164 = $1 AND c.is_active = TRUE AND l.is_active = TRUE LIMIT 1`,
     [phone],
   );
   if (r.rows[0]) {
-    const sr = await sendOtpSafe(phone);
-    if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
-    return res.json({ ok: true, channel: "sms" });
-  }
-  const primary = await pool.query(`SELECT id FROM bi_lenders WHERE contact_phone_e164 = $1 AND is_active = TRUE LIMIT 1`, [phone]);
-  if (primary.rows[0]) {
     const sr = await sendOtpSafe(phone);
     if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
   }
@@ -328,27 +319,12 @@ router.post("/lender/otp/verify", async (req, res) => {
     let row: any;
     const cr = await pool.query(
       `SELECT c.id AS contact_id, l.id AS lender_id, l.company_name, c.full_name, c.email, c.role
-         FROM bi_lender_contacts c JOIN bi_lenders l ON l.id = c.lender_id
+         FROM bi_lender_login_contacts c JOIN bi_lenders l ON l.id = c.lender_id
         WHERE LOWER(c.email) = $1 AND c.is_active = TRUE AND l.is_active = TRUE LIMIT 1`,
       [email],
     );
     if (cr.rows[0]) row = cr.rows[0];
-    else {
-      const lr = await pool.query(
-        `SELECT id AS lender_id, company_name, contact_full_name AS full_name, contact_email AS email
-           FROM bi_lenders WHERE LOWER(contact_email) = $1 AND is_active = TRUE LIMIT 1`,
-        [email],
-      );
-      if (!lr.rows[0]) return res.status(404).json({ error: "lender_not_found" });
-      const ins = await pool.query(
-        `INSERT INTO bi_lender_contacts (lender_id, full_name, email, role, is_primary, is_active)
-         VALUES ($1, COALESCE(NULLIF(TRIM($2), ''), '(primary)'), LOWER(TRIM($3)), 'primary', TRUE, TRUE)
-         RETURNING id`,
-        [lr.rows[0].lender_id, lr.rows[0].full_name, lr.rows[0].email],
-      );
-      row = { contact_id: ins.rows[0].id, lender_id: lr.rows[0].lender_id, company_name: lr.rows[0].company_name, full_name: lr.rows[0].full_name, email: lr.rows[0].email, role: "primary" };
-    }
-    if (row.contact_id) await pool.query(`UPDATE bi_lender_contacts SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1`, [row.contact_id]).catch(() => {});
+    if (!row) return res.status(404).json({ error: "lender_not_found" });
 
     const secret = process.env.JWT_SECRET || "dev-missing-jwt-secret";
     const token = jwt.sign(
@@ -364,23 +340,62 @@ router.post("/lender/otp/verify", async (req, res) => {
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
 
   let row: any;
-  const cr = await pool.query(`SELECT c.id AS contact_id, l.id AS lender_id, l.company_name, c.full_name, c.email, c.role FROM bi_lender_contacts c JOIN bi_lenders l ON l.id=c.lender_id WHERE c.phone_e164=$1 AND c.is_active=TRUE AND l.is_active=TRUE LIMIT 1`, [phone]);
+  const cr = await pool.query(`SELECT c.id AS contact_id, l.id AS lender_id, l.company_name, c.full_name, c.email, c.role FROM bi_lender_login_contacts c JOIN bi_lenders l ON l.id=c.lender_id WHERE c.phone_e164=$1 AND c.is_active=TRUE AND l.is_active=TRUE LIMIT 1`, [phone]);
   if (cr.rows[0]) row = cr.rows[0];
-  else {
-    const lr = await pool.query(`SELECT id, company_name, contact_full_name, contact_email FROM bi_lenders WHERE contact_phone_e164=$1 AND is_active=TRUE LIMIT 1`, [phone]);
-    if (lr.rows[0]) {
-      const ins = await pool.query(`INSERT INTO bi_lender_contacts (lender_id, full_name, email, phone_e164, role, is_primary, is_active) VALUES ($1, COALESCE(NULLIF(TRIM($2), ''), '(primary)'), NULLIF(LOWER(TRIM($3)), ''), $4, 'primary', TRUE, TRUE) RETURNING id`, [lr.rows[0].id, lr.rows[0].contact_full_name, lr.rows[0].contact_email, phone]);
-      row = { contact_id: ins.rows[0].id, lender_id: lr.rows[0].id, company_name: lr.rows[0].company_name, full_name: lr.rows[0].contact_full_name, email: lr.rows[0].contact_email, role: 'primary' };
-    }
-  }
   if (!row) return res.status(401).json({ error: "phone_not_registered" });
   // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1
   const vr = await verifyOtpSafe(phone, code);
   if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
   if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
-  if (row.contact_id) await pool.query(`UPDATE bi_lender_contacts SET last_login_at=NOW(), updated_at=NOW() WHERE id=$1`, [row.contact_id]).catch(()=>{});
   const token = jwt.sign({ kind: "lender", id: row.lender_id, user_id: row.contact_id }, env.JWT_SECRET || "dev-missing-jwt-secret", { expiresIn: "7d" });
   res.json({ token, lender: { id: row.lender_id, company_name: row.company_name }, user: { id: row.contact_id, full_name: row.full_name, email: row.email, role: row.role } });
+});
+
+async function requireLenderAdmin(req: any, res: any, next: any) {
+  if (!req.lenderUserId) return res.status(403).json({ error: "lender_admin_required" });
+  const r = await pool.query(`SELECT role FROM bi_lender_login_contacts WHERE id=$1 AND lender_id=$2 AND is_active=TRUE LIMIT 1`, [req.lenderUserId, req.lenderId]);
+  if (r.rows[0]?.role !== "admin") return res.status(403).json({ error: "lender_admin_required" });
+  return next();
+}
+
+router.get("/lender/contacts", authLender, async (req: any, res) => {
+  const r = await pool.query(`SELECT id, lender_id, email, phone_e164, full_name, role, is_active, created_at, updated_at FROM bi_lender_login_contacts WHERE lender_id=$1 AND is_active=TRUE ORDER BY created_at DESC`, [req.lenderId]);
+  return res.json({ contacts: r.rows });
+});
+
+router.post("/lender/contacts", authLender, requireLenderAdmin, async (req: any, res) => {
+  const emailRaw = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  const phone = normalizeE164(req.body?.phone_e164);
+  const full_name = typeof req.body?.full_name === "string" ? req.body.full_name.trim() : null;
+  const role = typeof req.body?.role === "string" ? req.body.role.trim() : "member";
+  const email = emailRaw || null;
+  if (!email && !phone) return res.status(400).json({ error: "email_or_phone_required" });
+  const r = await pool.query(`INSERT INTO bi_lender_login_contacts (lender_id, email, phone_e164, full_name, role, is_active) VALUES ($1,$2,$3,$4,$5,TRUE) RETURNING id, lender_id, email, phone_e164, full_name, role, is_active, created_at, updated_at`, [req.lenderId, email, phone, full_name, role]);
+  return res.status(201).json({ contact: r.rows[0] });
+});
+
+router.patch("/lender/contacts/:id", authLender, requireLenderAdmin, async (req: any, res) => {
+  const id = String(req.params.id);
+  const sets: string[] = [];
+  const vals: any[] = [id, req.lenderId];
+  let i = 3;
+  if (req.body?.email !== undefined) { sets.push(`email=$${i++}`); vals.push(String(req.body.email || "").trim().toLowerCase() || null); }
+  if (req.body?.phone_e164 !== undefined) { sets.push(`phone_e164=$${i++}`); vals.push(normalizeE164(req.body.phone_e164)); }
+  if (req.body?.full_name !== undefined) { sets.push(`full_name=$${i++}`); vals.push(String(req.body.full_name || "").trim() || null); }
+  if (req.body?.role !== undefined) { sets.push(`role=$${i++}`); vals.push(String(req.body.role || "").trim() || null); }
+  if (req.body?.is_active !== undefined) { sets.push(`is_active=$${i++}`); vals.push(Boolean(req.body.is_active)); }
+  if (!sets.length) return res.status(400).json({ error: "no_fields" });
+  sets.push(`updated_at=NOW()`);
+  const q = `UPDATE bi_lender_login_contacts SET ${sets.join(", ")} WHERE id=$1 AND lender_id=$2 RETURNING id, lender_id, email, phone_e164, full_name, role, is_active, created_at, updated_at`;
+  const r = await pool.query(q, vals);
+  if (!r.rows[0]) return res.status(404).json({ error: "contact_not_found" });
+  return res.json({ contact: r.rows[0] });
+});
+
+router.delete("/lender/contacts/:id", authLender, requireLenderAdmin, async (req: any, res) => {
+  const r = await pool.query(`UPDATE bi_lender_login_contacts SET is_active=FALSE, updated_at=NOW() WHERE id=$1 AND lender_id=$2 RETURNING id`, [req.params.id, req.lenderId]);
+  if (!r.rows[0]) return res.status(404).json({ error: "contact_not_found" });
+  return res.json({ ok: true });
 });
 
 router.get("/lender/me", authLender, async (req: any, res) => {
