@@ -3,6 +3,7 @@ import { Router } from "express";
 import { logger } from "../platform/logger";
 import { Pool } from "pg";
 import { env } from "../platform/env";
+import { ApolloError, matchPerson } from "../integrations/apollo/apolloClient";
 
 import { badRequest, ok } from "../utils/apiResponse";
 import { hasCapability } from "../platform/capabilities";
@@ -75,7 +76,7 @@ router.get("/crm/contacts", async (req, res) => {
   const sortDir =
     sortDirRaw && sortDirRaw.toLowerCase() === "asc" ? "ASC" : "DESC";
 
-  const where: string[] = [];
+  const where: string[] = ["c.converted_to_company_id IS NULL"];
   const params: unknown[] = [];
   let i = 1;
   if (search) {
@@ -797,6 +798,129 @@ router.get("/crm/contacts/:id/timeline", async (req, res) => {
     logger.error({ err }, "bi.contacts.timeline.failed");
     return res.status(500).json({ error: { code: "internal", message: "Failed to load timeline" } });
   }
+});
+
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type ApolloEnrichOutcome = {
+  status: number;
+  body: Record<string, unknown>;
+  enriched: boolean;
+};
+
+function manualFieldsSet(value: unknown): Set<string> {
+  return new Set(Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
+}
+
+function apolloFieldValues(person: any): Record<string, unknown> {
+  return {
+    title: person?.title ?? null,
+    organization_name: person?.organization_name ?? person?.organization?.name ?? null,
+    organization_industry: person?.organization_industry ?? person?.organization?.industry ?? null,
+    linkedin_url: person?.linkedin_url ?? null,
+    phone_numbers: Array.isArray(person?.phone_numbers) ? person.phone_numbers : [],
+    city: person?.city ?? null,
+    state: person?.state ?? null,
+    country: person?.country ?? null,
+  };
+}
+
+async function enrichContactById(id: string): Promise<ApolloEnrichOutcome> {
+  const cr = await pool.query<{ id: string; email: string | null; manually_edited_fields: unknown }>(
+    `SELECT id, email, manually_edited_fields
+       FROM bi_contacts
+      WHERE id = $1
+      LIMIT 1`,
+    [id],
+  );
+  if (!cr.rows[0]) return { status: 404, body: { error: "not_found" }, enriched: false };
+  const contact = cr.rows[0];
+  if (!contact.email) return { status: 400, body: { error: "contact_has_no_email" }, enriched: false };
+
+  let person: any = null;
+  try {
+    const apollo = await matchPerson({ email: contact.email });
+    person = apollo.person;
+  } catch (err) {
+    if (err instanceof ApolloError && (err.status === 401 || err.status === 403)) {
+      logger.error({ status: err.status, body: err.body, contactId: id }, "apollo_enrich_unauthorized");
+      return {
+        status: 422,
+        body: { error: "apollo_unauthorized", message: "Verify Apollo API key in BI-Server env" },
+        enriched: false,
+      };
+    }
+    logger.error({ err, contactId: id }, "apollo_enrich_request_failed");
+    return { status: 502, body: { error: "apollo_enrich_failed" }, enriched: false };
+  }
+
+  if (!person) {
+    await pool.query(`UPDATE bi_contacts SET last_enriched_at = NOW() WHERE id = $1`, [id]);
+    return { status: 404, body: { error: "apollo_no_match" }, enriched: false };
+  }
+
+  const manual = manualFieldsSet(contact.manually_edited_fields);
+  const values = apolloFieldValues(person);
+  const sets: string[] = [];
+  const params: unknown[] = [id];
+  const changedFields: string[] = [];
+  let i = 2;
+
+  for (const [field, value] of Object.entries(values)) {
+    if (manual.has(field)) continue;
+    if (field === "phone_numbers") {
+      sets.push(`${field} = $${i++}::jsonb`);
+      params.push(JSON.stringify(value));
+    } else {
+      sets.push(`${field} = $${i++}`);
+      params.push(value);
+    }
+    changedFields.push(field);
+  }
+  sets.push(`last_enriched_at = NOW()`);
+
+  await pool.query(`UPDATE bi_contacts SET ${sets.join(", ")} WHERE id = $1`, params);
+  await pool.query(
+    `INSERT INTO bi_contact_activity (contact_id, kind, payload)
+     VALUES ($1, 'enriched', $2::jsonb)`,
+    [id, JSON.stringify({ changed_fields: changedFields })],
+  );
+
+  return { status: 200, body: { ok: true, changed_fields: changedFields }, enriched: true };
+}
+
+
+router.post("/crm/contacts/:id/enrich", async (req, res) => {
+  if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ error: "id_required" });
+  const result = await enrichContactById(id);
+  return res.status(result.status).json(result.body);
+});
+
+router.post("/crm/contacts/bulk-enrich", async (req, res) => {
+  if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
+  const ids = Array.isArray(req.body?.contact_ids) ? req.body.contact_ids.filter((id: unknown): id is string => typeof id === "string") : [];
+  let enriched = 0;
+  let failed = 0;
+  const errors: Array<{ contact_id: string; status: number; error: unknown }> = [];
+
+  for (let idx = 0; idx < ids.length; idx += 1) {
+    const id = ids[idx];
+    const result = await enrichContactById(id);
+    if (result.enriched) {
+      enriched += 1;
+    } else {
+      failed += 1;
+      errors.push({ contact_id: id, status: result.status, error: result.body });
+    }
+    if (idx < ids.length - 1) await sleep(200);
+  }
+
+  return res.json({ enriched, failed, errors });
 });
 
 router.post("/crm/contacts/bulk-update", async (req, res) => {

@@ -16,7 +16,7 @@ CREATE INDEX IF NOT EXISTS idx_bi_lender_login_contacts_phone ON bi_lender_login
 
 -- Backfill existing primary contact into the new table so current logins keep working
 INSERT INTO bi_lender_login_contacts (lender_id, email, phone_e164, full_name)
-SELECT id, contact_email, contact_phone_e164, contact_name FROM bi_lenders
+SELECT id, contact_email, contact_phone_e164, contact_full_name FROM bi_lenders
 WHERE (contact_email IS NOT NULL OR contact_phone_e164 IS NOT NULL)
   AND NOT EXISTS (
     SELECT 1 FROM bi_lender_login_contacts c WHERE c.lender_id = bi_lenders.id
