@@ -29,6 +29,7 @@ import biAuthRoutes, { biAppApplicantRoutes } from "./routes/biAuthRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
 import biMarketingRoutes from "./routes/biMarketingRoutes";
+import biSequencesRoutes from "./routes/biSequencesRoutes";
 // BI_SERVER_BLOCK_v257_STAFF_DIRECTORY_v1
 import biStaffRoutes from "./routes/biStaffRoutes";
 import biDocumentRoutes from "./routes/biDocumentRoutes";
@@ -273,6 +274,7 @@ app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
 app.use("/api/v1/bi", requireAuth, biCrmRoutes);
 // BI_SERVER_BLOCK_BI_ROUND8_MARKETING_v1
 app.use("/api/v1/bi/marketing", requireAuth, biMarketingRoutes);
+app.use("/api/v1/bi/marketing", requireAuth, biSequencesRoutes);
 // BI_SERVER_BLOCK_v257_STAFF_DIRECTORY_v1
 app.use("/api/v1/bi/staff", requireAuth, biStaffRoutes);
 // BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — outreach endpoints under /api/v1/bi/crm/outreach/*.
