@@ -368,6 +368,55 @@ async function bootstrapInner() {
     return;
   }
 
+  // BI_SERVER_BLOCK_v306_V301_DEFENSIVE_BOOT_ENSURE_v1 — runs BEFORE
+  // runMigrations so the BI CRM contacts query never 500s with
+  // "column c.converted_to_company_id does not exist" regardless of
+  // whether v301 applied, whether a later migration regressed the
+  // schema, or whether the migration runner threw on an earlier file.
+  // Idempotent IF NOT EXISTS; safe to run on every boot.
+  //
+  // Wrapped in its own try/catch so any failure here doesn't block the
+  // existing runMigrations + ad-hoc DDL flow that follows.
+  try {
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'bi_contacts'
+            AND column_name = 'converted_to_company_id'
+        ) THEN
+          ALTER TABLE bi_contacts
+            ADD COLUMN converted_to_company_id UUID NULL;
+        END IF;
+      END $$;
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_bi_contacts_converted_to_company_id
+        ON bi_contacts (converted_to_company_id)
+        WHERE converted_to_company_id IS NOT NULL;
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS bi_user_send_quotas (
+        user_id          UUID PRIMARY KEY,
+        daily_limit      INTEGER NOT NULL DEFAULT 0,
+        sent_today       INTEGER NOT NULL DEFAULT 0,
+        window_start_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_bi_user_send_quotas_window
+        ON bi_user_send_quotas (window_start_at);
+    `);
+    logger.info("BI v301 defensive ensure ok");
+  } catch (err) {
+    logger.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      "BI v301 defensive ensure failed (non-blocking)",
+    );
+  }
+
   try {
     await runMigrations(env.DATABASE_URL!);
     await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
