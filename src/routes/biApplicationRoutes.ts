@@ -108,6 +108,35 @@ router.get("/applications", async (req, res) => {
   return ok(res, { applications: result.rows });
 });
 
+// BI_SERVER_BLOCK_v302_APPLICATION_DELETE_ADMIN_v1 — proper application-
+// level DELETE so the BF-portal BI Dashboard's Delete button stops being
+// hijacked by biDocumentRoutes.delete("/:id"). Admin role only per operator
+// locked decision. Hard delete; FK CASCADE handles bi_documents, bi_activity,
+// bi_email_relay, bi_referrals.application_id (SET NULL), and other child
+// tables. Returns 410 Gone (not 400) when the application no longer exists,
+// so the UI can show a clean "already deleted" message instead of a generic
+// failure.
+router.delete("/applications/:id", async (req, res) => {
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const id = String(req.params.id ?? "").trim();
+  if (!UUID_RE.test(id)) {
+    return res.status(400).json({ ok: false, error: "invalid_id" });
+  }
+  const role = String(((req as any).user?.role) ?? "").trim();
+  if (role !== "Admin" && role !== "admin") {
+    return res
+      .status(403)
+      .json({ ok: false, error: "forbidden", message: "Only Admin may delete applications." });
+  }
+  const r = await pool.query<{ id: string }>(`DELETE FROM bi_applications WHERE id = $1 RETURNING id`, [id]);
+  if (!r.rows.length) {
+    return res
+      .status(410)
+      .json({ ok: false, error: "already_deleted", message: "Application no longer exists." });
+  }
+  return res.status(200).json({ ok: true, id: r.rows[0].id });
+});
+
 router.get("/pipeline", async (req, res) => {
   const stage = String(req.query.stage || "").trim();
   if (!stage) {
