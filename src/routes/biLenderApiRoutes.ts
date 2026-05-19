@@ -392,6 +392,32 @@ router.patch("/lender/contacts/:id", authLender, requireLenderAdmin, async (req:
   return res.json({ contact: r.rows[0] });
 });
 
+// BI_SERVER_BLOCK_v303_LENDER_DEMO_CLEANUP_v1 — DELETE demo applications
+// created by the current lender during the current demo session. Operator
+// brief: "DELETE rows on Exit demo (not hide), session-aware so Andrew
+// running 10 demos/day doesn't accumulate."
+router.post("/lender/demo/cleanup", authLender, async (req: any, res: any) => {
+  const lenderId = req?.lenderId ?? null;
+  if (!lenderId) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+  const startedAtRaw = String(req.body?.session_started_at ?? "").trim();
+  const startedAt = new Date(startedAtRaw);
+  if (!startedAtRaw || Number.isNaN(startedAt.getTime())) {
+    return res.status(400).json({ ok: false, error: "session_started_at_required" });
+  }
+  // Hard delete; FK CASCADE cleans up bi_documents, bi_activity, etc.
+  const r = await pool.query<{ id: string }>(
+    `DELETE FROM bi_applications
+      WHERE is_demo = TRUE
+        AND created_by_lender_id = $1::uuid
+        AND created_at >= $2::timestamptz
+      RETURNING id`,
+    [lenderId, startedAt.toISOString()],
+  );
+  return res.status(200).json({ ok: true, deleted: r.rows.length });
+});
+
 router.delete("/lender/contacts/:id", authLender, requireLenderAdmin, async (req: any, res) => {
   const r = await pool.query(`UPDATE bi_lender_login_contacts SET is_active=FALSE, updated_at=NOW() WHERE id=$1 AND lender_id=$2 RETURNING id`, [req.params.id, req.lenderId]);
   if (!r.rows[0]) return res.status(404).json({ error: "contact_not_found" });
