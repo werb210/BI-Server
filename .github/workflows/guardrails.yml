@@ -1,0 +1,37 @@
+name: guardrails
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  guardrails:
+    name: Repo guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: All .sql files live in src/db/migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          # BI-Server's live migrator (src/startup/runMigrations.ts)
+          # reads from src/db/migrations/ only. Any .sql elsewhere in
+          # the repo will never run on startup. Exceptions: scripts/
+          # (operator-run repair scripts) and node_modules.
+          offenders=$(find . \
+            -type d \( -name node_modules -o -name .git -o -name dist -o -name scripts \) -prune \
+            -o -type f -name '*.sql' -print \
+            | grep -v '^./src/db/migrations/' \
+            || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::All migration .sql files must live in src/db/migrations/. Files outside that directory will not run on startup."
+            echo "Offending files:"
+            echo "$offenders"
+            echo ""
+            echo "Move them to src/db/migrations/ with IF NOT EXISTS guards."
+            exit 1
+          fi
+          echo "All SQL files are in src/db/migrations/. OK."
