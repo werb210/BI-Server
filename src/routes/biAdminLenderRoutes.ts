@@ -319,14 +319,14 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
   let peopleHttpOk = false;
   let companiesHttpOk = false;
   try {
-    // Step 1: try /mixed_people/search with label_ids.
+    // Step 1: try /contacts/search with label_ids (user's saved+enriched contacts).
     while (page <= totalPages && page <= MAX_PAGES) {
       let people: any[] = [];
       let pagination: { total_pages?: number; total_entries?: number } = { total_pages: 1, total_entries: 0 };
       try {
-        const peopleRes = await _apolloSearchPeopleByLabel({ page, per_page: 100, label_ids: [labelId] });
+        const peopleRes = await _apolloSearchContactsByLabel({ page, per_page: 100, label_ids: [labelId] });
         peopleHttpOk = true;
-        people = peopleRes.people ?? [];
+        people = peopleRes.contacts ?? [];
         pagination = peopleRes.pagination ?? pagination;
       } catch (err) {
         errorPath = "people_search";
@@ -345,7 +345,7 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
           total_entries: pagination.total_entries ?? null,
         },
         error_path: errorPath,
-      }, "apollo list import people response");
+      }, "apollo list import contacts response");
       if (page === 1 && (people?.length ?? 0) === 0 && (pagination.total_entries ?? 0) === 0) {
         // Empty people set on page 1 means this label points at Companies.
         break;
