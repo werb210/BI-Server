@@ -155,11 +155,10 @@ router.get("/referrer/referrals", requireReferrer, async (req: any, res) => {
 // bi_companies via company_id, no updated_at); drop both from the
 // INSERT to avoid the next 500 in the chain.
 router.post("/referrer/referrals", requireReferrer, async (req: any, res) => {
-  // BI_SERVER_BLOCK_v245_REFERRAL_FIELDS_v1 — was require [full_name,
-  // email, phone] strictly. Now require full_name AND (email OR phone)
-  // so referrers can submit a referral with only one contact channel
-  // (operator-locked: SMS is the canonical channel for BI client
-  // comms; some referrers won't have an email handy).
+  // BI_SERVER_BLOCK_v320_LAUNCH_RESCUE_v1 — wrap in transaction so a failed
+  // bi_contacts upsert no longer leaves orphan bi_referrals rows.
+  // v320 also added the missing UNIQUE index on bi_contacts.email so the
+  // ON CONFLICT clause actually has a constraint to match against.
   const b = req.body ?? {};
   const full_name = String(b.full_name || b.name || "").trim();
   const email = String(b.email || "").trim();
@@ -167,22 +166,41 @@ router.post("/referrer/referrals", requireReferrer, async (req: any, res) => {
   const company_name = b.company_name || b.company || null;
   if (!full_name) return res.status(400).json({ error: "missing_fields", fields: ["full_name"] });
   if (!email && !phone) return res.status(400).json({ error: "missing_fields", fields: ["email_or_phone"] });
-  const r = await pool.query(
-    `INSERT INTO bi_referrals (referrer_id, full_name, company_name, email, phone_e164, status)
-     VALUES ($1,$2,$3,$4,$5,'invited') RETURNING id`,
-    [req.referrerId, full_name, company_name, email || null, phone || null]
-  );
-  // Only mirror into bi_contacts if we have an email — the contacts
-  // table uses email as a conflict target. Phone-only referrals just
-  // live in bi_referrals.
-  if (email) {
-    await pool.query(
-      `INSERT INTO bi_contacts (id, full_name, email, phone_e164, tags, created_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, ARRAY['referral'], NOW())
-       ON CONFLICT (email) DO UPDATE SET tags = (SELECT ARRAY(SELECT DISTINCT unnest(bi_contacts.tags || ARRAY['referral'])))`,
-      [full_name, email, phone || null]
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query(
+      `INSERT INTO bi_referrals (referrer_id, full_name, company_name, email, phone_e164, status)
+       VALUES ($1,$2,$3,$4,$5,'invited') RETURNING id`,
+      [req.referrerId, full_name, company_name, email || null, phone || null]
     );
+    if (email) {
+      await client.query(
+        `INSERT INTO bi_contacts (id, full_name, email, phone_e164, tags, created_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, ARRAY['referral'], NOW())
+         ON CONFLICT (LOWER(TRIM(email))) WHERE email IS NOT NULL AND TRIM(email) <> ''
+         DO UPDATE SET tags = (SELECT ARRAY(SELECT DISTINCT unnest(bi_contacts.tags || ARRAY['referral'])))`,
+        [full_name, email, phone || null]
+      );
+    } else if (phone) {
+      await client.query(
+        `INSERT INTO bi_contacts (id, full_name, phone_e164, tags, created_at)
+         VALUES (gen_random_uuid(), $1, $2, ARRAY['referral'], NOW())
+         ON CONFLICT DO NOTHING`,
+        [full_name, phone]
+      );
+    }
+    await client.query("COMMIT");
+    return res.status(201).json({ id: r.rows[0].id, status: "invited" });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    return res.status(500).json({
+      error: "referral_save_failed",
+      detail: String((err as Error)?.message ?? err),
+    });
+  } finally {
+    client.release();
   }
-  res.status(201).json({ id: r.rows[0].id, status: "invited" });
 });
 export default router;
