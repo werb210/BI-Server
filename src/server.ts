@@ -9,6 +9,7 @@ import swaggerUi from "swagger-ui-express";
 
 import { openApiSpec } from "./docs/openapi";
 import { pool, runMigrations } from "./db";
+import { runSchemaRescue } from "./db/boot/schemaRescue";
 import { startPremiumAccrualJob } from "./jobs/premiumAccrualJob";
 import { startPurgeJob } from "./jobs/purgeJob";
 // BI_APOLLO_SYNC_v54_PHASE2
@@ -26,6 +27,7 @@ import biMayaStaffRoutes from "./routes/biMayaStaffRoutes";
 // BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1
 import biOutreachCrmRoutes from "./routes/biOutreachCrmRoutes";
 import biAuthRoutes, { biAppApplicantRoutes } from "./routes/biAuthRoutes";
+import biAdminRoutes from "./routes/biAdminRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
 import biMarketingRoutes from "./routes/biMarketingRoutes";
@@ -258,6 +260,7 @@ app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biMayaStaffRoutes)
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biApplicationRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biEventsRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biAppApplicantRoutes);
+app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biAdminRoutes);
 // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — biDocumentRoutes serves both per-
 // application document handlers (under /applications/:id/...) AND the
 // required-doc catalog (under /required-documents). Mount both places.
@@ -411,21 +414,8 @@ async function bootstrapInner() {
         ON bi_user_send_quotas (window_start_at);
     `);
 
-    // BI_SERVER_BLOCK_v319_QUOTA_DATE_DEFENSIVE_BOOT_v1
-    await pool.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_name = 'bi_user_send_quotas'
-            AND column_name = 'quota_date'
-        ) THEN
-          ALTER TABLE bi_user_send_quotas
-            ADD COLUMN quota_date DATE NOT NULL DEFAULT CURRENT_DATE;
-        END IF;
-      END $$;
-    `);
-    logger.info("BI v301 defensive ensure ok");
+    // BI_SERVER_BLOCK_v320_LAUNCH_RESCUE_v1
+    await runSchemaRescue();
   } catch (err) {
     logger.error(
       { err: err instanceof Error ? err.message : String(err) },

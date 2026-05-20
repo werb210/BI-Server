@@ -15,6 +15,39 @@ const router = Router();
 const EBITDA_MIN = 50_000;
 const LOAN_MAX = 1_000_000;
 
+// BI_SERVER_BLOCK_v320_LAUNCH_RESCUE_v1
+// Idempotently links contact + company + first activity row to a new application.
+// Safe to call multiple times for the same applicationId.
+async function ensureContactAndCompanyForApp(appId: string): Promise<void> {
+  await pool.query(`
+    WITH app AS (
+      SELECT id, company_name, guarantor_name, guarantor_email, guarantor_phone, company_id
+        FROM bi_applications WHERE id = $1
+    ), company_upsert AS (
+      INSERT INTO bi_companies (id, legal_name, created_at, updated_at)
+      SELECT gen_random_uuid(), TRIM(app.company_name), NOW(), NOW() FROM app
+      WHERE app.company_name IS NOT NULL AND TRIM(app.company_name) <> ''
+        AND NOT EXISTS (SELECT 1 FROM bi_companies bc WHERE LOWER(TRIM(bc.legal_name)) = LOWER(TRIM(app.company_name)))
+      RETURNING id
+    ), link_company AS (
+      UPDATE bi_applications a SET company_id = COALESCE(a.company_id,(SELECT id FROM company_upsert),(SELECT id FROM bi_companies WHERE LOWER(TRIM(legal_name)) = LOWER(TRIM((SELECT company_name FROM app))) LIMIT 1))
+      WHERE a.id = (SELECT id FROM app) RETURNING company_id
+    ), contact_upsert AS (
+      INSERT INTO bi_contacts (id, full_name, email, phone_e164, tags, created_at)
+      SELECT gen_random_uuid(), COALESCE(NULLIF(TRIM(app.guarantor_name), ''), 'Applicant ' || COALESCE(app.guarantor_phone, '')), NULLIF(TRIM(app.guarantor_email), ''), NULLIF(TRIM(app.guarantor_phone), ''), ARRAY['applicant'], NOW()
+      FROM app
+      WHERE NOT EXISTS (
+        SELECT 1 FROM bi_contacts c WHERE (c.phone_e164 = app.guarantor_phone AND app.guarantor_phone IS NOT NULL)
+          OR (LOWER(TRIM(c.email)) = LOWER(TRIM(app.guarantor_email)) AND app.guarantor_email IS NOT NULL AND TRIM(app.guarantor_email) <> '')
+      ) RETURNING id
+    )
+    INSERT INTO bi_activity (application_id, contact_id, actor_type, event_type, summary)
+    SELECT (SELECT id FROM app), COALESCE((SELECT id FROM contact_upsert),(SELECT id FROM bi_contacts WHERE (phone_e164 = (SELECT guarantor_phone FROM app) AND (SELECT guarantor_phone FROM app) IS NOT NULL) OR (LOWER(TRIM(email)) = LOWER(TRIM((SELECT guarantor_email FROM app))) AND (SELECT guarantor_email FROM app) IS NOT NULL) LIMIT 1)), 'system', 'application_created', 'Application created'
+    WHERE NOT EXISTS (SELECT 1 FROM bi_activity WHERE application_id = (SELECT id FROM app) AND event_type = 'application_created')
+  `,[appId]);
+}
+
+
 router.post("/applications/score", async (req, res) => {
   const b = req.body ?? {};
   const required = [
@@ -164,6 +197,9 @@ router.post("/applications/score", async (req, res) => {
       id,
     ],
   );
+
+  // BI_SERVER_BLOCK_v320_LAUNCH_RESCUE_v1
+  void ensureContactAndCompanyForApp(id).catch(() => {});
 
   return res.status(201).json({
     public_id: publicId,
@@ -343,6 +379,8 @@ router.post("/applications/:publicId/submit", async (req, res) => {
   // -> 'ready_for_submission' for lender) happens when docs are
   // uploaded via the /documents endpoint, not here.
   await pool.query(`UPDATE bi_applications SET status='in_progress', updated_at=NOW() WHERE id=$1`, [app.id]);
+  // BI_SERVER_BLOCK_v320_LAUNCH_RESCUE_v1
+  void ensureContactAndCompanyForApp(app.id).catch(() => {});
   return res.json({ ok: true, status: "in_progress" });
 });
 
