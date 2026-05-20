@@ -15,7 +15,16 @@ router.post("/applicants/otp/start", async (req, res) => {
   const phone = normalizeE164(req.body?.phone);
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
   const r = await sendOtpSafe(phone);
-  if (!r.ok) return res.status(502).json({ error: "otp_send_failed", detail: r.error });
+  // BI_SERVER_BLOCK_v321_OTP_ERROR_MAPPING_v1
+  if (!r.ok) {
+    const detail = String(r.error ?? "");
+    const isRateLimit = /max send attempts|too many|rate.?limit/i.test(detail);
+    if (isRateLimit) {
+      res.setHeader("Retry-After", "600");
+      return res.status(429).json({ error: "otp_rate_limited", detail: "Too many OTP requests for this phone. Please wait 10 minutes and try again." });
+    }
+    return res.status(502).json({ error: "otp_send_failed", detail });
+  }
   res.json({ ok: true });
 });
 
@@ -26,7 +35,16 @@ router.post("/applicants/otp/verify", async (req, res) => {
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
   if (!code) return res.status(400).json({ error: "missing_code" });
   const vr = await verifyOtpSafe(phone, code);
-  if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+  // BI_SERVER_BLOCK_v321_OTP_ERROR_MAPPING_v1
+  if (!vr.ok) {
+    const detail = String(vr.error ?? "");
+    const isRateLimit = /max check attempts|too many|rate.?limit/i.test(detail);
+    if (isRateLimit) {
+      res.setHeader("Retry-After", "600");
+      return res.status(429).json({ error: "otp_rate_limited", detail: "Too many code-check attempts. Please request a new code in 10 minutes." });
+    }
+    return res.status(502).json({ error: "otp_verify_failed", detail });
+  }
   if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
 
   let contactId: string | null = null;
