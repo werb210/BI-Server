@@ -8,5 +8,13 @@
     "esModuleInterop": true,
     "skipLibCheck": true
   },
-  "exclude": ["src/db/migrations"]
+  "exclude": [
+    "src/db/migrations",
+    "node_modules",
+    "dist",
+    "build",
+    "src/**/__tests__/**",
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts"
+  ]
 }
