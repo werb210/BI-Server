@@ -401,6 +401,7 @@ async function bootstrapInner() {
         user_id          UUID PRIMARY KEY,
         daily_limit      INTEGER NOT NULL DEFAULT 0,
         sent_today       INTEGER NOT NULL DEFAULT 0,
+        quota_date       DATE NOT NULL DEFAULT CURRENT_DATE,
         window_start_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
       );
@@ -408,6 +409,21 @@ async function bootstrapInner() {
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_bi_user_send_quotas_window
         ON bi_user_send_quotas (window_start_at);
+    `);
+
+    // BI_SERVER_BLOCK_v319_QUOTA_DATE_DEFENSIVE_BOOT_v1
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'bi_user_send_quotas'
+            AND column_name = 'quota_date'
+        ) THEN
+          ALTER TABLE bi_user_send_quotas
+            ADD COLUMN quota_date DATE NOT NULL DEFAULT CURRENT_DATE;
+        END IF;
+      END $$;
     `);
     logger.info("BI v301 defensive ensure ok");
   } catch (err) {

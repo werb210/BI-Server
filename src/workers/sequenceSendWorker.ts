@@ -1,15 +1,17 @@
 import { pool } from "../db";
 import { sendViaGraph } from "../integrations/microsoftGraph";
+import { logger } from "../platform/logger";
 
 function render(template: string, contact: Record<string, unknown>): string {
   return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key) => String(contact[key] ?? ""));
 }
 
 export async function runSequenceSendWorkerTick() {
-  await pool.query(`UPDATE bi_user_send_quotas SET sent_today = 0, quota_date = CURRENT_DATE, updated_at = NOW() WHERE quota_date < CURRENT_DATE`);
-  const due = await pool.query<any>(`SELECT * FROM bi_sequence_enrollments WHERE status='active' AND next_send_at <= NOW() ORDER BY next_send_at ASC LIMIT 100`);
+  try {
+    await pool.query(`UPDATE bi_user_send_quotas SET sent_today = 0, quota_date = CURRENT_DATE, updated_at = NOW() WHERE quota_date < CURRENT_DATE`);
+    const due = await pool.query<any>(`SELECT * FROM bi_sequence_enrollments WHERE status='active' AND next_send_at <= NOW() ORDER BY next_send_at ASC LIMIT 100`);
 
-  for (const enr of due.rows) {
+    for (const enr of due.rows) {
     const stepNum = enr.current_step + 1;
     const stepR = await pool.query<any>(`SELECT * FROM bi_sequence_steps WHERE sequence_id = $1 AND step_number = $2 LIMIT 1`, [enr.sequence_id, stepNum]);
     const step = stepR.rows[0];
@@ -43,6 +45,9 @@ export async function runSequenceSendWorkerTick() {
       await pool.query(`INSERT INTO bi_sequence_sends (enrollment_id, step_number, from_user_id, to_email, subject, status, error_message, attempts) VALUES ($1,$2,$3,$4,$5,'failed',$6,$7)`, [enr.id, stepNum, fromUserId, toEmail, step.subject, err?.message ?? 'send_failed', attempts]);
       if (attempts >= 3) await pool.query(`UPDATE bi_sequence_enrollments SET status='stopped' WHERE id=$1`, [enr.id]);
     }
+    }
+  } catch (err: any) {
+    logger.warn({ err }, "sequenceSendWorker tick failed; will retry next interval");
   }
 }
 
