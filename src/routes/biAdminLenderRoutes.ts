@@ -301,6 +301,9 @@ router.get("/admin/apollo/lists", async (_req, res) => {
 });
 
 router.post("/admin/apollo/lists/:id/import", async (req, res) => {
+  // v340: graceful 422 — surface Apollo's payload errors to the UI cleanly.
+  try {
+
   if (process.env.APOLLO_API_KEY == null || process.env.APOLLO_API_KEY === "") {
     return res.status(503).json({ error: "apollo_not_configured" });
   }
@@ -453,6 +456,17 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
       apollo_message: message,
     }, "apollo list import failed");
     return res.status(422).json({ error: "apollo_import_failed", source, upserted, created, errors, error_path: errorPath, message });
+  }
+
+  } catch (err) {
+    const isApollo = err && (err as any).name === "ApolloError";
+    const status = isApollo && (err as any).status === 422 ? 422 : 502;
+    logger.error({ err: err instanceof Error ? err.message : String(err) }, "apollo_list_import_failed");
+    return res.status(status).json({
+      error: isApollo ? "apollo_rejected_request" : "apollo_import_failed",
+      message: err instanceof Error ? err.message : String(err),
+      hint: status === 422 ? "Apollo rejected the list id or label format. Verify the label is People (not Companies) and that your Apollo plan includes /mixed_people/search." : undefined,
+    });
   }
 });
 
