@@ -28,16 +28,28 @@ const router = Router();
 
 const MAX_REMINDERS = 10;
 
-router.post("/jobs/docs-reminder", async (req, res) => {
-  const required = process.env.JOB_AUTH_TOKEN;
-  if (!required) {
-    return res.status(503).json({ error: "job_auth_not_configured", message: "Set JOB_AUTH_TOKEN env var to enable cron jobs." });
+// v332: extracted handler body into runDocsReminderCronTick so the
+// internal cron can call it directly (no HTTP, no auth round-trip).
+// The HTTP endpoint stays as a thin wrapper for manual testing.
+export async function runDocsReminderCronTick(): Promise<{ scanned: number; sent: number; escalated: number; failed: number; lockHeld: boolean }> {
+  // Advisory lock so we don't double-fire when multiple BI-Server
+  // instances are running. Same pattern v230 uses.
+  const ADVISORY_LOCK_KEY = 8273420242;
+  const lockResult = await pool.query<{ locked: boolean }>(
+    `SELECT pg_try_advisory_lock($1) AS locked`,
+    [ADVISORY_LOCK_KEY],
+  );
+  if (lockResult.rows[0]?.locked !== true) {
+    return { scanned: 0, sent: 0, escalated: 0, failed: 0, lockHeld: false };
   }
-  const auth = String(req.headers.authorization ?? "");
-  const presented = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (presented !== required) {
-    return res.status(401).json({ error: "invalid_job_auth" });
+  try {
+    return await runDocsReminderCronTickInner();
+  } finally {
+    await pool.query(`SELECT pg_advisory_unlock($1)`, [ADVISORY_LOCK_KEY]).catch(() => {});
   }
+}
+
+async function runDocsReminderCronTickInner(): Promise<{ scanned: number; sent: number; escalated: number; failed: number; lockHeld: boolean }> {
 
   // Find apps in the "submitted, no docs" window. Note: a created_at
   // grace period of 5 minutes prevents us from reminding someone in the
@@ -115,7 +127,28 @@ router.post("/jobs/docs-reminder", async (req, res) => {
     }
   }
 
-  res.json({ ok: true, scanned: candidates.rows.length, sent, escalated, failed });
+  return { scanned: candidates.rows.length, sent, escalated, failed, lockHeld: true };
+}
+
+// HTTP wrapper for manual testing. Internal cron in
+// src/jobs/docsReminderCronJob.ts calls runDocsReminderCronTick() directly.
+router.post("/jobs/docs-reminder", async (req, res) => {
+  const required = process.env.JOB_AUTH_TOKEN;
+  if (!required) {
+    return res.status(503).json({ error: "job_auth_not_configured", message: "Set JOB_AUTH_TOKEN env var to enable cron jobs." });
+  }
+  const auth = String(req.headers.authorization ?? "");
+  const presented = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  if (presented !== required) {
+    return res.status(401).json({ error: "invalid_job_auth" });
+  }
+  try {
+    const result = await runDocsReminderCronTick();
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error({ err }, "docs_reminder_cron_http_failed");
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
 });
 
 export default router;

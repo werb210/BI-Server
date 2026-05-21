@@ -14,6 +14,7 @@ import { startPremiumAccrualJob } from "./jobs/premiumAccrualJob";
 import { startPurgeJob } from "./jobs/purgeJob";
 // BI_APOLLO_SYNC_v54_PHASE2
 import { startApolloSyncJob } from "./jobs/apolloSyncJob";
+import { startDocsReminderCronJob } from "./jobs/docsReminderCronJob";
 import { biRateLimiter } from "./middleware/biRateLimit";
 import { enforceBIPrefix } from "./middleware/biIsolation";
 import biApplicationRoutes from "./routes/biApplicationRoutes";
@@ -492,6 +493,7 @@ async function bootstrapInner() {
     startPurgeJob();
     startApolloSyncJob();
     startDocReminderJob(); // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
+    startDocsReminderCronJob(); // BI_SERVER_BLOCK_v332_INTERNALIZE_DOCS_REMINDER_CRON_v1
     logger.info("BI bootstrap migrations + jobs started");
   } catch (error) {
     logger.error(
