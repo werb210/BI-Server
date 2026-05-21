@@ -489,11 +489,21 @@ async function bootstrapInner() {
 
     await pool.query("ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB");
 
-    startPremiumAccrualJob();
-    startPurgeJob();
-    startApolloSyncJob();
-    startDocReminderJob(); // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
-    startDocsReminderCronJob(); // BI_SERVER_BLOCK_v332_INTERNALIZE_DOCS_REMINDER_CRON_v1
+    // v340: isolate each job so one failure doesn't poison its siblings,
+    // and run schemaRescue once more so any column gap is patched before the
+    // request cycle begins.
+    try { await runSchemaRescue(); } catch (e) { logger.warn({ err: String(e) }, "post-init schemaRescue threw (non-blocking)"); }
+    for (const [name, fn] of [
+      ["premiumAccrual",   startPremiumAccrualJob],
+      ["purge",            startPurgeJob],
+      ["apolloSync",       startApolloSyncJob],
+      ["docReminder",      startDocReminderJob],
+      ["docsReminderCron", startDocsReminderCronJob],
+    ] as const) {
+      try { fn(); } catch (e) {
+        logger.error({ job: name, err: e instanceof Error ? e.message : String(e) }, "BI job start failed (non-blocking)");
+      }
+    }
     logger.info("BI bootstrap migrations + jobs started");
   } catch (error) {
     logger.error(
