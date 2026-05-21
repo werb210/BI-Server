@@ -324,9 +324,12 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
       let people: any[] = [];
       let pagination: { total_pages?: number; total_entries?: number } = { total_pages: 1, total_entries: 0 };
       try {
-        const peopleRes = await _apolloSearchContactsByLabel({ page, per_page: 100, label_ids: [labelId] });
+        // v329: /mixed_people/search returns Apollo's prospect universe filtered by label.
+        // The previous /contacts/search only returned enriched contacts, which is empty
+        // on Basic plans (Apollo gates contact enrichment behind credits).
+        const peopleRes = await _apolloSearchPeopleByLabel({ page, per_page: 100, label_ids: [labelId] });
         peopleHttpOk = true;
-        people = peopleRes.contacts ?? [];
+        people = peopleRes.people ?? [];
         pagination = peopleRes.pagination ?? pagination;
       } catch (err) {
         errorPath = "people_search";
