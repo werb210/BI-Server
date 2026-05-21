@@ -13,6 +13,8 @@ import {
   enrollContact,
   listMailboxes,
 } from "../services/apolloClient";
+import { listEmailerMessages } from "../integrations/apollo/apolloClient";
+import { enrichContact as enrichContactOnDemand } from "../integrations/apollo/apolloEnrichOnDemand";
 
 const router = express.Router();
 router.use(requireAuth);
@@ -35,15 +37,39 @@ function actorId(req: Request): string | null {
 // the Apollo backend integration ships.
 router.get("/apollo/replies", async (req: Request, res: Response) => {
   const page = Number(req.query.page ?? 1);
-  const per_page = Number(req.query.per_page ?? 50);
-  res.json({
-    replies: [],
-    pagination: { page, per_page, total_entries: 0, total_pages: 0 },
-  });
+  const per_page = Math.min(Number(req.query.per_page ?? 50), 100);
+  if (!apolloIsLive()) {
+    return res.json({ replies: [], pagination: { page, per_page, total_entries: 0, total_pages: 0 }, live: false });
+  }
+  try {
+    const { messages, pagination } = await listEmailerMessages({ page, per_page });
+    const replies = messages
+      .filter((m) => Boolean(m.replied_at))
+      .map((m) => ({
+        id: m.id,
+        contact_id: m.contact_id ?? null,
+        subject: m.subject ?? null,
+        body_text: m.body_text ?? null,
+        replied_at: m.replied_at ?? null,
+        emailer_campaign_id: m.emailer_campaign_id ?? null,
+        emailer_campaign_name: m.emailer_campaign?.name ?? null,
+      }));
+    return res.json({ replies, pagination, live: true });
+  } catch (e: any) {
+    logger.error({ err: e }, "apollo_replies_failed");
+    return res.status(502).json({ replies: [], pagination: { page, per_page, total_entries: 0, total_pages: 0 }, error: "apollo_unreachable" });
+  }
 });
 
 router.get("/apollo/email-accounts", async (_req: Request, res: Response) => {
-  res.json({ email_accounts: [] });
+  if (!apolloIsLive()) return res.json({ email_accounts: [], live: false });
+  try {
+    const mb = await listMailboxes();
+    return res.json({ email_accounts: mb.mailboxes, live: !mb.mock, mock: mb.mock });
+  } catch (e: any) {
+    logger.error({ err: e }, "apollo_email_accounts_failed");
+    return res.status(502).json({ email_accounts: [], error: "apollo_unreachable" });
+  }
 });
 
 // GET /apollo/health — quick is-it-live + mailbox snapshot.
@@ -70,17 +96,74 @@ router.get("/apollo/health", async (_req: Request, res: Response) => {
 // for ENRICHMENT, not for a known BI contact; absence is normal,
 // not an error. Surface empty data with 200 so the panel renders
 // "No marketing data yet" instead of an error.
-router.get("/contacts/:contact_id/marketing", async (_req: Request, res: Response) => {
-  res.json({
-    contact: null,
-    sequences: [],
-    last_synced_at: null,
-    replies: [],
-  });
+router.get("/contacts/:contact_id/marketing", async (req: Request, res: Response) => {
+  const contactId = s(req.params.contact_id);
+  if (!contactId) {
+    return res.json({ contact: null, sequences: [], last_synced_at: null, replies: [] });
+  }
+  try {
+    const c = await pool.query<{
+      id: string; full_name: string; email: string | null;
+      apollo_contact_id: string | null; apollo_data: unknown;
+      apollo_sequence_names: string[] | null; apollo_last_synced_at: Date | null;
+    }>(
+      `SELECT id, full_name, email, apollo_contact_id, apollo_data, apollo_sequence_names, apollo_last_synced_at
+         FROM bi_contacts WHERE id = $1 LIMIT 1`,
+      [contactId],
+    );
+    if (!c.rows[0]) {
+      return res.json({ contact: null, sequences: [], last_synced_at: null, replies: [] });
+    }
+    const row = c.rows[0];
+    const enrollments = await pool.query<{
+      id: string; sequence_id: string; sequence_name: string | null;
+      apollo_sequence_id: string | null; status: string;
+      enrolled_at: Date; last_event: string | null; last_event_at: Date | null;
+    }>(
+      `SELECT e.id, e.sequence_id, s.name AS sequence_name, s.apollo_sequence_id,
+              e.status, e.enrolled_at, e.last_event, e.last_event_at
+         FROM bi_apollo_enrollment e
+         LEFT JOIN bi_apollo_sequence s ON s.id = e.sequence_id
+        WHERE e.contact_id = $1
+        ORDER BY e.enrolled_at DESC`,
+      [contactId],
+    );
+    return res.json({
+      contact: {
+        id: row.id,
+        full_name: row.full_name,
+        email: row.email,
+        apollo_contact_id: row.apollo_contact_id,
+        apollo_data: row.apollo_data,
+        apollo_sequence_names: row.apollo_sequence_names ?? [],
+      },
+      sequences: enrollments.rows,
+      last_synced_at: row.apollo_last_synced_at,
+      replies: [],
+    });
+  } catch (e: any) {
+    logger.error({ err: e, contactId }, "apollo_contact_marketing_failed");
+    return res.status(500).json({ contact: null, sequences: [], last_synced_at: null, replies: [], error: "marketing_lookup_failed" });
+  }
 });
 
-router.post("/contacts/:contact_id/enrich", async (_req: Request, res: Response) => {
-  res.json({ enqueued: false, reason: "apollo_enrichment_not_configured" });
+router.post("/contacts/:contact_id/enrich", async (req: Request, res: Response) => {
+  const contactId = s(req.params.contact_id);
+  if (!contactId) return res.status(400).json({ enqueued: false, reason: "contact_id_required" });
+  if (!apolloIsLive()) return res.json({ enqueued: false, reason: "apollo_not_configured" });
+  try {
+    const force = Boolean((req.body as any)?.force);
+    const result = await enrichContactOnDemand(contactId, { force });
+    return res.json({
+      enqueued: true,
+      cached: result.cached,
+      apollo_contact_id: result.apollo_contact_id,
+      apollo_data: result.apollo_data,
+    });
+  } catch (e: any) {
+    logger.error({ err: e, contactId }, "apollo_contact_enrich_failed");
+    return res.status(502).json({ enqueued: false, reason: "enrich_failed", error: e?.message ?? "unknown" });
+  }
 });
 
 // POST /apollo/enrich/:contact_id
