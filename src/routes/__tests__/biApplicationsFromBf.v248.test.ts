@@ -4,12 +4,15 @@ import express from "express";
 import request from "supertest";
 import jwt from "jsonwebtoken";
 
-const queryMock = vi.fn();
+// v334: vi.mock factories are hoisted; bare `const` after them isn't.
+// Move shared values into vi.hoisted() so they exist at factory time.
+const { queryMock, SECRET } = vi.hoisted(() => ({
+  queryMock: vi.fn(),
+  SECRET: "test-shared-secret-min-10",
+}));
 vi.mock("../../db", () => ({
   pool: { query: (...args: unknown[]) => queryMock(...args) },
 }));
-
-const SECRET = "test-shared-secret-min-10";
 vi.mock("../../platform/env", () => ({
   env: { JWT_SECRET: SECRET },
 }));
