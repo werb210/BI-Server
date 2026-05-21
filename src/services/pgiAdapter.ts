@@ -88,17 +88,35 @@ export interface BIApplication {
 
 export function buildPGIPayload(app: BIApplication) {
   const sc = app.scoringAnswers || {};
+  // v331: scoringAnswers alone is missing the top-level economic fields
+  // the carrier needs. Merge loanAmount, loanType, coveragePercent, and
+  // a computed pgi_limit (= loan_amount * coveragePercent/100) into
+  // form_data. scoringAnswers wins on key conflicts so caller-supplied
+  // overrides still take precedence.
+  const loanAmount = app.loanAmount;
+  const coveragePct = app.coveragePercent;
+  const pgiLimit = Math.round(loanAmount * (coveragePct / 100));
   return {
     guarantor_name: app.guarantorName || `${app.firstName} ${app.lastName}`.trim(),
     guarantor_email: app.guarantorEmail || app.email,
     business_name: app.businessName,
     lender_name: app.lender,
-    form_data: sc,
+    form_data: {
+      loan_amount: loanAmount,
+      loan_type: app.loanType,
+      coverage_percent: coveragePct,
+      pgi_limit: pgiLimit,
+      ...sc,
+    },
   };
 }
 
-export async function submitToPGI(app: BIApplication, _client?: unknown) {
-  const payload = buildPGIPayload(app) as PgiApplicationSubmitRequest;
+export async function submitToPGI(app: BIApplication, client?: { post: (path: string, payload: PgiApplicationSubmitRequest) => Promise<{ data: { id: string; status: string } }> }) {
+  const payload = buildPGIPayload(app) as unknown as PgiApplicationSubmitRequest;
+  if (client) {
+    const res = await client.post("/applications/", payload);
+    return { externalId: res.data.id, status: res.data.status };
+  }
   const res = await pgiSubmit(payload);
   return { externalId: res.application_id, status: res.status };
 }
