@@ -197,12 +197,30 @@ export function startApolloSyncJob(): void {
     logger.info("apollo cron not started — APOLLO_SYNC_ENABLED=false");
     return;
   }
+  // v328: includeNotInSequence=true so we pull ALL recently-updated Apollo
+  // contacts, not just ones already enrolled in a sequence. Without this,
+  // a fresh Boreal deploy syncs zero contacts until someone manually
+  // enrolls them somewhere.
   cron.schedule("*/30 * * * *", async () => {
-    try { await runContactSyncOnce(); } catch (err) { logger.error({ err }, "contact sync cron tick failed"); }
+    try { await runContactSyncOnce({ includeNotInSequence: true }); } catch (err) { logger.error({ err }, "contact sync cron tick failed"); }
   });
   cron.schedule("*/15 * * * *", async () => {
     try { await runEngagementSyncOnce(); } catch (err) { logger.error({ err }, "engagement sync cron tick failed"); }
   });
+  // v328: initial sync ~10s after boot with a 1-year window so the
+  // first deploy doesn't make the operator wait 30 min for any data.
+  // Watermark takes over after this run; subsequent ticks are incremental.
+  setTimeout(async () => {
+    try {
+      logger.info("apollo initial sync starting (1-year window)");
+      const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
+      const contacts = await runContactSyncOnce({ includeNotInSequence: true, sinceOverride: oneYearAgo });
+      const engagement = await runEngagementSyncOnce();
+      logger.info({ contacts, engagement }, "apollo initial sync completed");
+    } catch (err) {
+      logger.error({ err }, "apollo initial sync failed");
+    }
+  }, 10_000);
   started = true;
-  logger.info("apollo cron jobs scheduled (contacts: */30, engagement: */15)");
+  logger.info("apollo cron jobs scheduled (contacts: */30, engagement: */15, initial: +10s)");
 }
