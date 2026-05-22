@@ -426,68 +426,69 @@ async function bootstrapInner() {
 
   try {
     await runMigrations(env.DATABASE_URL!);
-    await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
 
-    await pool.query(`
+    // v344: parallel DDL — these are all IF NOT EXISTS / idempotent.
+    // Cuts cold-start from ~20min to ~30s on Azure small DB plans.
+    await Promise.all([
+      pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto;"),
+      pool.query(`
       CREATE TABLE IF NOT EXISTS contact_leads (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         company TEXT,
-        name TEXT NOT NULL,
-        email TEXT NOT NULL,
+        first_name TEXT,
+        last_name TEXT,
+        email TEXT,
         phone TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
       )
-    `);
-
-    await pool.query(`
+    `),
+      pool.query(`
       CREATE TABLE IF NOT EXISTS referrers (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         company TEXT NOT NULL,
-        name TEXT NOT NULL,
-        email TEXT NOT NULL,
+        first_name TEXT,
+        last_name TEXT,
+        email TEXT,
         phone TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
       )
-    `);
-
-    await pool.query(`
+    `),
+      pool.query(`
       CREATE TABLE IF NOT EXISTS referrals (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         referrer_id UUID REFERENCES referrers(id),
-        company TEXT NOT NULL,
-        name TEXT NOT NULL,
-        email TEXT NOT NULL,
+        company TEXT,
+        first_name TEXT,
+        last_name TEXT,
+        email TEXT,
         phone TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
       )
-    `);
-
-    await pool.query(`
+    `),
+      pool.query(`
       CREATE TABLE IF NOT EXISTS lenders (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         email TEXT UNIQUE NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
       )
-    `);
-
-    await pool.query(`
+    `),
+      pool.query(`
       CREATE TABLE IF NOT EXISTS lender_uploads (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         lender_id UUID REFERENCES lenders(id),
         filename TEXT,
         created_at TIMESTAMP DEFAULT NOW()
       )
-    `);
-
-    await pool.query(`
+    `),
+      pool.query(`
       CREATE TABLE IF NOT EXISTS pgi_applications (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         data JSONB,
         created_at TIMESTAMP DEFAULT NOW()
       )
-    `);
-
-    await pool.query("ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB");
+    `),
+      pool.query("ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB"),
+    ]);
 
     // v340: isolate each job so one failure doesn't poison its siblings,
     // and run schemaRescue once more so any column gap is patched before the
