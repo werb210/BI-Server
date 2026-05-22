@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db";
-import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
+import { submitApplicationToPGI, assertDocsReadyForCarrier } from "../services/biPgiSubmissionService";
 import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
@@ -470,18 +470,22 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
     return res.status(409).json({ ok: false, error: "ALREADY_LOCKED" });
   }
 
-  // (5) all docs accepted
-  const docs = await pool.query<{ pending: string; accepted: string }>(
-    `SELECT
-        COUNT(*) FILTER (WHERE COALESCE(review_status, 'pending') NOT IN ('accepted', 'rejected'))::text AS pending,
-        COUNT(*) FILTER (WHERE review_status = 'accepted')::text AS accepted
-       FROM bi_documents
-      WHERE application_id = $1
-        AND purged_at IS NULL`,
+  // (5) all required docs accepted — v342: use spec-correct check that
+  // is per-slot and respects formation-date-variant requirements.
+  const formationRow = await pool.query<{ formation_date: string | null }>(
+    `SELECT (data->>'formation_date') AS formation_date FROM bi_applications WHERE id = $1 LIMIT 1`,
     [id]
   );
-  if (Number(docs.rows[0]?.accepted ?? 0) === 0 || Number(docs.rows[0]?.pending ?? 0) > 0) {
-    return res.status(400).json({ ok: false, error: "DOCS_NOT_ALL_ACCEPTED" });
+  const formationDate = formationRow.rows[0]?.formation_date ?? null;
+  const readiness = await assertDocsReadyForCarrier(id, formationDate);
+  if (!readiness.ready) {
+    return res.status(400).json({
+      ok: false,
+      error: "DOCS_NOT_READY",
+      missing: readiness.missing,
+      rejected: readiness.rejected,
+      pending: readiness.pending,
+    });
   }
 
   // (6) LOCK application
