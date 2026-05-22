@@ -1,6 +1,28 @@
-// BI_BLOCK_PGI_ALIGNMENT_v1 — typed PGI client with USE_PGI_STUB toggle.
 import { env } from "../platform/env";
 import { logger } from "../platform/logger";
+
+// BI_BLOCK_PGI_ALIGNMENT_v1 — typed PGI client with USE_PGI_STUB toggle.
+
+// v343: Retry-After aware fetch — single retry on 429/503 honoring the
+// header. Returns the second Response. Falls back to immediate throw
+// if header is absent or unparseable.
+async function fetchWithRetryAfter(url: string, init: RequestInit): Promise<Response> {
+  const first = await fetch(url, init);
+  if (first.status !== 429 && first.status !== 503) return first;
+  const ra = first.headers.get("Retry-After");
+  if (!ra) return first;
+  let waitMs = 0;
+  const asNum = Number(ra);
+  if (Number.isFinite(asNum) && asNum > 0) {
+    waitMs = Math.min(asNum * 1000, 60_000);
+  } else {
+    const t = Date.parse(ra);
+    if (Number.isFinite(t)) waitMs = Math.max(0, Math.min(t - Date.now(), 60_000));
+  }
+  if (waitMs <= 0) return first;
+  await new Promise((r) => setTimeout(r, waitMs));
+  return fetch(url, init);
+}
 
 const PGI_BASE = env.PGI_BASE_URL || "https://api.pgicover.com";
 const STUB = String(env.USE_PGI_STUB || "true").toLowerCase() === "true";
@@ -51,7 +73,7 @@ export async function pgiScore(body: PgiScoreRequest): Promise<PgiScoreResponse>
     }
     return { score_id: `STUB_APPROVE_${Date.now()}`, score: 78, decision: "approve", country: body.country, naics_code: body.naics_code, created_at: new Date().toISOString() };
   }
-  const r = await fetch(`${PGI_BASE}/api/v2/score/`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
+  const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/score/`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
   const data = await r.json();
   if (!r.ok) {
     logger.error({ status: r.status, body: data }, "pgi_score_failed");
@@ -62,7 +84,7 @@ export async function pgiScore(body: PgiScoreRequest): Promise<PgiScoreResponse>
 
 export async function pgiSubmit(body: PgiApplicationSubmitRequest): Promise<PgiApplicationSubmitResponse> {
   if (STUB) return { application_id: `STUB_APP_${Date.now()}`, status: "received", message: "stubbed: pending quote" };
-  const r = await fetch(`${PGI_BASE}/api/v2/applications/`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
+  const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/applications/`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
   const data = await r.json();
   if (!r.ok) {
     logger.error({ status: r.status, body: data }, "pgi_submit_failed");
@@ -73,7 +95,7 @@ export async function pgiSubmit(body: PgiApplicationSubmitRequest): Promise<PgiA
 
 export async function pgiQuote(quoteId: string): Promise<PgiQuote> {
   if (STUB) return { quote_id: quoteId, underwriter_ref: "STUB_LON_REF", annual_premium: "5000.00", rate: "2.000", coverage_amount: "250000.00", valid_until: new Date(Date.now() + 30 * 86_400_000).toISOString(), quote_status: "active" };
-  const r = await fetch(`${PGI_BASE}/api/v2/quotes/${quoteId}/`, { headers: authHeaders() });
+  const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/quotes/${quoteId}/`, { headers: authHeaders() });
   if (!r.ok) throw new Error(`PGI quote fetch failed: ${r.status}`);
   return (await r.json()) as PgiQuote;
 }
