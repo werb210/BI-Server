@@ -352,8 +352,20 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
         },
         error_path: errorPath,
       }, "apollo list import contacts response");
-      if (page === 1 && (people?.length ?? 0) === 0 && (pagination.total_entries ?? 0) === 0) {
-        // Empty people set on page 1 means this label points at Companies.
+      // BI_SERVER_BLOCK_v346_APOLLO_TOTAL_ENTRIES_GATE_v1 — when Apollo ignores
+      // label_ids on mixed_people/api_search (happens on Basic plans + when the
+      // saved-list ID isn\'t a real label), it returns a 100-row page of the
+      // prospect UNIVERSE but reports total_entries:0. Importing those would
+      // fill the CRM with random people who aren\'t on the list (Todd\'s
+      // 8-member list imported 100). Trust total_entries.
+      if (page === 1 && (pagination.total_entries ?? 0) === 0) {
+        logger.warn({
+          label_id: labelId,
+          page,
+          people_received: people?.length ?? 0,
+          total_entries: pagination.total_entries ?? null,
+          msg: "apollo people search returned rows but total_entries=0; filter likely ignored",
+        }, "apollo list import skipped people path");
         break;
       }
       source = "people";
