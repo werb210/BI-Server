@@ -478,4 +478,67 @@ router.post("/:id/documents/:docId/reject", requireStaffOrAdmin, async (req: Req
   }
 });
 
+// BI_SERVER_BLOCK_v347_STAFF_DECLINE_v1
+// POST /api/v1/bi/applications/:id/staff-decline
+// Staff can close out an application that fails review before carrier submission.
+// Requires { reason } in body. Sets stage='declined' and records staff
+// identity + timestamp + reason. Idempotent: re-declining is a no-op.
+router.post("/:id/staff-decline", requireStaffOrAdmin, async (req: Request, res: Response) => {
+  const appId = String(req.params.id);
+  const userId = (req as { user?: { staffUserId?: string } }).user?.staffUserId ?? null;
+  const reason = String((req.body as { reason?: string })?.reason || "").trim();
+
+  if (!reason) {
+    return res.status(400).json({ error: { code: "reason_required", message: "Decline reason required" } });
+  }
+  if (reason.length < 4) {
+    return res.status(400).json({ error: { code: "reason_too_short", message: "Reason must be at least 4 characters" } });
+  }
+
+  try {
+    const appR = await pool.query<{ id: string; stage: string; source_type: string; staff_declined_at: string | null }>(
+      `SELECT id, stage, source_type, staff_declined_at
+         FROM bi_applications
+        WHERE id = $1 LIMIT 1`,
+      [appId],
+    );
+    if (appR.rowCount === 0) {
+      return res.status(404).json({ error: { code: "not_found", message: "Application not found" } });
+    }
+    const app = appR.rows[0];
+
+    if (app.staff_declined_at) {
+      return res.json({ success: true, already_declined: true });
+    }
+
+    if (["policy_issued", "approved", "ready_for_submission", "submitted"].includes(app.stage)) {
+      return res.status(409).json({
+        error: { code: "stage_locked", message: `Cannot decline at stage '${app.stage}'` },
+      });
+    }
+
+    await pool.query(
+      `UPDATE bi_applications
+          SET stage = 'declined',
+              staff_declined_at = NOW(),
+              staff_declined_by = $2,
+              staff_decline_reason = $3,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [appId, userId, reason],
+    );
+
+    await pool.query(
+      `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
+            VALUES($1, 'staff', $2, 'application_staff_declined', $3, $4::jsonb)`,
+      [appId, userId, `Application declined by staff`, JSON.stringify({ reason, prior_stage: app.stage })],
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    logger.error({ err, appId }, "bi.applications.staff_decline.failed");
+    return res.status(500).json({ error: { code: "internal", message: "Decline failed" } });
+  }
+});
+
 export default router;
