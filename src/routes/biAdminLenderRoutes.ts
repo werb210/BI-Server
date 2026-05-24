@@ -393,9 +393,22 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
           companiesHttpOk = true;
           organizations = companyRes.organizations ?? [];
           pagination = companyRes.pagination ?? pagination;
-        } catch (err) {
+        } catch (err: any) {
+          // BI_SERVER_BLOCK_v348_APOLLO_404_GRACEFUL_v1 — Apollo returns 404
+          // for some accounts on /mixed_companies/api_search (endpoint may
+          // be plan-gated or label_id-specific). Treat as empty rather than
+          // crashing so partial people-side results commit and the portal
+          // sees a clean response instead of 422.
           errorPath = "companies_search";
-          throw err;
+          const status = err?.status ?? err?.response?.status;
+          if (status === 404) {
+            logger.warn({ label_id: labelId, err: err?.message }, "apollo companies search 404 — treating as empty");
+            organizations = [];
+            pagination = { total_pages: 0, total_entries: 0 };
+            companiesHttpOk = false;
+          } else {
+            throw err;
+          }
         }
         totalPages = pagination.total_pages || 1;
         logger.info({
