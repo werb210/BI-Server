@@ -74,6 +74,39 @@ router.post("/applications/:id/submit-to-pgi", requireAuth, async (req, res) => 
     });
   }
 
+  // BI_SERVER_BLOCK_v351_CARRIER_CORRECTIONS_v1 — startup doc gate.
+  // If business is under 3 years old (per q26_formation_date), Purbeck requires
+  // founder_cv + financial_forecast in addition to loan_agreement.
+  const formationRaw = (app as any).formation_date || (app as any).q26_formation_date;
+  if (formationRaw) {
+    const formationDate = new Date(formationRaw);
+    if (!isNaN(formationDate.getTime())) {
+      const ageMs = Date.now() - formationDate.getTime();
+      const ageYears = ageMs / (365.25 * 24 * 60 * 60 * 1000);
+      const isStartup = ageYears < 3;
+      if (isStartup) {
+        const startupDocs = await pool.query(
+          `SELECT DISTINCT doc_type FROM bi_documents
+             WHERE application_id = $1
+               AND doc_type IN ('founder_cv', 'financial_forecast')`,
+          [id],
+        );
+        const present = new Set(startupDocs.rows.map((r: { doc_type: string }) => r.doc_type));
+        const missing: string[] = [];
+        if (!present.has("founder_cv"))         missing.push("founder_cv");
+        if (!present.has("financial_forecast")) missing.push("financial_forecast");
+        if (missing.length > 0) {
+          return res.status(412).json({
+            error: "startup_docs_required",
+            message: `Business is under 3 years old (formed ${formationDate.toISOString().slice(0, 10)}). Purbeck requires additional documents: ${missing.join(", ")}.`,
+            missing_documents: missing,
+            business_age_years: Number(ageYears.toFixed(2)),
+          });
+        }
+      }
+    }
+  }
+
   // BI_SERVER_BLOCK_v349_V2_PAYLOAD_v1
   const { buildCarrierPayloadV2 } = await import("../services/pgiCarrierMapper");
   const { validatePgiSubmissionV2 } = await import("../lib/validation/pgiFields");
