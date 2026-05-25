@@ -59,32 +59,70 @@ router.post("/applications/:id/submit-to-pgi", requireAuth, async (req, res) => 
   if (!app) return res.status(404).json({ error: "not_found" });
   if (app.pgi_application_id) return res.status(409).json({ error: "already_submitted", pgi_application_id: app.pgi_application_id });
 
-  // BI_SERVER_BLOCK_v274_SCORE_ROUTES_NULL_GUARDS_v1
-  let formationDateIso: string;
-  try {
-    formationDateIso = formationDateIsoOrThrow(app.formation_date);
-  } catch {
-    return res.status(400).json({ error: "formation_date_missing" });
+  // BI_SERVER_BLOCK_v349_PURBECK_SUBMIT_GATE_v1
+  const docCheck = await pool.query(
+    `SELECT 1 FROM bi_documents
+       WHERE application_id = $1
+         AND doc_type IN ('loan_agreement', 'loan_agreement_signed')
+       LIMIT 1`,
+    [id],
+  );
+  if (!docCheck.rows.length) {
+    return res.status(412).json({
+      error: "loan_agreement_required",
+      message: "Cannot submit to Purbeck without a loan_agreement document on file.",
+    });
   }
 
-  const submit = await pgiSubmit({
-    guarantor_name: app.guarantor_name,
-    guarantor_email: app.guarantor_email,
-    business_name: app.business_name,
-    lender_name: app.lender_name ?? undefined,
-    form_data: {
-      country: app.country, naics_code: app.naics_code,
-      formation_date: formationDateIso,
-      loan_amount: Number(app.loan_amount), pgi_limit: Number(app.pgi_limit),
-      annual_revenue: Number(app.annual_revenue), ebitda: Number(app.ebitda),
-      total_debt: Number(app.total_debt), monthly_debt_service: Number(app.monthly_debt_service),
-      collateral_value: Number(app.collateral_value), enterprise_value: Number(app.enterprise_value),
-      bankruptcy_history: app.bankruptcy_history, insolvency_history: app.insolvency_history, judgment_history: app.judgment_history,
-    },
-  });
+  // BI_SERVER_BLOCK_v349_V2_PAYLOAD_v1
+  const { buildCarrierPayloadV2 } = await import("../services/pgiCarrierMapper");
+  const { validatePgiSubmissionV2 } = await import("../lib/validation/pgiFields");
+  const { pgiSubmitV2, PgiCarrierValidationError } = await import("../services/pgiAdapter");
 
-  await pool.query(`UPDATE bi_applications SET pgi_application_id=$1, status='submitted', updated_at=NOW() WHERE id=$2`, [submit.application_id, id]);
-  return res.json({ ok: true, pgi_application_id: submit.application_id, status: "submitted" });
+  const payload = buildCarrierPayloadV2(
+    app as Record<string, unknown>,
+    (app.data ?? {}) as Record<string, unknown>,
+    (app.declarations ?? {}) as Record<string, unknown>,
+  );
+
+  const valid = validatePgiSubmissionV2(payload);
+  if (!valid.ok) {
+    const errors: Record<string, string> = {};
+    for (const i of valid.issues) errors[i.field] = i.message;
+    return res.status(400).json({ error: "validation_failed", errors });
+  }
+
+  try {
+    const submit = await pgiSubmitV2(valid.value);
+    await pool.query(
+      `UPDATE bi_applications SET pgi_application_id=$1, status='submitted', updated_at=NOW() WHERE id=$2`,
+      [submit.application_id, id],
+    );
+
+    if (app.has_co_guarantors === true) {
+      const numbers = (process.env.MAYA_FALLBACK_SMS_NUMBERS || "")
+        .split(",").map((n: string) => n.trim()).filter(Boolean);
+      for (const to of numbers) {
+        try {
+          const { sendOutreachSms } = await import("../services/smsService");
+          await sendOutreachSms(to, `BI app ${app.public_id || id} submitted to PGI WITH CO-GUARANTORS. Contact applicant to handle co-guarantor intake (not in partner API).`);
+        } catch (e) {
+          console.warn("[purbeck_submit] co-guarantor SMS failed (non-blocking):", (e as Error).message);
+        }
+      }
+    }
+
+    return res.json({ ok: true, pgi_application_id: submit.application_id, status: "submitted" });
+  } catch (err: unknown) {
+    if (err instanceof PgiCarrierValidationError) {
+      return res.status(400).json({ error: "carrier_validation_failed", errors: err.errors });
+    }
+    await pool.query(
+      `UPDATE bi_applications SET score_decision='error', score_reason=$1, score_at=NOW() WHERE id=$2`,
+      [String((err as Error)?.message ?? "unknown"), id],
+    );
+    return res.status(502).json({ error: "pgi_submit_failed", detail: String((err as Error)?.message) });
+  }
 });
 
 export default router;

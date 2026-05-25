@@ -146,21 +146,36 @@ const DEV_FALLBACK_ORIGINS = [
   "http://localhost:3000",
 ];
 
+// BI_SERVER_BLOCK_v349_CORS_UNION_v1
+// Previously env var REPLACED the hardcoded fallback. That regression broke
+// OTP from www.boreal.insure on 2026-05-25: PRODUCTION_FALLBACK_ORIGINS
+// included it (added by v239), but the env var on Azure App Service didn't,
+// and the env var was winning. Switch to UNION: env var can ADD origins
+// (e.g. SWA preview slots) but can never silently delete canonical ones.
 const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || env.CORS_ALLOWED_ORIGINS || "")
   .split(",")
   .map((v) => v.trim())
   .filter(Boolean);
 
-const corsOrigins = configuredOrigins.length
-  ? configuredOrigins
-  : env.NODE_ENV === "production"
-    ? PRODUCTION_FALLBACK_ORIGINS
-    : DEV_FALLBACK_ORIGINS;
+const baseFallback = env.NODE_ENV === "production"
+  ? PRODUCTION_FALLBACK_ORIGINS
+  : DEV_FALLBACK_ORIGINS;
+
+const corsOrigins = Array.from(new Set([...baseFallback, ...configuredOrigins]));
 
 if (configuredOrigins.length === 0) {
   logger.warn(
     { fallback_count: corsOrigins.length, env: env.NODE_ENV },
-    "CORS_ALLOWED_ORIGINS not set; using hardcoded fallback. Set the env var to override."
+    "CORS_ALLOWED_ORIGINS not set; using hardcoded fallback only."
+  );
+} else {
+  logger.info(
+    {
+      hardcoded: baseFallback.length,
+      env_added: configuredOrigins.length,
+      total: corsOrigins.length,
+    },
+    "CORS origins unioned (hardcoded ∪ env)"
   );
 }
 
