@@ -1,94 +1,191 @@
-// PGI_API_ALIGN_v57 — single source of truth for the PGI carrier contract.
-// Documented at https://docs.pgicover.com/api/applications.html
+// BI_SERVER_BLOCK_v349_PGI_FIELDS_V2_v1
+// Aligned with PGI Partner API Schema Hardening changelog 2026-05-25.
+// Documented at https://docs.pgicover.com/api/
 //
-// 17 required fields + 1 optional (lender_name). Nothing else.
+// New schema (Canadian submissions only — US flow unchanged):
+//   - ALL data under form_data; NO top-level fields.
+//   - q-prefixed required field names.
+//   - 11 declaration sections; adverse answers require matching _reason.
+//   - 1M cap on q41_loan_amount AND q42_pgi_limit.
+//   - q_ca_loan_type restricted to 2 values.
+//   - Quebec hard-blocked (q_business_province !== 'QC').
+//
+// q_ca_id_type / q_ca_id_number are required by carrier but DEFERRED.
+// First submit attempt will return PGI's 400 errors dict naming these fields.
+// Acceptable per Todd 2026-05-25 launch-window decision.
 
-export const ALLOWED_COUNTRIES = ["CA", "US"] as const;
+export const ALLOWED_COUNTRIES = ["CA", "Canada", "US", "USA"] as const;
 export type AllowedCountry = typeof ALLOWED_COUNTRIES[number];
 
-export type PgiFormData = {
-  country: AllowedCountry;
-  naics_code: string;          // 6 digits
-  formation_date: string;      // YYYY-MM-DD
-  loan_amount: number;         // > 0
-  pgi_limit: number;           // > 0 and <= loan_amount
-  annual_revenue: number;      // > 0
-  ebitda: number;              // can be negative
-  total_debt: number;          // >= 0
-  monthly_debt_service: number;// >= 0
-  collateral_value: number;    // >= 0
-  enterprise_value: number;    // >= 0
-  bankruptcy_history: boolean;
-  insolvency_history: boolean;
-  judgment_history: boolean;
+export const ELIGIBLE_LOAN_TYPES = ["Commercial Mortgage", "Other Secured Loan"] as const;
+export type EligibleLoanType = typeof ELIGIBLE_LOAN_TYPES[number];
+
+export const CA_PROVINCES_ALLOWED = [
+  "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "SK", "YT",
+] as const;
+export type CaProvinceAllowed = typeof CA_PROVINCES_ALLOWED[number];
+
+export const LOAN_AMOUNT_MAX = 1_000_000;
+export const PGI_LIMIT_MAX = 1_000_000;
+
+export const PARTNER_MAX_FILE_BYTES = 5 * 1024 * 1024;
+export const PARTNER_ALLOWED_MIME = new Set([
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/msword",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+  "text/markdown",
+]);
+
+export const ADVERSE_YES_SECTIONS = [
+  "section_1_2",
+  "section_2_a",
+  "section_2_b",
+  "section_2_c",
+  "section_2_d",
+  "section_3_a",
+  "section_4_a",
+  "section_5_a",
+] as const;
+export type AdverseYesSection = typeof ADVERSE_YES_SECTIONS[number];
+
+export const ALL_DECLARATION_KEYS = [
+  "section_1_a",
+  "section_1_2",
+  "section_2_a",
+  "section_2_b",
+  "section_2_c",
+  "section_2_d",
+  "section_3_a",
+  "section_3_c",
+  "section_4_a",
+  "section_5_a",
+  "section_6_a",
+] as const;
+export type DeclarationKey = typeof ALL_DECLARATION_KEYS[number];
+
+export type PgiFormDataV2 = {
+  q0_country: AllowedCountry;
+  q2_full_name: string;
+  q4_date_of_birth: string;
+  q5_residential_address: string | Record<string, string>;
+  q15_business_legal_name: string;
+  q17_business_operating_address: string | Record<string, string>;
+  q_business_province?: CaProvinceAllowed;
+  q25_naics_code: string;
+  q26_formation_date: string;
+  q_ca_loan_type: EligibleLoanType;
+  q41_loan_amount: number;
+  q42_pgi_limit: number;
+  q_ca_id_type?: string;
+  q_ca_id_number?: string;
+  section_1_a: "yes" | "no";
+  section_1_2: "yes" | "no";
+  section_2_a: "yes" | "no";
+  section_2_b: "yes" | "no";
+  section_2_c: "yes" | "no";
+  section_2_d: "yes" | "no";
+  section_3_a: "yes" | "no";
+  section_3_c: "Agree" | "Disagree";
+  section_4_a: "yes" | "no";
+  section_5_a: "yes" | "no";
+  section_6_a: "yes" | "no";
+  section_1_2_reason?: string;
+  section_2_a_reason?: string;
+  section_2_b_reason?: string;
+  section_2_c_reason?: string;
+  section_2_d_reason?: string;
+  section_3_a_reason?: string;
+  section_3_c_reason?: string;
+  section_4_a_reason?: string;
+  section_5_a_reason?: string;
 };
 
-export type PgiSubmission = {
-  guarantor_name: string;
-  guarantor_email: string;
-  business_name: string;
-  lender_name?: string;        // optional per docs
-  form_data: PgiFormData;
-};
+export type PgiSubmissionV2 = { form_data: PgiFormDataV2 };
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const NAICS_RE = /^\d{6}$/;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 export type ValidationIssue = { field: string; message: string };
 
-function num(out: ValidationIssue[], field: string, v: unknown, opts: { positive?: boolean; nonNegative?: boolean }): number | null {
-  if (typeof v !== "number" || !Number.isFinite(v)) {
-    out.push({ field, message: `${field} must be a number` });
-    return null;
+function isNonEmptyString(v: unknown): v is string { return typeof v === "string" && v.trim().length > 0; }
+function isAddress(v: unknown): boolean {
+  if (isNonEmptyString(v)) return true;
+  if (v && typeof v === "object") {
+    const r = v as Record<string, unknown>;
+    return isNonEmptyString(r.line1) || isNonEmptyString(r.city);
   }
-  if (opts.positive && v <= 0) { out.push({ field, message: `${field} must be > 0` }); return null; }
-  if (opts.nonNegative && v < 0) { out.push({ field, message: `${field} must be >= 0` }); return null; }
-  return v;
+  return false;
+}
+function detectQuebecFromAddress(v: unknown): boolean {
+  if (isNonEmptyString(v)) return /\b(QC|Quebec|Qu[eé]bec)\b/i.test(v);
+  if (v && typeof v === "object") {
+    const r = v as Record<string, unknown>;
+    return ((isNonEmptyString(r.state) && /^QC$/i.test(r.state)) || (isNonEmptyString(r.province) && /^QC$/i.test(r.province)));
+  }
+  return false;
 }
 
-export function validatePgiSubmission(input: unknown): { ok: true; value: PgiSubmission } | { ok: false; issues: ValidationIssue[] } {
+export function validatePgiSubmissionV2(input: unknown): { ok: true; value: PgiSubmissionV2 } | { ok: false; issues: ValidationIssue[] } {
   const issues: ValidationIssue[] = [];
   const s = (input ?? {}) as Record<string, unknown>;
-
-  if (typeof s.guarantor_name !== "string" || !s.guarantor_name.trim()) issues.push({ field: "guarantor_name", message: "required" });
-  if (typeof s.guarantor_email !== "string" || !EMAIL_RE.test(s.guarantor_email)) issues.push({ field: "guarantor_email", message: "must be a valid email" });
-  if (typeof s.business_name !== "string" || !s.business_name.trim()) issues.push({ field: "business_name", message: "required" });
-  if (s.lender_name !== undefined && s.lender_name !== null && typeof s.lender_name !== "string") {
-    issues.push({ field: "lender_name", message: "must be a string when present" });
-  }
-
   const fd = (s.form_data ?? {}) as Record<string, unknown>;
 
-  if (typeof fd.country !== "string" || !(ALLOWED_COUNTRIES as readonly string[]).includes(fd.country)) {
-    issues.push({ field: "form_data.country", message: `must be one of ${ALLOWED_COUNTRIES.join(", ")}` });
-  }
-  if (typeof fd.naics_code !== "string" || !NAICS_RE.test(fd.naics_code)) {
-    issues.push({ field: "form_data.naics_code", message: "must be a 6-digit NAICS code" });
-  }
-  if (typeof fd.formation_date !== "string" || !ISO_DATE_RE.test(fd.formation_date)) {
-    issues.push({ field: "form_data.formation_date", message: "must be YYYY-MM-DD" });
-  }
+  if (typeof fd.q0_country !== "string" || !(ALLOWED_COUNTRIES as readonly string[]).includes(fd.q0_country)) issues.push({ field: "form_data.q0_country", message: `must be one of ${ALLOWED_COUNTRIES.join(", ")}` });
+  if (!isNonEmptyString(fd.q2_full_name)) issues.push({ field: "form_data.q2_full_name", message: "required" });
+  if (!isNonEmptyString(fd.q4_date_of_birth) || !ISO_DATE_RE.test(fd.q4_date_of_birth as string)) issues.push({ field: "form_data.q4_date_of_birth", message: "must be YYYY-MM-DD" });
+  if (!isAddress(fd.q5_residential_address)) issues.push({ field: "form_data.q5_residential_address", message: "required" });
+  if (!isNonEmptyString(fd.q15_business_legal_name)) issues.push({ field: "form_data.q15_business_legal_name", message: "required" });
+  if (!isAddress(fd.q17_business_operating_address)) issues.push({ field: "form_data.q17_business_operating_address", message: "required" });
+  if (typeof fd.q25_naics_code !== "string" || !NAICS_RE.test(fd.q25_naics_code)) issues.push({ field: "form_data.q25_naics_code", message: "must be a 6-digit NAICS code" });
+  if (!isNonEmptyString(fd.q26_formation_date) || !ISO_DATE_RE.test(fd.q26_formation_date as string)) issues.push({ field: "form_data.q26_formation_date", message: "must be YYYY-MM-DD" });
 
-  const loan = num(issues, "form_data.loan_amount", fd.loan_amount, { positive: true });
-  const limit = num(issues, "form_data.pgi_limit", fd.pgi_limit, { positive: true });
-  if (loan !== null && limit !== null && limit > loan) {
-    issues.push({ field: "form_data.pgi_limit", message: "pgi_limit cannot exceed loan_amount" });
-  }
-  num(issues, "form_data.annual_revenue", fd.annual_revenue, { positive: true });
-  // ebitda: any finite number; explicitly allow negative
-  if (typeof fd.ebitda !== "number" || !Number.isFinite(fd.ebitda)) {
-    issues.push({ field: "form_data.ebitda", message: "form_data.ebitda must be a number" });
-  }
-  num(issues, "form_data.total_debt", fd.total_debt, { nonNegative: true });
-  num(issues, "form_data.monthly_debt_service", fd.monthly_debt_service, { nonNegative: true });
-  num(issues, "form_data.collateral_value", fd.collateral_value, { nonNegative: true });
-  num(issues, "form_data.enterprise_value", fd.enterprise_value, { nonNegative: true });
+  if (typeof fd.q_business_province === "string" && /^QC$/i.test(fd.q_business_province)) issues.push({ field: "form_data.q_business_province", message: "PGI does not currently write business in Quebec." });
+  if (detectQuebecFromAddress(fd.q17_business_operating_address)) issues.push({ field: "form_data.q17_business_operating_address", message: "PGI does not currently write business in Quebec." });
+  if (detectQuebecFromAddress(fd.q5_residential_address)) issues.push({ field: "form_data.q5_residential_address", message: "PGI does not currently write business in Quebec." });
 
-  for (const k of ["bankruptcy_history", "insolvency_history", "judgment_history"] as const) {
-    if (typeof fd[k] !== "boolean") issues.push({ field: `form_data.${k}`, message: "must be boolean" });
+  if (typeof fd.q_ca_loan_type !== "string" || !(ELIGIBLE_LOAN_TYPES as readonly string[]).includes(fd.q_ca_loan_type)) issues.push({ field: "form_data.q_ca_loan_type", message: `must be one of ${ELIGIBLE_LOAN_TYPES.join(", ")}` });
+
+  const loan = Number(fd.q41_loan_amount);
+  if (!Number.isFinite(loan) || loan <= 0) issues.push({ field: "form_data.q41_loan_amount", message: "must be > 0" });
+  else if (loan > LOAN_AMOUNT_MAX) issues.push({ field: "form_data.q41_loan_amount", message: `Loan amount ${loan} exceeds the 1,000,000 maximum.` });
+
+  const limit = Number(fd.q42_pgi_limit);
+  if (!Number.isFinite(limit) || limit <= 0) issues.push({ field: "form_data.q42_pgi_limit", message: "must be > 0" });
+  else if (limit > PGI_LIMIT_MAX) issues.push({ field: "form_data.q42_pgi_limit", message: `PGI limit ${limit} exceeds the 1,000,000 maximum.` });
+  else if (Number.isFinite(loan) && limit > loan) issues.push({ field: "form_data.q42_pgi_limit", message: "pgi_limit cannot exceed loan_amount" });
+
+  for (const key of ALL_DECLARATION_KEYS) {
+    const v = fd[key];
+    if (key === "section_3_c") {
+      if (v !== "Agree" && v !== "Disagree") issues.push({ field: `form_data.${key}`, message: "must be 'Agree' or 'Disagree'" });
+      if (v === "Disagree" && !isNonEmptyString(fd.section_3_c_reason)) issues.push({ field: "form_data.section_3_c_reason", message: "A reason is required when 'section_3_c' is answered adversely." });
+    } else {
+      if (v !== "yes" && v !== "no") issues.push({ field: `form_data.${key}`, message: "must be 'yes' or 'no'" });
+      if ((ADVERSE_YES_SECTIONS as readonly string[]).includes(key) && v === "yes") {
+        const reasonKey = `${key}_reason`;
+        if (!isNonEmptyString(fd[reasonKey])) issues.push({ field: `form_data.${reasonKey}`, message: `A reason is required when '${key}' is answered adversely.` });
+      }
+    }
   }
 
   if (issues.length) return { ok: false, issues };
-  return { ok: true, value: s as unknown as PgiSubmission };
+  return { ok: true, value: { form_data: fd as unknown as PgiFormDataV2 } };
+}
+
+export function isPartnerAllowedMime(mime: string): boolean { return PARTNER_ALLOWED_MIME.has(mime); }
+export function isPartnerWithinSize(bytes: number): boolean { return bytes > 0 && bytes <= PARTNER_MAX_FILE_BYTES; }
+
+// Legacy export kept for existing routes/tests compatibility.
+export function validatePgiSubmission(input: unknown): { ok: true; value: any } | { ok: false; issues: ValidationIssue[] } {
+  const x = (input ?? {}) as Record<string, unknown>;
+  const fd = (x.form_data ?? {}) as Record<string, unknown>;
+  const issues: ValidationIssue[] = [];
+  if (!isNonEmptyString(x.guarantor_name)) issues.push({ field: "guarantor_name", message: "required" });
+  if (!isNonEmptyString(x.guarantor_email)) issues.push({ field: "guarantor_email", message: "required" });
+  if (!isNonEmptyString(x.business_name)) issues.push({ field: "business_name", message: "required" });
+  if (typeof fd.country !== "string") issues.push({ field: "form_data.country", message: "required" });
+  if (issues.length) return { ok: false, issues };
+  return { ok: true, value: x };
 }

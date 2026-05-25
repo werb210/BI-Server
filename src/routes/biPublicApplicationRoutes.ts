@@ -7,6 +7,7 @@ import { pgiScore } from "../services/pgiAdapter";
 import { generatePublicId } from "../util/publicId";
 // BI_SERVER_BLOCK_v66_PUBLIC_DOCS_AND_MIGRATION_SAFE_v1
 import multer from "multer";
+import { PARTNER_ALLOWED_MIME } from "../lib/validation/pgiFields";
 import { getStorage } from "../lib/storage";
 // BI_SERVER_BLOCK_v273_PUBLIC_UPLOAD_OCR_v1
 import { runOcrForDocument } from "../services/ocrRunner";
@@ -354,17 +355,17 @@ router.post("/applications/:publicId/submit", async (req, res) => {
   // missing; if PGI starts flagging missing-BN apps in volume we
   // revisit (plan §4 decision). Lender flow is unchanged because
   // it does not enforce BN server-side today.
+  // BI_SERVER_BLOCK_v349_PURBECK_PUBLIC_REQS_v1
   const required = [
     "guarantor_name", "guarantor_email", "guarantor_dob", "guarantor_address",
-    "guarantor_phone", "business_name", "business_address", "entity_type",
-    "lender_name", "loan_purpose", "loan_funding_date",
-    "policy_start_date", "bankruptcy_history", "insolvency_history",
-    "judgment_history", "personal_judgments", "business_judgments",
+    "guarantor_phone", "business_name", "business_address",
+    "lender_name", "loan_funding_date", "policy_start_date",
     "personally_guaranteeing", "consents",
   ];
   const missing = required.filter((k) => app[k] === null || app[k] === undefined || app[k] === "");
   if (missing.length) return res.status(400).json({ error: "missing_fields", fields: missing });
 
+  // BI_SERVER_BLOCK_v349_PURBECK_CONSENTS_v1
   const c = app.consents ?? {};
   const consentKeys = [
     "electronic_signature", "info_accurate", "business_solvent",
@@ -372,6 +373,24 @@ router.post("/applications/:publicId/submit", async (req, res) => {
   ];
   const unconsented = consentKeys.filter((k) => !c[k]);
   if (unconsented.length) return res.status(400).json({ error: "missing_consents", fields: unconsented });
+
+  // BI_SERVER_BLOCK_v349_PURBECK_GUARDS_v1
+  if (typeof app.q_business_province === "string" && app.q_business_province.toUpperCase() === "QC") {
+    return res.status(400).json({ error: "quebec_blocked", message: "PGI does not currently write business in Quebec." });
+  }
+  if (Number(app.loan_amount) > 1_000_000) {
+    return res.status(400).json({ error: "loan_amount_over_cap", message: "Loan amount exceeds the 1,000,000 maximum." });
+  }
+  if (Number(app.pgi_limit) > 1_000_000) {
+    return res.status(400).json({ error: "pgi_limit_over_cap", message: "PGI limit exceeds the 1,000,000 maximum." });
+  }
+  const allowedLoanTypes = ["Commercial Mortgage", "Other Secured Loan"];
+  if (app.q_ca_loan_type && !allowedLoanTypes.includes(app.q_ca_loan_type)) {
+    return res.status(400).json({
+      error: "loan_type_ineligible",
+      message: `Loan type '${app.q_ca_loan_type}' is not eligible for Canadian PGI coverage. Eligible types are: ${allowedLoanTypes.join(", ")}.`,
+    });
+  }
 
   // BI_SERVER_BLOCK_v168_STAGE_TRANSITION_FIX_v1
   // V1 spec §3: full app submitted advances 'created' -> 'in_progress'.
@@ -389,9 +408,17 @@ router.post("/applications/:publicId/submit", async (req, res) => {
 // Authenticates by public_id only (no JWT). Used by the BI-Website applicant
 // flow after submit. Stores files to Azure Blob via the same storage abstraction
 // as the staff-side upload route. 5MB per file per PGI carrier policy.
+// BI_SERVER_BLOCK_v349_DOC_CONSTRAINTS_v1
 const publicDocUpload_v66 = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (PARTNER_ALLOWED_MIME.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`mime_not_allowed:${file.mimetype}`));
+    }
+  },
 });
 
 router.post("/applications/:publicId/documents", publicDocUpload_v66.array("files"), async (req, res) => {

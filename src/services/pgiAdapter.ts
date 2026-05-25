@@ -144,3 +144,27 @@ export async function submitToPGI(app: BIApplication, client?: { post: (path: st
 }
 
 export async function getPGIQuote(quoteId: string) { return pgiQuote(quoteId); }
+
+
+// BI_SERVER_BLOCK_v349_PGI_ADAPTER_V2_v1
+import type { CarrierPayloadV2 } from "./pgiCarrierMapper";
+
+export class PgiCarrierValidationError extends Error {
+  readonly errors: Record<string, string>;
+  constructor(errors: Record<string, string>) {
+    super(`PGI 400: ${JSON.stringify(errors)}`);
+    this.name = "PgiCarrierValidationError";
+    this.errors = errors;
+  }
+}
+
+export async function pgiSubmitV2(payload: CarrierPayloadV2): Promise<{ application_id: string; status: string; message?: string }> {
+  const base = process.env.PGI_API_BASE || "https://api.pgicover.com";
+  const key = process.env.PGI_API_KEY || "";
+  const url = `${base.replace(/\/$/, "")}/api/v2/applications/`;
+  if (process.env.USE_PGI_STUB === "true") return { application_id: `STUB-${Math.random().toString(36).slice(2, 10).toUpperCase()}`, status: "received", message: "stub" };
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` }, body: JSON.stringify(payload) });
+  if (res.status === 400) { const body = (await res.json().catch(() => ({}))) as { errors?: Record<string, string> }; throw new PgiCarrierValidationError(body.errors ?? { _root: "carrier returned 400 with no errors dict" }); }
+  if (!res.ok) { const text = await res.text().catch(() => ""); throw new Error(`pgi_submit_failed status=${res.status} body=${text.slice(0, 500)}`); }
+  return (await res.json()) as { application_id: string; status: string; message?: string };
+}
