@@ -51,6 +51,195 @@ const DOC_HISTORY_EVENT_TYPES: readonly string[] = [
   "application_stage_changed",
 ];
 
+async function acceptDocumentLogic(req: Request, res: Response, idParam: string, docIdParam: string): Promise<void> {
+  const appId = String(idParam);
+  const docId = String(docIdParam);
+  const userId = (req as { user?: { staffUserId?: string } }).user?.staffUserId ?? null;
+
+  try {
+    const docR = await pool.query<{ application_id: string; doc_type: string; source_type: string }>(
+      `SELECT d.application_id, d.doc_type, a.source_type
+         FROM bi_documents d
+         JOIN bi_applications a ON a.id = d.application_id
+        WHERE d.id = $1 LIMIT 1`,
+      [docId],
+    );
+    if (docR.rowCount === 0) {
+      res.status(404).json({ error: { code: "not_found", message: "Document not found" } });
+      return;
+    }
+    const doc = docR.rows[0];
+    if (doc.application_id !== appId) {
+      res.status(400).json({ error: { code: "mismatch", message: "Document does not belong to this application" } });
+      return;
+    }
+    if (doc.source_type === "lender" || doc.source_type === "referrer") {
+      res.status(403).json({ error: { code: "view_only", message: "Lender/referrer apps are view-only" } });
+      return;
+    }
+
+    await pool.query(
+      `UPDATE bi_documents
+          SET review_status='accepted', reviewed_by=$2, reviewed_at=NOW()
+        WHERE id=$1`,
+      [docId, userId],
+    );
+
+    await pool.query(
+      `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
+            VALUES($1, 'staff', $2, 'document_accepted', $3, $4::jsonb)`,
+      [appId, userId, `Document accepted: ${doc.doc_type}`, JSON.stringify({ docId })],
+    );
+
+    const counts = await pool.query<{ pending: string; accepted: string; total: string }>(
+      `SELECT
+         COUNT(*) FILTER (WHERE COALESCE(review_status, 'pending') NOT IN ('accepted', 'rejected')) AS pending,
+         COUNT(*) FILTER (WHERE review_status = 'accepted') AS accepted,
+         COUNT(*) AS total
+       FROM bi_documents
+       WHERE application_id = $1 AND purged_at IS NULL`,
+      [appId],
+    );
+    const total = Number(counts.rows[0]?.total ?? 0);
+    const pending = Number(counts.rows[0]?.pending ?? 0);
+    const acceptedCount = Number(counts.rows[0]?.accepted ?? 0);
+
+    let stageAdvanced = false;
+    let finalStatus: string | null = null;
+    let autoSubmittedToPgi = false;
+    let pgiSubmitError: string | null = null;
+
+    if (acceptedCount > 0 && pending === 0) {
+      const advance = await pool.query(
+        `UPDATE bi_applications
+            SET status = 'ready_for_submission', updated_at = NOW()
+          WHERE id = $1
+            AND status IN ('in_progress', 'document_review')
+          RETURNING id`,
+        [appId],
+      );
+      stageAdvanced = (advance.rowCount ?? 0) > 0;
+      finalStatus = stageAdvanced ? "ready_for_submission" : null;
+
+      if (stageAdvanced) {
+        await pool.query(
+          `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
+                VALUES($1, 'system', $2, 'application_stage_changed', $3, $4::jsonb)`,
+          [
+            appId, userId,
+            `Application advanced to ready_for_submission after all documents accepted`,
+            JSON.stringify({
+              trigger: "all_documents_accepted",
+              to: "ready_for_submission",
+              source_type: doc.source_type,
+            }),
+          ],
+        );
+      }
+
+      if (doc.source_type === "public") {
+        const { submitApplicationToPGI } = await import("../services/biPgiSubmissionService");
+        try {
+          const result = await submitApplicationToPGI(appId);
+          autoSubmittedToPgi = true;
+          finalStatus = "submitted";
+          await pool.query(
+            `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
+                  VALUES($1, 'system', $2, 'auto_submitted_to_pgi', $3, $4::jsonb)`,
+            [
+              appId, userId,
+              `Auto-forwarded to PGI after last document accepted (external_id=${result.externalId})`,
+              JSON.stringify({
+                trigger: "auto_pgi_on_last_accept",
+                external_id: result.externalId,
+                pgi_status: result.status,
+                already_submitted: result.alreadySubmitted,
+              }),
+            ],
+          );
+        } catch (err) {
+          pgiSubmitError = err instanceof Error ? err.message : "PGI submission failed";
+          logger.warn({ err, appId }, "bi.applications.accept.auto_pgi_failed");
+          await pool.query(
+            `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
+                  VALUES($1, 'system', $2, 'auto_submit_to_pgi_failed', $3, $4::jsonb)`,
+            [
+              appId, userId,
+              `Auto-PGI submission failed: ${pgiSubmitError}. Manual retry available.`,
+              JSON.stringify({ error: pgiSubmitError }),
+            ],
+          ).catch(() => {});
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      accepted: { total, pending, accepted: acceptedCount },
+      stageAdvanced,
+      finalStatus,
+      autoSubmittedToPgi,
+      pgiSubmitError,
+    });
+  } catch (err) {
+    logger.error({ err, appId, docId }, "bi.applications.documents.accept.failed");
+    res.status(500).json({ error: { code: "internal", message: "Accept failed" } });
+  }
+}
+
+async function rejectDocumentLogic(req: Request, res: Response, idParam: string, docIdParam: string): Promise<void> {
+  const appId = String(idParam);
+  const docId = String(docIdParam);
+  const userId = (req as { user?: { staffUserId?: string } }).user?.staffUserId ?? null;
+  const reason = String((req.body as { reason?: string })?.reason || "").trim();
+
+  if (!reason) {
+    res.status(400).json({ error: { code: "reason_required", message: "Rejection reason required" } });
+    return;
+  }
+
+  try {
+    const docR = await pool.query<{ application_id: string; doc_type: string; source_type: string }>(
+      `SELECT d.application_id, d.doc_type, a.source_type
+         FROM bi_documents d
+         JOIN bi_applications a ON a.id = d.application_id
+        WHERE d.id = $1 LIMIT 1`,
+      [docId],
+    );
+    if (docR.rowCount === 0) {
+      res.status(404).json({ error: { code: "not_found", message: "Document not found" } });
+      return;
+    }
+    const doc = docR.rows[0];
+    if (doc.application_id !== appId) {
+      res.status(400).json({ error: { code: "mismatch", message: "Document does not belong to this application" } });
+      return;
+    }
+    if (doc.source_type === "lender" || doc.source_type === "referrer") {
+      res.status(403).json({ error: { code: "view_only", message: "Lender/referrer apps are view-only" } });
+      return;
+    }
+
+    await pool.query(
+      `UPDATE bi_documents
+          SET review_status='rejected', reviewed_by=$2, reviewed_at=NOW(), rejection_reason=$3
+        WHERE id=$1`,
+      [docId, userId, reason],
+    );
+
+    await pool.query(
+      `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
+            VALUES($1, 'staff', $2, 'document_rejected', $3, $4::jsonb)`,
+      [appId, userId, `Document rejected: ${doc.doc_type}`, JSON.stringify({ docId, reason })],
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    logger.error({ err, appId, docId }, "bi.applications.documents.reject.failed");
+    res.status(500).json({ error: { code: "internal", message: "Reject failed" } });
+  }
+}
+
 // ------------------------------------------------------------------
 // GET /:id/requirements
 // ------------------------------------------------------------------
@@ -273,209 +462,27 @@ router.get("/:id/pgi-comms", async (req: Request, res: Response) => {
 // does NOT auto-submit to PGI; staff click "Submit to carrier"
 // explicitly).
 router.post("/:id/documents/:docId/accept", requireStaffOrAdmin, async (req: Request, res: Response) => {
-  const appId = String(req.params.id);
-  const docId = String(req.params.docId);
-  const userId = (req as { user?: { staffUserId?: string } }).user?.staffUserId ?? null;
-
-  try {
-    // Verify the doc actually belongs to this application -- the
-    // nested URL implies that constraint, so reject any mismatched
-    // call rather than silently accepting a sibling doc.
-    const docR = await pool.query<{ application_id: string; doc_type: string; source_type: string }>(
-      `SELECT d.application_id, d.doc_type, a.source_type
-         FROM bi_documents d
-         JOIN bi_applications a ON a.id = d.application_id
-        WHERE d.id = $1 LIMIT 1`,
-      [docId],
-    );
-    if (docR.rowCount === 0) {
-      return res.status(404).json({ error: { code: "not_found", message: "Document not found" } });
-    }
-    const doc = docR.rows[0];
-    if (doc.application_id !== appId) {
-      return res.status(400).json({ error: { code: "mismatch", message: "Document does not belong to this application" } });
-    }
-    // Lender + referrer apps auto-forward; staff don't review docs
-    // on those. The portal hides the accept button (Block 31), but
-    // belt-and-suspenders here too.
-    if (doc.source_type === "lender" || doc.source_type === "referrer") {
-      return res.status(403).json({ error: { code: "view_only", message: "Lender/referrer apps are view-only" } });
-    }
-
-    await pool.query(
-      `UPDATE bi_documents
-          SET review_status='accepted', reviewed_by=$2, reviewed_at=NOW()
-        WHERE id=$1`,
-      [docId, userId],
-    );
-
-    await pool.query(
-      `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-            VALUES($1, 'staff', $2, 'document_accepted', $3, $4::jsonb)`,
-      [appId, userId, `Document accepted: ${doc.doc_type}`, JSON.stringify({ docId })],
-    );
-
-    // BI_SERVER_BLOCK_BI_ROUND8_AUTOFWD_v1 -- accept-all gate with
-    // auto-PGI submission for public-source apps. Reverts v178.
-    // >=1 accepted AND no pending = gate fires. Rejected docs are
-    // neither (don't block, don't trigger). Lender path was never
-    // affected (already auto-submits at application creation).
-    const counts = await pool.query<{ pending: string; accepted: string; total: string }>(
-      `SELECT
-         COUNT(*) FILTER (WHERE COALESCE(review_status, 'pending') NOT IN ('accepted', 'rejected')) AS pending,
-         COUNT(*) FILTER (WHERE review_status = 'accepted') AS accepted,
-         COUNT(*) AS total
-       FROM bi_documents
-       WHERE application_id = $1 AND purged_at IS NULL`,
-      [appId],
-    );
-    const total = Number(counts.rows[0]?.total ?? 0);
-    const pending = Number(counts.rows[0]?.pending ?? 0);
-    const acceptedCount = Number(counts.rows[0]?.accepted ?? 0);
-
-    let stageAdvanced = false;
-    let finalStatus: string | null = null;
-    let autoSubmittedToPgi = false;
-    let pgiSubmitError: string | null = null;
-
-    if (acceptedCount > 0 && pending === 0) {
-      // Step 1: advance to ready_for_submission. Accept both
-      // in_progress and document_review as source states -- the
-      // app may already be at document_review if a prior accept
-      // path put it there before this block deployed.
-      const advance = await pool.query(
-        `UPDATE bi_applications
-            SET status = 'ready_for_submission', updated_at = NOW()
-          WHERE id = $1
-            AND status IN ('in_progress', 'document_review')
-          RETURNING id`,
-        [appId],
-      );
-      stageAdvanced = (advance.rowCount ?? 0) > 0;
-      finalStatus = stageAdvanced ? "ready_for_submission" : null;
-
-      if (stageAdvanced) {
-        await pool.query(
-          `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-                VALUES($1, 'system', $2, 'application_stage_changed', $3, $4::jsonb)`,
-          [
-            appId, userId,
-            `Application advanced to ready_for_submission after all documents accepted`,
-            JSON.stringify({
-              trigger: "all_documents_accepted",
-              to: "ready_for_submission",
-              source_type: doc.source_type,
-            }),
-          ],
-        );
-      }
-
-      // Step 2: for public-source apps, fire submitApplicationToPGI.
-      // Lender + referrer paths submit at creation, not here.
-      // submitApplicationToPGI is atomic + idempotent; on success
-      // it sets status='submitted'. On failure it leaves the row
-      // at ready_for_submission so the manual Submit-to-carrier
-      // button surfaces for retry.
-      if (doc.source_type === "public") {
-        const { submitApplicationToPGI } = await import("../services/biPgiSubmissionService");
-        try {
-          const result = await submitApplicationToPGI(appId);
-          autoSubmittedToPgi = true;
-          finalStatus = "submitted";
-          await pool.query(
-            `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-                  VALUES($1, 'system', $2, 'auto_submitted_to_pgi', $3, $4::jsonb)`,
-            [
-              appId, userId,
-              `Auto-forwarded to PGI after last document accepted (external_id=${result.externalId})`,
-              JSON.stringify({
-                trigger: "auto_pgi_on_last_accept",
-                external_id: result.externalId,
-                pgi_status: result.status,
-                already_submitted: result.alreadySubmitted,
-              }),
-            ],
-          );
-        } catch (err) {
-          pgiSubmitError = err instanceof Error ? err.message : "PGI submission failed";
-          logger.warn({ err, appId }, "bi.applications.accept.auto_pgi_failed");
-          await pool.query(
-            `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-                  VALUES($1, 'system', $2, 'auto_submit_to_pgi_failed', $3, $4::jsonb)`,
-            [
-              appId, userId,
-              `Auto-PGI submission failed: ${pgiSubmitError}. Manual retry available.`,
-              JSON.stringify({ error: pgiSubmitError }),
-            ],
-          ).catch(() => {});
-        }
-      }
-    }
-
-    return res.json({
-      success: true,
-      accepted: { total, pending, accepted: acceptedCount },
-      stageAdvanced,
-      finalStatus,
-      autoSubmittedToPgi,
-      pgiSubmitError,
-    });
-  } catch (err) {
-    logger.error({ err, appId, docId }, "bi.applications.documents.accept.failed");
-    return res.status(500).json({ error: { code: "internal", message: "Accept failed" } });
-  }
+  return acceptDocumentLogic(req, res, req.params.id, req.params.docId);
 });
 
 // ------------------------------------------------------------------
 // POST /:id/documents/:docId/reject
 // ------------------------------------------------------------------
 router.post("/:id/documents/:docId/reject", requireStaffOrAdmin, async (req: Request, res: Response) => {
-  const appId = String(req.params.id);
-  const docId = String(req.params.docId);
-  const userId = (req as { user?: { staffUserId?: string } }).user?.staffUserId ?? null;
-  const reason = String((req.body as { reason?: string })?.reason || "").trim();
+  return rejectDocumentLogic(req, res, req.params.id, req.params.docId);
+});
 
-  if (!reason) {
-    return res.status(400).json({ error: { code: "reason_required", message: "Rejection reason required" } });
+// POST /:id/documents/:docId/review — single endpoint that dispatches to accept or reject
+// based on body.action. Portal uses this instead of two separate URLs.
+router.post("/:id/documents/:docId/review", requireStaffOrAdmin, async (req: Request, res: Response) => {
+  const action = String((req.body ?? {}).action ?? "").toLowerCase().trim();
+  if (action === "accepted" || action === "accept") {
+    return acceptDocumentLogic(req, res, req.params.id, req.params.docId);
   }
-
-  try {
-    const docR = await pool.query<{ application_id: string; doc_type: string; source_type: string }>(
-      `SELECT d.application_id, d.doc_type, a.source_type
-         FROM bi_documents d
-         JOIN bi_applications a ON a.id = d.application_id
-        WHERE d.id = $1 LIMIT 1`,
-      [docId],
-    );
-    if (docR.rowCount === 0) {
-      return res.status(404).json({ error: { code: "not_found", message: "Document not found" } });
-    }
-    const doc = docR.rows[0];
-    if (doc.application_id !== appId) {
-      return res.status(400).json({ error: { code: "mismatch", message: "Document does not belong to this application" } });
-    }
-    if (doc.source_type === "lender" || doc.source_type === "referrer") {
-      return res.status(403).json({ error: { code: "view_only", message: "Lender/referrer apps are view-only" } });
-    }
-
-    await pool.query(
-      `UPDATE bi_documents
-          SET review_status='rejected', reviewed_by=$2, reviewed_at=NOW(), rejection_reason=$3
-        WHERE id=$1`,
-      [docId, userId, reason],
-    );
-
-    await pool.query(
-      `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-            VALUES($1, 'staff', $2, 'document_rejected', $3, $4::jsonb)`,
-      [appId, userId, `Document rejected: ${doc.doc_type}`, JSON.stringify({ docId, reason })],
-    );
-
-    return res.json({ success: true });
-  } catch (err) {
-    logger.error({ err, appId, docId }, "bi.applications.documents.reject.failed");
-    return res.status(500).json({ error: { code: "internal", message: "Reject failed" } });
+  if (action === "rejected" || action === "reject") {
+    return rejectDocumentLogic(req, res, req.params.id, req.params.docId);
   }
+  return res.status(400).json({ error: "invalid_action", message: "action must be 'accepted' or 'rejected'." });
 });
 
 // BI_SERVER_BLOCK_v347_STAFF_DECLINE_v1

@@ -395,6 +395,29 @@ router.get("/:id/download", async (req, res, next) => {
   return fs.createReadStream(fullPath).pipe(res);
 });
 
+// GET /:id/file-url — returns a JSON envelope with a URL the staff portal can window.open.
+// We don't generate a presigned cloud URL — we return a server-relative path that re-enters
+// the same authenticated /download route. This avoids new SAS infrastructure while still
+// giving the portal a clickable URL.
+router.get("/:id/file-url", requireAuth, async (req, res, next) => {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id ?? "")) {
+    return next();
+  }
+  const result = await pool.query(
+    `SELECT original_filename, mime_type FROM bi_documents WHERE id=$1 AND purged_at IS NULL LIMIT 1`,
+    [req.params.id]
+  );
+  if (!result.rows.length) return badRequest(res, "Document not found");
+  const row = result.rows[0] as { original_filename: string; mime_type: string };
+  // Same-origin URL; the portal will navigate to it with the existing auth cookie/header.
+  const url = `/api/v1/bi/documents/${encodeURIComponent(req.params.id)}/download`;
+  return res.status(200).json({
+    url,
+    filename: row.original_filename ?? "document",
+    mimeType: row.mime_type ?? "application/octet-stream",
+  });
+});
+
 // DELETE /:id - soft-delete. Sets purged_at; existing SELECTs filter on
 // purged_at IS NULL, so the doc disappears from staff UI without touching
 // blob storage (a sweeper can purge later). Staff-or-admin only.
