@@ -25,11 +25,17 @@ export function buildCarrierPayloadV2(row: AnyRecord, data: AnyRecord, declarati
   const formation = s(get("q26_formation_date", "formation_date"));
   const dob = s(get("q4_date_of_birth", "guarantor_dob"));
 
+  // BI_SERVER_BLOCK_v351_CARRIER_CORRECTIONS_v1
+  // q7_email + q_ca_id_type + q_ca_id_number are now always set (no longer optional).
+  // q7_email pulls from q7_email column first, falls back to guarantor_email column.
   const fd: PgiFormDataV2 = {
     q0_country: country as PgiFormDataV2["q0_country"],
     q2_full_name: s(get("q2_full_name", "guarantor_name")),
     q4_date_of_birth: dob.length >= 10 ? dob.slice(0, 10) : dob,
+    q7_email: s(get("q7_email", "guarantor_email")),
     q5_residential_address: s(get("q5_residential_address", "guarantor_address")),
+    q_ca_id_type: s(get("q_ca_id_type")),
+    q_ca_id_number: s(get("q_ca_id_number")),
     q15_business_legal_name: s(get("q15_business_legal_name", "business_name")),
     q17_business_operating_address: s(get("q17_business_operating_address", "business_address")),
     q25_naics_code: s(get("q25_naics_code", "naics_code")),
@@ -41,8 +47,8 @@ export function buildCarrierPayloadV2(row: AnyRecord, data: AnyRecord, declarati
   };
   const province = s(get("q_business_province", "business_province"));
   if (province) (fd as AnyRecord).q_business_province = province;
-  const idType = s(get("q_ca_id_type")); if (idType) (fd as AnyRecord).q_ca_id_type = idType;
-  const idNumber = s(get("q_ca_id_number")); if (idNumber) (fd as AnyRecord).q_ca_id_number = idNumber;
+  // BI_SERVER_BLOCK_v351_CARRIER_CORRECTIONS_v1 — ID fields now always set in the
+  // form_data literal above. This conditional block is removed (was v349 deferral).
 
   for (const key of ALL_DECLARATION_KEYS as readonly DeclarationKey[]) {
     const raw = declarations[key];

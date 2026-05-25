@@ -25,6 +25,9 @@ export const CA_PROVINCES_ALLOWED = [
 ] as const;
 export type CaProvinceAllowed = typeof CA_PROVINCES_ALLOWED[number];
 
+// BI_SERVER_BLOCK_v351_CARRIER_CORRECTIONS_v1
+// Loan floor is Boreal-side (Purbeck has no minimum). Todd 2026-05-25.
+export const LOAN_AMOUNT_MIN = 50_000;
 export const LOAN_AMOUNT_MAX = 1_000_000;
 export const PGI_LIMIT_MAX = 1_000_000;
 
@@ -66,11 +69,17 @@ export const ALL_DECLARATION_KEYS = [
 ] as const;
 export type DeclarationKey = typeof ALL_DECLARATION_KEYS[number];
 
+// BI_SERVER_BLOCK_v351_CARRIER_CORRECTIONS_v1
+// q7_email + q_ca_id_type + q_ca_id_number promoted to REQUIRED per corrected
+// changelog 2026-05-25. No longer deferred.
 export type PgiFormDataV2 = {
   q0_country: AllowedCountry;
   q2_full_name: string;
   q4_date_of_birth: string;
+  q7_email: string;
   q5_residential_address: string | Record<string, string>;
+  q_ca_id_type: string;
+  q_ca_id_number: string;
   q15_business_legal_name: string;
   q17_business_operating_address: string | Record<string, string>;
   q_business_province?: CaProvinceAllowed;
@@ -79,8 +88,6 @@ export type PgiFormDataV2 = {
   q_ca_loan_type: EligibleLoanType;
   q41_loan_amount: number;
   q42_pgi_limit: number;
-  q_ca_id_type?: string;
-  q_ca_id_number?: string;
   section_1_a: "yes" | "no";
   section_1_2: "yes" | "no";
   section_2_a: "yes" | "no";
@@ -135,7 +142,14 @@ export function validatePgiSubmissionV2(input: unknown): { ok: true; value: PgiS
   if (typeof fd.q0_country !== "string" || !(ALLOWED_COUNTRIES as readonly string[]).includes(fd.q0_country)) issues.push({ field: "form_data.q0_country", message: `must be one of ${ALLOWED_COUNTRIES.join(", ")}` });
   if (!isNonEmptyString(fd.q2_full_name)) issues.push({ field: "form_data.q2_full_name", message: "required" });
   if (!isNonEmptyString(fd.q4_date_of_birth) || !ISO_DATE_RE.test(fd.q4_date_of_birth as string)) issues.push({ field: "form_data.q4_date_of_birth", message: "must be YYYY-MM-DD" });
+  // BI_SERVER_BLOCK_v351_CARRIER_CORRECTIONS_v1 — q7_email is now a required carrier field.
+  if (!isNonEmptyString(fd.q7_email) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fd.q7_email as string)) issues.push({ field: "form_data.q7_email", message: "valid email required" });
   if (!isAddress(fd.q5_residential_address)) issues.push({ field: "form_data.q5_residential_address", message: "required" });
+  // BI_SERVER_BLOCK_v351_CARRIER_CORRECTIONS_v1 — Government ID required (Craig confirmed in corrected changelog).
+  const ALLOWED_ID_TYPES = ["Passport", "National ID", "Driving Licence", "Other"];
+  if (!isNonEmptyString(fd.q_ca_id_type)) issues.push({ field: "form_data.q_ca_id_type", message: "required" });
+  else if (!ALLOWED_ID_TYPES.includes(fd.q_ca_id_type as string)) issues.push({ field: "form_data.q_ca_id_type", message: `must be one of ${ALLOWED_ID_TYPES.join(", ")}` });
+  if (!isNonEmptyString(fd.q_ca_id_number)) issues.push({ field: "form_data.q_ca_id_number", message: "required" });
   if (!isNonEmptyString(fd.q15_business_legal_name)) issues.push({ field: "form_data.q15_business_legal_name", message: "required" });
   if (!isAddress(fd.q17_business_operating_address)) issues.push({ field: "form_data.q17_business_operating_address", message: "required" });
   if (typeof fd.q25_naics_code !== "string" || !NAICS_RE.test(fd.q25_naics_code)) issues.push({ field: "form_data.q25_naics_code", message: "must be a 6-digit NAICS code" });
@@ -147,8 +161,10 @@ export function validatePgiSubmissionV2(input: unknown): { ok: true; value: PgiS
 
   if (typeof fd.q_ca_loan_type !== "string" || !(ELIGIBLE_LOAN_TYPES as readonly string[]).includes(fd.q_ca_loan_type)) issues.push({ field: "form_data.q_ca_loan_type", message: `must be one of ${ELIGIBLE_LOAN_TYPES.join(", ")}` });
 
+  // BI_SERVER_BLOCK_v351_CARRIER_CORRECTIONS_v1 — Boreal-side $50K floor added.
   const loan = Number(fd.q41_loan_amount);
   if (!Number.isFinite(loan) || loan <= 0) issues.push({ field: "form_data.q41_loan_amount", message: "must be > 0" });
+  else if (loan < LOAN_AMOUNT_MIN) issues.push({ field: "form_data.q41_loan_amount", message: `Loan amount ${loan} is below the 50,000 minimum.` });
   else if (loan > LOAN_AMOUNT_MAX) issues.push({ field: "form_data.q41_loan_amount", message: `Loan amount ${loan} exceeds the 1,000,000 maximum.` });
 
   const limit = Number(fd.q42_pgi_limit);
