@@ -507,7 +507,9 @@ router.get("/applications/:publicId/documents", async (req, res) => {
   );
   if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
   const docs = await pool.query(
-    `SELECT id, doc_type, original_filename, bytes, created_at
+    `SELECT id, doc_type, original_filename, bytes, created_at,
+             COALESCE(review_status, 'pending') AS review_status,
+             rejection_reason, reviewed_at
        FROM bi_documents
       WHERE application_id=$1 AND purged_at IS NULL
       ORDER BY created_at DESC`,
