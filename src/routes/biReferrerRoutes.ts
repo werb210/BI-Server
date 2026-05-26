@@ -176,6 +176,7 @@ router.post("/referrer/referrals", requireReferrer, async (req: any, res) => {
     // Derived from the row's UUID (first 8 hex chars, lowercase) — deterministic,
     // unique with overwhelming probability for the row count we'll ever have.
     const shortCode = id.replace(/-/g, "").substring(0, 8).toLowerCase();
+    // BI_SERVER_BLOCK_v366_NOTIFICATION_SMS_v2
     await client.query(
       `INSERT INTO bi_referrals (id, referrer_id, full_name, company_name, email, phone_e164, status, short_code, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,'invited',$7,NOW(),NOW())`,
@@ -198,6 +199,30 @@ router.post("/referrer/referrals", requireReferrer, async (req: any, res) => {
       );
     }
     await client.query("COMMIT");
+
+    // BI_SERVER_BLOCK_v366_NOTIFICATION_SMS_v2
+    // Invite SMS — outside the transaction so a Twilio outage doesn't roll
+    // back the referral row. Non-fatal if SMS fails; referrer can re-trigger
+    // from the dashboard (future). Stamps sms_sent_at on success so the
+    // dashboard can show "Invited 5 min ago" vs "phone missing".
+    if (phone) {
+      try {
+        const { sendOutreachSms } = await import("../services/smsService");
+        const applyUrl = `${process.env.BI_PUBLIC_URL || "https://www.boreal.insure"}/applications/new?ref=${shortCode}`;
+        const referrer = (await pool.query<{ display_name: string | null; company_name: string | null }>(
+          `SELECT display_name, company_name FROM bi_referrers WHERE id = $1 LIMIT 1`,
+          [req.referrerId]
+        )).rows[0];
+        const fromName = referrer?.company_name || referrer?.display_name || "your referrer";
+        const firstName = String(full_name).split(" ")[0] || "there";
+        const body = `Hi ${firstName}, ${fromName} referred you to Boreal Risk for Personal Guarantee Insurance. Get a quote in 5 min: ${applyUrl}`;
+        await sendOutreachSms(phone, body);
+        await pool.query(`UPDATE bi_referrals SET sms_sent_at = NOW() WHERE id = $1`, [id]).catch(() => {});
+      } catch (err) {
+        console.warn("[v366] referral invite SMS failed (non-fatal)", { referral_id: id, error: (err as Error)?.message });
+      }
+    }
+
     return res.status(201).json({ id, short_code: shortCode, status: "invited" });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
