@@ -453,6 +453,57 @@ router.get("/:id/pgi-comms", async (req: Request, res: Response) => {
   }
 });
 
+
+// BI_SERVER_BLOCK_v365_COGUARANTOR_GET_v1
+// BF-portal's CoGuarantorList.tsx polls this endpoint. v354 writes rows
+// into bi_co_guarantors on lender API submit; staff need to see them.
+router.get("/:id/co-guarantors", requireStaffOrAdmin, async (req: Request, res: Response) => {
+  const appId = req.params.id;
+  try {
+    const rows = await pool.query<{
+      id: string;
+      first_name: string | null;
+      last_name: string | null;
+      email: string | null;
+      date_of_birth: string | null;
+      phone: string | null;
+      address: string | null;
+      city: string | null;
+      province: string | null;
+      postal_code: string | null;
+      relationship: string | null;
+      created_at: Date;
+    }>(
+      `SELECT id, first_name, last_name, email, date_of_birth, phone,
+              address, city, province, postal_code, relationship, created_at
+         FROM bi_co_guarantors
+        WHERE application_id = $1
+        ORDER BY created_at ASC`,
+      [appId],
+    );
+    return res.json({
+      co_guarantors: rows.rows.map((r) => ({
+        id: r.id,
+        first_name: r.first_name ?? "",
+        last_name: r.last_name ?? "",
+        full_name: [r.first_name, r.last_name].filter(Boolean).join(" "),
+        email: r.email,
+        date_of_birth: r.date_of_birth,
+        phone: r.phone,
+        address: r.address,
+        city: r.city,
+        province: r.province,
+        postal_code: r.postal_code,
+        relationship: r.relationship ?? "Guarantor",
+        created_at: r.created_at,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err, appId }, "bi.applications.co_guarantors.list_failed");
+    return res.status(500).json({ error: "co_guarantor_list_failed" });
+  }
+});
+
 // ------------------------------------------------------------------
 // POST /:id/documents/:docId/accept
 // ------------------------------------------------------------------
