@@ -1,7 +1,8 @@
 -- BI_SERVER_BLOCK_v359_PGI_DOC_FORWARDING_v1
--- Track which bi_documents have been forwarded to PGI and what their
--- carrier-side document_id is. Both columns nullable + idempotent so
--- the migration is safe on re-deploy.
+-- BI_SERVER_BLOCK_v363_RELOCATE_MIGRATIONS_v1 — relocated from /migrations/
+-- to /src/db/migrations/ per guardrails workflow + runMigrations boot path.
+-- Tracks which bi_documents have been forwarded to PGI and what their
+-- carrier-side document_id is. Both columns nullable + idempotent.
 
 ALTER TABLE bi_documents
   ADD COLUMN IF NOT EXISTS pgi_document_id          TEXT,
