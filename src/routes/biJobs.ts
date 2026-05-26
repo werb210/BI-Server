@@ -23,6 +23,7 @@ import { Router } from "express";
 import { pool } from "../db";
 import { sendOutreachSms } from "../services/smsService";
 import { logger } from "../platform/logger";
+import { env } from "../platform/env";
 
 const router = Router();
 
@@ -90,7 +91,8 @@ async function runDocsReminderCronTickInner(): Promise<{ scanned: number; sent: 
   let sent = 0;
   let escalated = 0;
   let failed = 0;
-  const escalationPhone = process.env.BI_ESCALATION_PHONE;
+  // BI_SERVER_BLOCK_v372_ESCALATION_PHONE_ENV_v1
+  const escalationPhone = env.BI_ESCALATION_PHONE;
 
   for (const row of candidates.rows) {
     const phone = row.applicant_phone_e164;
