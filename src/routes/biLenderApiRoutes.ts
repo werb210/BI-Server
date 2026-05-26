@@ -80,6 +80,7 @@ async function authLender(req: any, res: any, next: any) {
         // lender's current session mode. Demo sessions see ONLY demo
         // apps; real sessions never see demo apps.
         req.isDemo = claims.is_demo === true;
+        req.lenderIsDemo = Boolean(claims.is_demo);
         return next();
       }
     } catch {
@@ -379,27 +380,42 @@ router.post("/lender/otp/start", async (req, res) => {
   res.json({ ok: true, channel: "sms" });
 });
 
-// BI_SERVER_BLOCK_v226_DEMO_SANDBOX_v1
-// BI_SERVER_BLOCK_v227_APPLICATION_CODE_AND_DEMO_FIXUP_v1 — uses module-level jwt; registered at BOTH
-// /lender/demo-session (hyphen) and /lender/demo/session (slash) so any
-// in-the-wild client URL works.
-async function demoSessionHandler(_req: any, res: any) {
+// BI_SERVER_BLOCK_v367_DEMO_SESSION_AUTH_v1
+// Demo session now requires an authenticated real lender JWT. The client
+// already sends one (LenderApplicationDemo writes bi.real_token_backup
+// before fetching this endpoint); this just enforces it server-side so
+// random anonymous POSTs can no longer mint demo JWTs.
+async function demoSessionHandler(req: any, res: any) {
+  // authLender middleware sets req.lenderId from the real-lender JWT;
+  // if it's missing we never got past the guard.
+  if (!req.lenderId) return res.status(401).json({ error: "unauthorized" });
+
+  // Refuse if the caller is ALREADY on a demo token — no nested demos.
+  if (req.lenderIsDemo) return res.status(403).json({ error: "already_demo" });
+
   const r = await pool.query(
     `SELECT id, company_name FROM bi_lenders WHERE is_demo = TRUE AND is_active = TRUE ORDER BY created_at ASC LIMIT 1`
   );
   const demo = r.rows[0];
-  if (!demo) return res.status(503).json({ error: "demo_lender_missing", message: "Demo lender not provisioned." });
-  const secret = process.env.JWT_SECRET;
-  if (!secret) return res.status(500).json({ error: "server_misconfig", message: "JWT_SECRET not set" });
+  if (!demo) return res.status(503).json({ error: "demo_lender_not_provisioned" });
+
+  const secret = process.env.JWT_SECRET || process.env.BI_JWT_SECRET;
+  if (!secret) return res.status(500).json({ error: "jwt_secret_missing" });
+
   const token = jwt.sign(
-    { kind: "lender", id: demo.id, is_demo: true },
+    { kind: "lender", id: demo.id, is_demo: true, originating_lender_id: req.lenderId },
     secret,
-    { expiresIn: "4h" },
+    { expiresIn: "4h" }
   );
-  return res.json({ token, lender: { id: demo.id, company_name: demo.company_name, is_demo: true } });
+
+  return res.json({
+    token,
+    lender: { id: demo.id, company_name: demo.company_name },
+    expires_in: 4 * 60 * 60,
+  });
 }
-router.post("/lender/demo-session", demoSessionHandler);
-router.post("/lender/demo/session", demoSessionHandler);
+router.post("/lender/demo-session", authLender, demoSessionHandler);
+router.post("/lender/demo/session", authLender, demoSessionHandler);
 
 router.post("/lender/otp/verify", async (req, res) => {
   // BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1 — accept email or phone.
