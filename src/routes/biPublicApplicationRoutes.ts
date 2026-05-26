@@ -51,6 +51,45 @@ async function ensureContactAndCompanyForApp(appId: string): Promise<void> {
 
 router.post("/applications/score", async (req, res) => {
   const b = req.body ?? {};
+  // BI_SERVER_BLOCK_v360_REFERRER_ATTRIBUTION_v1
+  // Optional `ref` from request body OR ?ref= query param. Validated against
+  // bi_referrals — must belong to a real referrer, must be in 'invited' status,
+  // must match the applicant's phone (E.164) or email if either is provided.
+  // Mismatch → silently drop attribution (don't 400; the apply flow shouldn't
+  // break because someone clicked a stale link). Match → capture both ids for
+  // the INSERT below.
+  let attributedReferrerId: string | null = null;
+  let attributedReferralId: string | null = null;
+  const refToken = String(b.ref ?? req.query?.ref ?? "").trim();
+  if (refToken) {
+    try {
+      const refRow = await pool.query<{ id: string; referrer_id: string; status: string; email: string | null; phone_e164: string | null }>(
+        `SELECT id, referrer_id, status, email, phone_e164
+           FROM bi_referrals
+          WHERE id = $1::uuid
+            AND application_id IS NULL
+          LIMIT 1`,
+        [refToken]
+      );
+      const r = refRow.rows[0];
+      if (r) {
+        // Soft match: if either email OR phone matches what the applicant
+        // is providing, accept the attribution. If neither is provided yet
+        // (Stage 1 doesn't ask for them), accept anyway — the link itself
+        // is sufficient evidence at Stage 1; Stage 2 will hard-verify by
+        // backfilling the matching phone/email.
+        const applicantPhoneRaw = String(b.applicant_phone_e164 || "").trim();
+        const phoneMatch = !applicantPhoneRaw || !r.phone_e164 || r.phone_e164 === applicantPhoneRaw;
+        if (phoneMatch) {
+          attributedReferrerId = r.referrer_id;
+          attributedReferralId = r.id;
+        }
+      }
+    } catch (err) {
+      // Bad UUID, etc. — silently skip attribution.
+      console.warn("[v360] referral lookup failed", { ref: refToken, error: (err as Error)?.message });
+    }
+  }
   const required = [
     "country", "naics_code", "formation_date", "loan_amount", "pgi_limit",
     "annual_revenue", "ebitda", "total_debt", "monthly_debt_service",
@@ -124,16 +163,18 @@ router.post("/applications/score", async (req, res) => {
     // bi_applications.created_by_actor is bi_actor_type NOT NULL (no default).
     // Public CORE submissions are 'applicant' per enum: (applicant, lender,
     // referrer, staff, system).
+    // BI_SERVER_BLOCK_v360_REFERRER_ATTRIBUTION_v1 — add referrer_id + referral_id columns.
     `INSERT INTO bi_applications
        (id, public_id, status, source, created_by_actor,
         country, naics_code, formation_date, loan_amount, pgi_limit,
         annual_revenue, ebitda, total_debt, monthly_debt_service,
         collateral_value, enterprise_value,
         applicant_phone_e164,
+        referrer_id, referral_id,
         data,
         created_at, updated_at)
      VALUES ($1,$2,'created','public','applicant',
-             $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, $14, $15::jsonb, NOW(), NOW())`,
+             $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, $14, $15, $16, $17::jsonb, NOW(), NOW())`,
     [
       id, publicId,
       b.country, b.naics_code, b.formation_date, b.loan_amount, b.pgi_limit,
@@ -141,6 +182,8 @@ router.post("/applications/score", async (req, res) => {
       b.collateral_value, b.enterprise_value,
       // BI_SERVER_BLOCK_v170_SCORE_PHONE_NOT_NULL_FIX_v1
       applicantPhone,
+      attributedReferrerId,
+      attributedReferralId,
       // BI_SERVER_BLOCK_v164_SCORE_STAGE_FIX_v1 — persist core_inputs for
       // Stage 2 pre-fill of the locked CORE fields.
       JSON.stringify({
@@ -156,6 +199,20 @@ router.post("/applications/score", async (req, res) => {
       }),
     ],
   );
+
+  // BI_SERVER_BLOCK_v360_REFERRER_ATTRIBUTION_v1 — back-link the referral.
+  if (attributedReferralId) {
+    await pool.query(
+      `UPDATE bi_referrals
+          SET application_id = $1,
+              status = CASE WHEN status = 'invited' THEN 'applied' ELSE status END,
+              updated_at = NOW()
+        WHERE id = $2 AND application_id IS NULL`,
+      [id, attributedReferralId]
+    ).catch((err) => {
+      console.warn("[v360] referral back-link failed (non-fatal)", { app_id: id, referral_id: attributedReferralId, error: (err as Error)?.message });
+    });
+  }
 
   let score;
   try {
@@ -222,6 +279,45 @@ router.patch("/applications/:publicId", async (req, res) => {
   if (r.rows[0].score_decision !== "approve") return res.status(403).json({ error: "score_not_approved" });
 
   const b = req.body ?? {};
+  // BI_SERVER_BLOCK_v360_REFERRER_ATTRIBUTION_v1
+  // Optional `ref` from request body OR ?ref= query param. Validated against
+  // bi_referrals — must belong to a real referrer, must be in 'invited' status,
+  // must match the applicant's phone (E.164) or email if either is provided.
+  // Mismatch → silently drop attribution (don't 400; the apply flow shouldn't
+  // break because someone clicked a stale link). Match → capture both ids for
+  // the INSERT below.
+  let attributedReferrerId: string | null = null;
+  let attributedReferralId: string | null = null;
+  const refToken = String(b.ref ?? req.query?.ref ?? "").trim();
+  if (refToken) {
+    try {
+      const refRow = await pool.query<{ id: string; referrer_id: string; status: string; email: string | null; phone_e164: string | null }>(
+        `SELECT id, referrer_id, status, email, phone_e164
+           FROM bi_referrals
+          WHERE id = $1::uuid
+            AND application_id IS NULL
+          LIMIT 1`,
+        [refToken]
+      );
+      const r = refRow.rows[0];
+      if (r) {
+        // Soft match: if either email OR phone matches what the applicant
+        // is providing, accept the attribution. If neither is provided yet
+        // (Stage 1 doesn't ask for them), accept anyway — the link itself
+        // is sufficient evidence at Stage 1; Stage 2 will hard-verify by
+        // backfilling the matching phone/email.
+        const applicantPhoneRaw = String(b.applicant_phone_e164 || "").trim();
+        const phoneMatch = !applicantPhoneRaw || !r.phone_e164 || r.phone_e164 === applicantPhoneRaw;
+        if (phoneMatch) {
+          attributedReferrerId = r.referrer_id;
+          attributedReferralId = r.id;
+        }
+      }
+    } catch (err) {
+      // Bad UUID, etc. — silently skip attribution.
+      console.warn("[v360] referral lookup failed", { ref: refToken, error: (err as Error)?.message });
+    }
+  }
   // BI_SERVER_BLOCK_v62_CORS_AND_PATCH_ALIGNMENT_v1
   // Add the score-time columns to the PATCH whitelist so the applicant
   // can edit them on the application form after the score check. These
