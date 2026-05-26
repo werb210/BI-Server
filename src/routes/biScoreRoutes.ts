@@ -116,6 +116,12 @@ router.post("/applications/:id/submit-to-pgi", requireAuth, async (req, res) => 
     app as Record<string, unknown>,
     (app.data ?? {}) as Record<string, unknown>,
     (app.declarations ?? {}) as Record<string, unknown>,
+    {
+      guarantor_name: app.guarantor_name as string | undefined,
+      guarantor_email: app.guarantor_email as string | undefined,
+      business_name: app.business_name as string | undefined,
+      lender_name: null,
+    },
   );
 
   const valid = validatePgiSubmissionV2(payload);
