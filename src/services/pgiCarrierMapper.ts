@@ -12,7 +12,25 @@ function ynOrUndefined(v: unknown): "yes" | "no" | undefined {
   if (v === "no" || v === false || v === "false" || v === 0 || v === "0") return "no";
 }
 
-export function buildCarrierPayloadV2(row: AnyRecord, data: AnyRecord, declarations: AnyRecord): CarrierPayloadV2 {
+// BI_SERVER_BLOCK_v358_CARRIER_ENVELOPE_FIX_v1
+// Added optional `top` argument so callers can pass guarantor_name /
+// guarantor_email / business_name / lender_name at the carrier envelope
+// top level (which PgiApplicationSubmitRequest requires). Backward-compat:
+// when top is undefined, the function still returns just { form_data }
+// for any caller that only needs the form_data side.
+export interface CarrierPayloadV2Envelope {
+  guarantor_name?: string;
+  guarantor_email?: string;
+  business_name?: string;
+  lender_name?: string;
+  form_data: PgiFormDataV2;
+}
+export function buildCarrierPayloadV2(
+  row: AnyRecord,
+  data: AnyRecord,
+  declarations: AnyRecord,
+  top?: { guarantor_name?: string; guarantor_email?: string; business_name?: string; lender_name?: string | null }
+): CarrierPayloadV2Envelope {
   const get = (qKey: string, legacyKey?: string): unknown => {
     if (row[qKey] != null && row[qKey] !== "") return row[qKey];
     if (data[qKey] != null && data[qKey] !== "") return data[qKey];
@@ -64,7 +82,18 @@ export function buildCarrierPayloadV2(row: AnyRecord, data: AnyRecord, declarati
       }
     }
   }
-  return { form_data: fd };
+  // BI_SERVER_BLOCK_v358_CARRIER_ENVELOPE_FIX_v1
+  const out: CarrierPayloadV2Envelope = { form_data: fd };
+  if (top?.guarantor_name)  out.guarantor_name  = top.guarantor_name;
+  if (top?.guarantor_email) out.guarantor_email = top.guarantor_email;
+  if (top?.business_name)   out.business_name   = top.business_name;
+  if (top?.lender_name)     out.lender_name     = top.lender_name;
+  // Fallback: pull from row/data if caller didn't supply top.
+  if (!out.guarantor_name  && (row.guarantor_name  || data.guarantor_name))  out.guarantor_name  = s(row.guarantor_name  || data.guarantor_name);
+  if (!out.guarantor_email && (row.guarantor_email || data.guarantor_email)) out.guarantor_email = s(row.guarantor_email || data.guarantor_email);
+  if (!out.business_name   && (row.business_name   || data.business_name))   out.business_name   = s(row.business_name   || data.business_name);
+  if (!out.lender_name     && (row.lender_name     || data.lender_name))     out.lender_name     = s(row.lender_name     || data.lender_name);
+  return out;
 }
 
 // Legacy mappers retained for existing PGI v1 callers/tests.

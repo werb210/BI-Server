@@ -261,8 +261,19 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* v236 */ asyn
     lenderCompanyName = (lr.rows[0]?.company_name as string | undefined) || null;
     lenderIsDemo = lr.rows[0]?.is_demo === true;
   } catch {}
+  // BI_SERVER_BLOCK_v358_CARRIER_ENVELOPE_FIX_v1
   const carrierRowSnapshot = { id, public_id: publicId, guarantor_name: b.guarantor_name, guarantor_email: b.guarantor_email, business_name: b.business_name, lender_name: lenderCompanyName ?? b.lender_name ?? undefined, country: b.country, naics_code: b.naics_code, formation_date: b.formation_date, loan_amount: b.loan_amount, pgi_limit: b.pgi_limit, annual_revenue: b.annual_revenue, ebitda: b.ebitda, total_debt: b.total_debt, monthly_debt_service: b.monthly_debt_service, collateral_value: b.collateral_value, enterprise_value: b.enterprise_value, q4_date_of_birth: b.q4_date_of_birth, q7_email: b.q7_email || b.guarantor_email, q5_residential_address: b.q5_residential_address, q_ca_id_type: b.q_ca_id_type, q_ca_id_number: b.q_ca_id_number, q17_business_operating_address: b.q17_business_operating_address, q_business_province: b.q_business_province, q_ca_loan_type: b.q_ca_loan_type, form_data: fullFormData, declarations: norm.declarations || {} };
-  const carrierRequestBody: any = buildCarrierPayloadV2(carrierRowSnapshot as any, fullFormData as any, (norm.declarations || {}) as any);
+  const carrierRequestBody: any = buildCarrierPayloadV2(
+    carrierRowSnapshot as any,
+    fullFormData as any,
+    (norm.declarations || {}) as any,
+    {
+      guarantor_name: b.guarantor_name,
+      guarantor_email: b.guarantor_email || b.q7_email,
+      business_name: b.business_name,
+      lender_name: lenderCompanyName ?? b.lender_name ?? null,
+    }
+  );
   let pgi_application_id: string | null = null;
   let pgi_status: string | null = null;
   let pgi_error: string | null = null;

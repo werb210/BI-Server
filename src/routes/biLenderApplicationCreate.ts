@@ -185,7 +185,18 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
     form_data: { ...coreInputs, declarations: b.declarations || {}, co_guarantors: b.co_guarantors || [] },
     declarations: b.declarations || {},
   };
-  const carrierRequestBody: any = buildCarrierPayloadV2(carrierRowSnapshot as any, carrierRowSnapshot.form_data as any, (b.declarations || {}) as any);
+  // BI_SERVER_BLOCK_v358_CARRIER_ENVELOPE_FIX_v1
+  const carrierRequestBody: any = buildCarrierPayloadV2(
+    carrierRowSnapshot as any,
+    carrierRowSnapshot.form_data as any,
+    (b.declarations || {}) as any,
+    {
+      guarantor_name: b.guarantor?.name,
+      guarantor_email: b.guarantor?.email || (b.guarantor?.phone ? `${String(b.guarantor.phone).replace(/[^0-9]/g, "")}@no-email.boreal` : undefined),
+      business_name: b.company_name,
+      lender_name: lenderCompanyName ?? null,
+    }
+  );
   try {
     let submit;
     if (lenderIsDemo) {
