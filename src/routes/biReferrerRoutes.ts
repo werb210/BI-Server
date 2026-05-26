@@ -170,10 +170,16 @@ router.post("/referrer/referrals", requireReferrer, async (req: any, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const r = await client.query(
-      `INSERT INTO bi_referrals (referrer_id, full_name, company_name, email, phone_e164, status)
-       VALUES ($1,$2,$3,$4,$5,'invited') RETURNING id`,
-      [req.referrerId, full_name, company_name, email || null, phone || null]
+    const id = crypto.randomUUID();
+    // BI_SERVER_BLOCK_v364_REFERRAL_SHORT_CODE_v1
+    // Generate a unique 8-char short_code so legacy /?ref=<code> URLs work.
+    // Derived from the row's UUID (first 8 hex chars, lowercase) — deterministic,
+    // unique with overwhelming probability for the row count we'll ever have.
+    const shortCode = id.replace(/-/g, "").substring(0, 8).toLowerCase();
+    await client.query(
+      `INSERT INTO bi_referrals (id, referrer_id, full_name, company_name, email, phone_e164, status, short_code, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'invited',$7,NOW(),NOW())`,
+      [id, req.referrerId, full_name, company_name, email || null, phone || null, shortCode]
     );
     if (email) {
       await client.query(
@@ -192,7 +198,7 @@ router.post("/referrer/referrals", requireReferrer, async (req: any, res) => {
       );
     }
     await client.query("COMMIT");
-    return res.status(201).json({ id: r.rows[0].id, status: "invited" });
+    return res.status(201).json({ id, short_code: shortCode, status: "invited" });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     return res.status(500).json({

@@ -51,33 +51,34 @@ async function ensureContactAndCompanyForApp(appId: string): Promise<void> {
 
 router.post("/applications/score", async (req, res) => {
   const b = req.body ?? {};
-  // BI_SERVER_BLOCK_v360_REFERRER_ATTRIBUTION_v1
-  // Optional `ref` from request body OR ?ref= query param. Validated against
-  // bi_referrals — must belong to a real referrer, must be in 'invited' status,
-  // must match the applicant's phone (E.164) or email if either is provided.
-  // Mismatch → silently drop attribution (don't 400; the apply flow shouldn't
-  // break because someone clicked a stale link). Match → capture both ids for
-  // the INSERT below.
+  // BI_SERVER_BLOCK_v364_REFERRAL_SHORT_CODE_v1 (extends v360)
+  // Three-way input acceptance:
+  //   1. body `ref` (UUID) — what v360 originally planned
+  //   2. body `ref_code` (short code, what v135 client sends today)
+  //   3. ?ref= or ?ref_code= query string (legacy bookmarked URLs)
+  // Lookup strategy: try UUID first if it parses as one, else try short_code.
   let attributedReferrerId: string | null = null;
   let attributedReferralId: string | null = null;
-  const refToken = String(b.ref ?? req.query?.ref ?? "").trim();
-  if (refToken) {
+  const rawRef = String(
+    b.ref ?? b.ref_code ?? req.query?.ref ?? req.query?.ref_code ?? ""
+  ).trim();
+  if (rawRef) {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawRef);
     try {
       const refRow = await pool.query<{ id: string; referrer_id: string; status: string; email: string | null; phone_e164: string | null }>(
-        `SELECT id, referrer_id, status, email, phone_e164
-           FROM bi_referrals
-          WHERE id = $1::uuid
-            AND application_id IS NULL
-          LIMIT 1`,
-        [refToken]
+        isUuid
+          ? `SELECT id, referrer_id, status, email, phone_e164
+               FROM bi_referrals
+              WHERE id = $1::uuid AND application_id IS NULL
+              LIMIT 1`
+          : `SELECT id, referrer_id, status, email, phone_e164
+               FROM bi_referrals
+              WHERE short_code = LOWER($1) AND application_id IS NULL
+              LIMIT 1`,
+        [rawRef]
       );
       const r = refRow.rows[0];
       if (r) {
-        // Soft match: if either email OR phone matches what the applicant
-        // is providing, accept the attribution. If neither is provided yet
-        // (Stage 1 doesn't ask for them), accept anyway — the link itself
-        // is sufficient evidence at Stage 1; Stage 2 will hard-verify by
-        // backfilling the matching phone/email.
         const applicantPhoneRaw = String(b.applicant_phone_e164 || "").trim();
         const phoneMatch = !applicantPhoneRaw || !r.phone_e164 || r.phone_e164 === applicantPhoneRaw;
         if (phoneMatch) {
@@ -86,8 +87,7 @@ router.post("/applications/score", async (req, res) => {
         }
       }
     } catch (err) {
-      // Bad UUID, etc. — silently skip attribution.
-      console.warn("[v360] referral lookup failed", { ref: refToken, error: (err as Error)?.message });
+      console.warn("[v364] referral lookup failed", { rawRef, isUuid, error: (err as Error)?.message });
     }
   }
   const required = [
