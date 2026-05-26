@@ -13,10 +13,8 @@ import multer from "multer";
 import jwt from "jsonwebtoken";
 import { notifyStaff } from "../services/staffNotifyService";
 import { pool } from "../db";
-import { pgiSubmit } from "../services/pgiAdapter";
 import { logger } from "../platform/logger";
 import { getStorage } from "../lib/storage";
-import { buildCarrierPayloadV2 } from "../services/pgiCarrierMapper";
 
 const router = express.Router();
 
@@ -185,69 +183,22 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
     form_data: { ...coreInputs, declarations: b.declarations || {}, co_guarantors: b.co_guarantors || [] },
     declarations: b.declarations || {},
   };
-  // BI_SERVER_BLOCK_v358_CARRIER_ENVELOPE_FIX_v1
-  const carrierRequestBody: any = buildCarrierPayloadV2(
-    carrierRowSnapshot as any,
-    carrierRowSnapshot.form_data as any,
-    (b.declarations || {}) as any,
-    {
-      guarantor_name: b.guarantor?.name,
-      guarantor_email: b.guarantor?.email || (b.guarantor?.phone ? `${String(b.guarantor.phone).replace(/[^0-9]/g, "")}@no-email.boreal` : undefined),
-      business_name: b.company_name,
-      lender_name: lenderCompanyName ?? null,
-    }
-  );
-  try {
-    let submit;
-    if (lenderIsDemo) {
-      submit = { application_id: `STUB_APP_DEMO_${Date.now()}`, status: "received", message: "Demo submission — carrier call skipped." } as any;
-    } else {
-      submit = await pgiSubmit(carrierRequestBody);
-    }
-    pgi_application_id = submit.application_id;
-    pgi_status = submit.status || "received";
-    // BI_SERVER_BLOCK_v243_LENDER_STAGE_ROUTING_v1 — was status='submitted';
-    // now sent_to_pgi to land in the v47 8-stage operator-spec column.
-    // Migration v243 also remaps existing legacy 'submitted' lender rows.
-    await pool.query(
-      `UPDATE bi_applications
-          SET pgi_application_id=$1,
-              status='sent_to_pgi',
-              carrier_received_at=NOW(),
-              carrier_last_event='application.submitted',
-              carrier_last_event_at=NOW(),
-              carrier_submission_request=$2::jsonb,
-              carrier_submission_response=$3::jsonb,
-              updated_at=NOW()
-        WHERE id=$4`,
-      [pgi_application_id, JSON.stringify(carrierRequestBody), JSON.stringify(submit), appId],
-    );
-    await pool.query(
-      `INSERT INTO bi_activity(application_id, actor_type, event_type, summary, meta)
-       VALUES($1, 'system', 'pgi.submit_succeeded', $2, $3::jsonb)`,
-      [appId, `Submitted to carrier — PGI id ${pgi_application_id}`, JSON.stringify({ request: carrierRequestBody, response: submit })],
-    ).catch(() => {});
-  } catch (e: any) {
-    pgi_error = String(e?.message ?? e);
-    logger.error({ application_id: appId, lender_id: lenderId, err: pgi_error }, "lender_app_pgi_submit_failed");
-    await pool.query(
-      `UPDATE bi_applications
-          SET carrier_submission_request=$1::jsonb,
-              carrier_submission_error=$2,
-              carrier_last_event='application.submit_failed',
-              carrier_last_event_at=NOW(),
-              updated_at=NOW()
-        WHERE id=$3`,
-      [JSON.stringify(carrierRequestBody), pgi_error, appId],
-    ).catch(() => {});
-    await pool.query(
-      `INSERT INTO bi_activity(application_id, actor_type, event_type, summary, meta)
-       VALUES($1, 'system', 'pgi.submit_failed', $2, $3::jsonb)`,
-      [appId, `Carrier submission failed: ${pgi_error}`, JSON.stringify({ request: carrierRequestBody, error: pgi_error })],
-    ).catch(() => {});
-  }
+  // BI_SERVER_BLOCK_v370_DEDUPE_LENDER_SUBMIT_v1
+  const { submitLenderApplicationToCarrier } = await import("../services/lenderCarrierSubmit");
+  const carrierResult = await submitLenderApplicationToCarrier({
+    applicationId: appId,
+    publicId: code,
+    isDemo: Boolean((req as any).lenderIsDemo),
+    guarantor_name: b.guarantor?.name,
+    guarantor_email: b.guarantor?.email || (b.guarantor?.phone ? `${String(b.guarantor.phone).replace(/[^0-9]/g, "")}@no-email.boreal` : ""),
+    business_name: b.company_name,
+    lender_name: lenderCompanyName ?? null,
+    rowSnapshot: carrierRowSnapshot,
+    formData: carrierRowSnapshot.form_data as any,
+    declarations: b.declarations || {},
+  });
   void notifyStaff("new_application", `New BI lender app: ${(b as any).business_name || (b as any).company_name || "Untitled"}`).catch(() => {});
-  return res.status(201).json({ ok: true, id: appId, application_code: code, pgi_application_id, pgi_status, pgi_error });
+  return res.status(201).json({ ok: true, id: appId, application_code: code, pgi_application_id: carrierResult.pgi_application_id, pgi_status: carrierResult.pgi_status, pgi_error: carrierResult.pgi_error });
 });
 
 const lenderDocUpload_v262 = multer({

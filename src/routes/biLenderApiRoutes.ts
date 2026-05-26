@@ -5,7 +5,7 @@ import rateLimit from "express-rate-limit"; // BI_SERVER_BLOCK_v236_RATE_LIMIT_A
 import { notifyStaff } from "../services/staffNotifyService"; // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1
 import { pool } from "../db";
 import { env } from "../platform/env";
-import { pgiScore, pgiSubmit } from "../services/pgiAdapter"; // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1
+import { pgiScore } from "../services/pgiAdapter"; // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1
 // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1 — typed wrappers
 import { sendOtpSafe, verifyOtpSafe, sendEmailOtpSafe, verifyEmailOtpSafe } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
@@ -16,7 +16,6 @@ import { generatePublicId } from "../util/publicId";
 import multer from "multer";
 import { getStorage } from "../lib/storage";
 import { validatePgiSubmissionV2 } from "../lib/validation/pgiFields";
-import { buildCarrierPayloadV2 } from "../services/pgiCarrierMapper";
 
 const router = Router();
 
@@ -274,28 +273,20 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* v236 */ asyn
   } catch {}
   // BI_SERVER_BLOCK_v358_CARRIER_ENVELOPE_FIX_v1
   const carrierRowSnapshot = { id, public_id: publicId, guarantor_name: b.guarantor_name, guarantor_email: b.guarantor_email, business_name: b.business_name, lender_name: lenderCompanyName ?? b.lender_name ?? undefined, country: b.country, naics_code: b.naics_code, formation_date: b.formation_date, loan_amount: b.loan_amount, pgi_limit: b.pgi_limit, annual_revenue: b.annual_revenue, ebitda: b.ebitda, total_debt: b.total_debt, monthly_debt_service: b.monthly_debt_service, collateral_value: b.collateral_value, enterprise_value: b.enterprise_value, q4_date_of_birth: b.q4_date_of_birth, q7_email: b.q7_email || b.guarantor_email, q5_residential_address: b.q5_residential_address, q_ca_id_type: b.q_ca_id_type, q_ca_id_number: b.q_ca_id_number, q17_business_operating_address: b.q17_business_operating_address, q_business_province: b.q_business_province, q_ca_loan_type: b.q_ca_loan_type, form_data: fullFormData, declarations: norm.declarations || {} };
-  const carrierRequestBody: any = buildCarrierPayloadV2(
-    carrierRowSnapshot as any,
-    fullFormData as any,
-    (norm.declarations || {}) as any,
-    {
-      guarantor_name: b.guarantor_name,
-      guarantor_email: b.guarantor_email || b.q7_email,
-      business_name: b.business_name,
-      lender_name: lenderCompanyName ?? b.lender_name ?? null,
-    }
-  );
-  let pgi_application_id: string | null = null;
-  let pgi_status: string | null = null;
-  let pgi_error: string | null = null;
-  try {
-    const submit = lenderIsDemo ? { application_id: `STUB_APP_DEMO_${Date.now()}`, status: "received", message: "Demo submission — carrier call skipped." } : await pgiSubmit(carrierRequestBody);
-    pgi_application_id = submit.application_id;
-    pgi_status = submit.status || "received";
-    await pool.query(`UPDATE bi_applications SET pgi_application_id=$1,status='submitted',carrier_received_at=NOW(),carrier_last_event='application.submitted',carrier_last_event_at=NOW(),carrier_submission_request=$2::jsonb,carrier_submission_response=$3::jsonb,updated_at=NOW() WHERE id=$4`, [pgi_application_id, JSON.stringify(carrierRequestBody), JSON.stringify(submit), id]);
-  } catch (e: any) {
-    pgi_error = String(e?.message ?? e);
-  }
+  // BI_SERVER_BLOCK_v370_DEDUPE_LENDER_SUBMIT_v1
+  const { submitLenderApplicationToCarrier } = await import("../services/lenderCarrierSubmit");
+  const carrierResult = await submitLenderApplicationToCarrier({
+    applicationId: id,
+    publicId,
+    isDemo: lenderIsDemo,
+    guarantor_name: b.guarantor_name,
+    guarantor_email: b.guarantor_email || b.q7_email,
+    business_name: b.business_name,
+    lender_name: lenderCompanyName ?? b.lender_name ?? null,
+    rowSnapshot: carrierRowSnapshot,
+    formData: fullFormData,
+    declarations: norm.declarations || {},
+  });
 
   // BI_SERVER_BLOCK_BI_ROUND7_LENDER_DOCS_v1 -- include
   // application_code in the response so the frontend (BI-Website
@@ -305,12 +296,12 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* v236 */ asyn
     public_id: publicId,
     application_id: id,
     application_code: publicId,
-    status: pgi_application_id ? "submitted" : "ready_for_submission",
+    status: carrierResult.pgi_application_id ? "submitted" : "ready_for_submission",
     score_id: score.score_id,
     score: "score" in score ? score.score : null,
-    pgi_application_id,
-    pgi_status,
-    pgi_error,
+    pgi_application_id: carrierResult.pgi_application_id,
+    pgi_status: carrierResult.pgi_status,
+    pgi_error: carrierResult.pgi_error,
   });
 });
 
