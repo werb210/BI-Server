@@ -40,9 +40,21 @@ const port = Number(env.PORT || "8080");
 console.log("Starting BI-Server bootstrap...");
 
 const server = app.listen(port, "0.0.0.0", () => {
-  startMarketingWorker();
-startSequenceSendWorker();
-  startMailboxHealthRollup();
+  // BI_SERVER_BLOCK_v376_AZURE_HEALTH_AND_BOOT_v1 — wrap each worker start
+  // in its own try/catch. Previously these three calls ran without
+  // isolation and with broken indentation (startSequenceSendWorker at
+  // column 0); if any threw synchronously the listener callback errored
+  // out, which only logs via uncaughtException — leaving a partially-
+  // initialized worker set with no indication of which one failed.
+  for (const [name, fn] of [
+    ["marketingWorker",     startMarketingWorker],
+    ["sequenceSendWorker",  startSequenceSendWorker],
+    ["mailboxHealthRollup", startMailboxHealthRollup],
+  ] as const) {
+    try { fn(); } catch (err) {
+      logger.error({ worker: name, err: err instanceof Error ? err.message : String(err) }, "BI worker start failed (non-blocking)");
+    }
+  }
   logger.info({ port }, "BI server running");
   // eslint-disable-next-line no-console
   console.log(`[BI_BOOT_FIX_v63] BI server listening on ${port}`);

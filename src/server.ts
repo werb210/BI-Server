@@ -207,6 +207,26 @@ app.use(compression());
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
 app.use("/health", biCors, healthRoutes); // BI_SERVER_BLOCK_v222_CORS_AZURESTATICAPPS_AND_HEALTH_v1
 
+// BI_SERVER_BLOCK_v376_AZURE_HEALTH_AND_BOOT_v1 — Azure App Service Linux's
+// default Health Check probe path is "/" when the operator enables Health
+// check in App Service > Configuration > General Settings but leaves the
+// path field on default. Without this handler GET / returns 404 from
+// Express's catch-all, every Azure probe fails, the instance is marked
+// Degraded, and after 230s with no Healthy instance Azure stops the
+// container with "ContainerTimeout — container did not start within
+// expected time limit of 230s". This handler returns 200 immediately
+// with minimal payload and the same build-tag info as /health.
+app.get("/", (_req, res) => {
+  res.status(200).json({
+    status: "ok",
+    service: "bi-server",
+    build: process.env.BUILD_TAG || "unknown",
+    sha: (process.env.COMMIT_SHA || "unknown").slice(0, 8),
+    uptime_s: Math.round(process.uptime()),
+    ts: new Date().toISOString(),
+  });
+});
+
 app.use(metricsRoutes);
 if (env.NODE_ENV !== "production") app.use(morgan("dev"));
 
@@ -478,7 +498,18 @@ async function bootstrapInner() {
   }
 
   try {
-    await runMigrations(env.DATABASE_URL!);
+    // BI_SERVER_BLOCK_v376_AZURE_HEALTH_AND_BOOT_v1 — env.DATABASE_URL is
+    // optional in env.ts (soft validation per v62). The previous non-null
+    // assertion (env.DATABASE_URL!) threw a TypeError when it was actually
+    // unset, which surfaced in logs as the opaque "BI database
+    // initialization failed (non-blocking)" — operator could not tell from
+    // that message whether it was a missing env var, a network issue, or
+    // a SQL error. Replace with an explicit guard.
+    if (!env.DATABASE_URL) {
+      logger.error("BI DATABASE_URL is unset — skipping migrations. Set it in Azure App Service > Configuration > Application Settings.");
+      return;
+    }
+    await runMigrations(env.DATABASE_URL);
 
     // v344: parallel DDL — these are all IF NOT EXISTS / idempotent.
     // Cuts cold-start from ~20min to ~30s on Azure small DB plans.
@@ -553,6 +584,12 @@ async function bootstrapInner() {
       ["apolloSync",       startApolloSyncJob],
       ["docReminder",      startDocReminderJob],
       ["docsReminderCron", startDocsReminderCronJob],
+      // BI_SERVER_BLOCK_v376_AZURE_HEALTH_AND_BOOT_v1 — startCarrierHealthJob
+      // was imported on line 74 but never started. getCarrierHealth() reads
+      // state that runCarrierHealthTick() populates, so without the job
+      // running the carrier-health dashboard endpoint always reflected a
+      // stale/initial state (no submissions tracked).
+      ["carrierHealth",    startCarrierHealthJob],
     ] as const) {
       try { fn(); } catch (e) {
         logger.error({ job: name, err: e instanceof Error ? e.message : String(e) }, "BI job start failed (non-blocking)");
