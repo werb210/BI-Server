@@ -151,11 +151,13 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
 
   const payload = buildBIApplicationFromRow(app);
 
-  // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — assemble OCR'd document bundle.
-  const documentsText = await assembleDocumentsTextBundle(applicationId);
-  if (documentsText) {
-    (payload as any).documents_text = documentsText;
-  }
+  // BI_SERVER_BLOCK_v373_SECOND_ACCEPT_AND_TEXT_BUNDLE_v1
+  // The OCR text bundle is no longer sent to the carrier. v359's
+  // pgiUploadDocument sends binary multipart files which is what the v2
+  // carrier spec expects. Sending the same content twice in two shapes
+  // was redundant and risked the carrier reconciling them incorrectly.
+  // The assembleDocumentsTextBundle function is still useful for internal
+  // CRM/staff review — kept the import but no longer attaches to payload.
 
   // BI_SERVER_BLOCK_v270_ORCHESTRATOR_RACE_CLAIM_v1
   // Call the carrier OUTSIDE any lock. Submission_locked=TRUE from the

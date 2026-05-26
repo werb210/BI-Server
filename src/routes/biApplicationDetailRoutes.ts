@@ -137,12 +137,58 @@ async function acceptDocumentLogic(req: Request, res: Response, idParam: string,
         );
       }
 
+      // BI_SERVER_BLOCK_v373_SECOND_ACCEPT_AND_TEXT_BUNDLE_v1
+      // Mirrors the v359 backfill from biDocumentRoutes.ts:258 so this
+      // duplicate handler behaves identically. (See Bug #22 in Test #1.)
       if (doc.source_type === "public") {
         const { submitApplicationToPGI } = await import("../services/biPgiSubmissionService");
         try {
           const result = await submitApplicationToPGI(appId);
           autoSubmittedToPgi = true;
           finalStatus = "submitted";
+
+          // v359 backfill — flush previously-uploaded docs to PGI now that
+          // pgi_application_id exists.
+          try {
+            const { pgiUploadDocument } = await import("../services/pgiAdapter");
+            const pendingDocs = await pool.query<{
+              id: string; doc_type: string; original_filename: string;
+              mime_type: string; storage_key: string;
+            }>(
+              `SELECT id, doc_type, original_filename, mime_type, storage_key
+                 FROM bi_documents
+                WHERE application_id = $1
+                  AND review_status = 'accepted'
+                  AND pgi_document_id IS NULL
+                  AND purged_at IS NULL
+                ORDER BY uploaded_at`,
+              [appId]
+            );
+            if (pendingDocs.rows.length > 0) {
+              const { getStorage } = await import("../lib/storage");
+              const store = getStorage();
+              const ALLOWED = ["loan_agreement","profit_loss","balance_sheet","ar_aging","ap_aging","founder_cv","financial_forecast"];
+              for (const d of pendingDocs.rows) {
+                if (!ALLOWED.includes(d.doc_type)) continue;
+                try {
+                  const blob = await store.get(d.storage_key);
+                  if (!blob?.buffer) throw new Error("blob not found");
+                  const fwd = await pgiUploadDocument({
+                    pgiApplicationId: result.externalId,
+                    docType: d.doc_type as any,
+                    filename: d.original_filename,
+                    buffer: blob.buffer,
+                    mimeType: d.mime_type || blob.contentType || "application/octet-stream",
+                  });
+                  await pool.query(`UPDATE bi_documents SET pgi_document_id = $1, forwarded_to_carrier_at = NOW() WHERE id = $2`, [fwd.document_id, d.id]);
+                } catch (e) {
+                  console.warn("[v373] backfill doc forward failed", { doc_id: d.id, error: (e as Error).message });
+                }
+              }
+            }
+          } catch (e) {
+            console.warn("[v373] post-submit doc flush failed", { app_id: appId, error: (e as Error).message });
+          }
           await pool.query(
             `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
                   VALUES($1, 'system', $2, 'auto_submitted_to_pgi', $3, $4::jsonb)`,
