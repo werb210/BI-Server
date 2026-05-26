@@ -581,9 +581,22 @@ router.post("/applications/:publicId/documents", publicDocUpload_v66.array("file
   const created: Array<{ id: string; doc_type: string; filename: string }> = [];
 
   for (const [idx, file] of files.entries()) {
-    const docType = typeof docTypes[idx] === "string" && docTypes[idx].trim()
-      ? docTypes[idx].trim()
-      : "other";
+    // BI_SERVER_BLOCK_v368_PUBLIC_DOC_ALLOWLIST_v1
+    // Same 7-value allowlist as the lender API path (v354). Anything else 400s.
+    const ALLOWED_PUBLIC_DOC_TYPES_v368 = new Set([
+      "loan_agreement", "profit_loss", "balance_sheet", "ar_aging", "ap_aging",
+      "founder_cv", "financial_forecast",
+    ]);
+    const docTypeRaw = typeof docTypes[idx] === "string" ? docTypes[idx].trim() : "";
+    if (!docTypeRaw || !ALLOWED_PUBLIC_DOC_TYPES_v368.has(docTypeRaw)) {
+      return res.status(400).json({
+        error: "invalid_doc_type",
+        invalid_value: docTypeRaw || null,
+        file_index: idx,
+        allowed: Array.from(ALLOWED_PUBLIC_DOC_TYPES_v368),
+      });
+    }
+    const docType = docTypeRaw;
     let put;
     try {
       put = await store.put({
