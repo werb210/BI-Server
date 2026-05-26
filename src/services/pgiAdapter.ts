@@ -149,6 +149,44 @@ export async function getPGIQuote(quoteId: string) { return pgiQuote(quoteId); }
 // BI_SERVER_BLOCK_v349_PGI_ADAPTER_V2_v1
 import type { CarrierPayloadV2 } from "./pgiCarrierMapper";
 
+// BI_SERVER_BLOCK_v359_PGI_DOC_FORWARDING_v1
+// Multipart upload to the carrier. Each doc_type goes in its own request
+// (the carrier's spec doesn't accept array uploads in one call). Caller
+// is responsible for serializing the 5+2 documents into 5+2 calls.
+export type PgiDocumentUploadResponse = { document_id: string; doc_type: string; received_at: string };
+
+export async function pgiUploadDocument(args: {
+  pgiApplicationId: string;
+  docType: "loan_agreement" | "profit_loss" | "balance_sheet" | "ar_aging" | "ap_aging" | "founder_cv" | "financial_forecast";
+  filename: string;
+  buffer: Buffer;
+  mimeType: string;
+}): Promise<PgiDocumentUploadResponse> {
+  if (STUB) {
+    return {
+      document_id: `STUB_DOC_${args.docType}_${Date.now()}`,
+      doc_type: args.docType,
+      received_at: new Date().toISOString(),
+    };
+  }
+  const url = `${PGI_BASE}/api/v2/applications/${encodeURIComponent(args.pgiApplicationId)}/documents/`;
+  const fd = new FormData();
+  fd.append("doc_type", args.docType);
+  // node 18+ has native FormData + Blob. Buffer wraps to Blob.
+  fd.append("file", new Blob([new Uint8Array(args.buffer)], { type: args.mimeType }), args.filename);
+  const r = await fetchWithRetryAfter(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.PGI_API_KEY}` }, // NO Content-Type — FormData sets boundary
+    body: fd as any,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    logger.error({ status: r.status, body: data, pgi_app: args.pgiApplicationId, doc_type: args.docType }, "pgi_doc_upload_failed");
+    throw new Error(`PGI doc upload failed (${args.docType}): ${r.status}`);
+  }
+  return data as PgiDocumentUploadResponse;
+}
+
 export class PgiCarrierValidationError extends Error {
   readonly errors: Record<string, string>;
   constructor(errors: Record<string, string>) {

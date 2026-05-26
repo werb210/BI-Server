@@ -250,6 +250,47 @@ router.post("/:id/accept", requireAuth, requireStaffOrAdmin, async (req, res) =>
         const result = await submitApplicationToPGI(doc.application_id);
         autoSubmittedToPgi = true;
         finalStatus = "submitted";
+        // BI_SERVER_BLOCK_v359_PGI_DOC_FORWARDING_v1
+        // App just landed at the carrier — flush any docs that were
+        // uploaded BEFORE the submit (they couldn't be forwarded yet
+        // because pgi_application_id didn't exist).
+        try {
+          const { pgiUploadDocument } = await import("../services/pgiAdapter");
+          const pendingDocs = await pool.query<{ id: string; doc_type: string; original_filename: string; mime_type: string; blob_url: string; storage_key: string }>(
+            `SELECT id, doc_type, original_filename, mime_type, blob_url, storage_key
+               FROM bi_documents
+              WHERE application_id = $1
+                AND review_status = 'accepted'
+                AND pgi_document_id IS NULL
+                AND purged_at IS NULL
+              ORDER BY uploaded_at`,
+            [doc.application_id]
+          );
+          if (pendingDocs.rows.length > 0) {
+            const { getStorage } = await import("../lib/storage");
+            const store = getStorage();
+            for (const d of pendingDocs.rows) {
+              if (!["loan_agreement", "profit_loss", "balance_sheet", "ar_aging", "ap_aging", "founder_cv", "financial_forecast"].includes(d.doc_type)) continue;
+              try {
+                const blob = await store.get(d.storage_key);
+                if (!blob?.buffer) throw new Error("blob not found");
+                const fwd = await pgiUploadDocument({
+                  pgiApplicationId: result.externalId,
+                  docType: d.doc_type as any,
+                  filename: d.original_filename,
+                  buffer: blob.buffer,
+                  mimeType: d.mime_type || blob.contentType || "application/octet-stream",
+                });
+                await pool.query(`UPDATE bi_documents SET pgi_document_id = $1, forwarded_to_carrier_at = NOW() WHERE id = $2`, [fwd.document_id, d.id]);
+              } catch (e) {
+                console.warn("[v359] backfill doc forward failed", { doc_id: d.id, error: (e as Error).message });
+                // Non-fatal — staff can re-trigger via the manual re-submit endpoint later.
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("[v359] post-submit doc flush failed", { app_id: doc.application_id, error: (e as Error).message });
+        }
         await pool.query(
           `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
            VALUES($1, 'system', $2, 'auto_submitted_to_pgi', $3, $4::jsonb)`,

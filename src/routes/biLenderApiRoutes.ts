@@ -717,6 +717,36 @@ router.post(
         filename: file.originalname,
       });
 
+      // BI_SERVER_BLOCK_v359_PGI_DOC_FORWARDING_v1
+      // Forward to PGI if the application has already been submitted to
+      // the carrier (pgi_application_id is set). If not, defer — the docs
+      // will be flushed when staff or the auto-submit path posts the app
+      // to PGI. Tracked via bi_documents.pgi_document_id (added below).
+      try {
+        const appRow = await pool.query<{ pgi_application_id: string | null }>(
+          `SELECT pgi_application_id FROM bi_applications WHERE id = $1 LIMIT 1`,
+          [app.id]
+        );
+        const pgiAppId = appRow.rows[0]?.pgi_application_id ?? null;
+        if (pgiAppId && ["loan_agreement", "profit_loss", "balance_sheet", "ar_aging", "ap_aging", "founder_cv", "financial_forecast"].includes(docType)) {
+          const { pgiUploadDocument } = await import("../services/pgiAdapter");
+          const fwdResult = await pgiUploadDocument({
+            pgiApplicationId: pgiAppId,
+            docType: docType as any,
+            filename: file.originalname,
+            buffer: file.buffer,
+            mimeType: file.mimetype,
+          });
+          await pool.query(
+            `UPDATE bi_documents SET pgi_document_id = $1, forwarded_to_carrier_at = NOW() WHERE id = $2`,
+            [fwdResult.document_id, inserted.rows[0].id]
+          ).catch((e: any) => console.warn("[v359] update bi_documents.pgi_document_id failed", { id: inserted.rows[0].id, e: e?.message }));
+        }
+      } catch (err) {
+        console.warn("[v359] pgi_doc_forward_failed", { app_id: app.id, doc_type: docType, error: (err as Error).message });
+        // Non-fatal — doc is already in our storage. Staff can manually re-forward later.
+      }
+
       await pool.query(
         `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
          VALUES($1, 'lender', 'document_uploaded', $2)`,
