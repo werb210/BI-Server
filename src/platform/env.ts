@@ -49,6 +49,10 @@ const envSchema = z.object({
   APOLLO_SEQUENCE_FILTER_ONLY: z.string().optional(),
   MAYA_URL: z.string().optional(),
   MAYA_SERVICE_TOKEN: z.string().optional(),
+  // BI_SERVER_BLOCK_v372_ESCALATION_PHONE_ENV_v1
+  // E.164 phone number that receives "applicant didn't upload docs after
+  // 10 reminders" notifications. Optional — escalation just no-ops if unset.
+  BI_ESCALATION_PHONE: z.string().regex(/^\+[1-9]\d{1,14}$/, "must be E.164").optional(),
 });
 
 type Env = z.infer<typeof envSchema>;
