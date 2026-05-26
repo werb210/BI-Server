@@ -139,10 +139,20 @@ function normalizeLenderBody(input: any): { flat: Record<string, any>; declarati
 router.post("/lender/applications", authLender, lenderRateLimit, /* v236 */ async (req: any, res) => {
   const norm = normalizeLenderBody(req.body ?? {});
   const b = norm.flat;
+  // BI_SERVER_BLOCK_v362_LEGACY_SUNSET_AND_STUB_GUARD_v1
+  // Legacy flat shape is no longer accepted. v354 promised it would still
+  // work with a Deprecation header, but the v2 validator requires 11
+  // declarations the legacy shape can't provide — every legacy request
+  // 400'd anyway. Return 410 Gone with a clear migration path instead
+  // of leaving callers guessing why validation fails.
   if (norm.shape === "legacy") {
-    res.setHeader("Deprecation", "true");
-    res.setHeader("Sunset", "2026-12-31");
-    res.setHeader("Link", '<https://www.boreal.insure/lender/api>; rel="successor-version"');
+    return res.status(410).json({
+      error: "legacy_shape_removed",
+      message: "The flat v1 payload shape is no longer accepted. Migrate to the nested v2 shape.",
+      docs: "https://www.boreal.insure/lender/api",
+      openapi: "https://bi-server-cse0apamgkheb9d5.canadacentral-01.azurewebsites.net/api/v1/lender/openapi.json",
+      since: "2026-05-26",
+    });
   }
   const v2Envelope = { form_data: {
     q0_country: b.q0_country || (b.country === "US" ? "United States" : "Canada"),
@@ -161,7 +171,7 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* v236 */ asyn
     ...(norm.declarations || {}),
   } };
   const v = validatePgiSubmissionV2(v2Envelope);
-  if (!v.ok) return res.status(400).json({ error: "validation_failed", issues: v.issues, shape: norm.shape, hint: norm.shape === "legacy" ? "Your payload is in the deprecated flat shape. See https://www.boreal.insure/lender/api for the v2 schema." : undefined });
+  if (!v.ok) return res.status(400).json({ error: "validation_failed", issues: v.issues, shape: norm.shape, hint: undefined });
 
   const score = await pgiScore({
     country: b.country, naics_code: b.naics_code,

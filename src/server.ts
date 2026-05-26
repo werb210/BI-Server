@@ -362,6 +362,30 @@ export async function bootstrap() {
 }
 
 async function bootstrapInner() {
+  // BI_SERVER_BLOCK_v362_LEGACY_SUNSET_AND_STUB_GUARD_v1
+  // Hard boot guard. Production must have PGI_API_KEY + PGI_BASE_URL set
+  // AND USE_PGI_STUB must be explicitly false. Fail loudly rather than
+  // run for hours with stub-mode silently swallowing submits.
+  if (process.env.NODE_ENV === "production") {
+    const stubRaw = process.env.USE_PGI_STUB;
+    const stubIsOn = stubRaw === "true" || stubRaw === "1";
+    const stubIsExplicitlyOff = stubRaw === "false" || stubRaw === "0";
+    if (stubIsOn) {
+      // eslint-disable-next-line no-console
+      console.error("[v362] FATAL: USE_PGI_STUB=true in production. Set USE_PGI_STUB=false explicitly.");
+      process.exit(1);
+    }
+    if (!stubIsExplicitlyOff) {
+      // eslint-disable-next-line no-console
+      console.error("[v362] FATAL: USE_PGI_STUB unset in production. Set USE_PGI_STUB=false explicitly (or =true if intentionally stubbing).");
+      process.exit(1);
+    }
+    if (!process.env.PGI_API_KEY || !process.env.PGI_BASE_URL) {
+      // eslint-disable-next-line no-console
+      console.error("[v362] FATAL: PGI_API_KEY and PGI_BASE_URL required when USE_PGI_STUB=false in production.");
+      process.exit(1);
+    }
+  }
   // BI_BOOT_FIX_v61 — fast DB probe. If the DB isn't reachable in 5s, skip
   // migrations entirely and log loudly. The HTTP server still starts so
   // /health stays answering 200 from healthRoutes (which doesn't touch DB).

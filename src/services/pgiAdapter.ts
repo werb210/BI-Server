@@ -25,7 +25,17 @@ async function fetchWithRetryAfter(url: string, init: RequestInit): Promise<Resp
 }
 
 const PGI_BASE = env.PGI_BASE_URL || "https://api.pgicover.com";
-const STUB = String(env.USE_PGI_STUB || "true").toLowerCase() === "true";
+// BI_SERVER_BLOCK_v362_LEGACY_SUNSET_AND_STUB_GUARD_v1
+// Production must NEVER default to STUB mode. If USE_PGI_STUB is unset:
+//   - NODE_ENV=production → STUB=false (real PGI calls)
+//   - else                → STUB=true (safe default for local + CI)
+// Explicit setting always wins.
+const STUB = (() => {
+  const raw = process.env.USE_PGI_STUB;
+  if (raw === "true" || raw === "1") return true;
+  if (raw === "false" || raw === "0") return false;
+  return process.env.NODE_ENV !== "production";
+})();
 
 export type PgiScoreRequest = {
   country: "CA" | "US";
