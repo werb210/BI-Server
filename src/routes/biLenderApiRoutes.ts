@@ -15,6 +15,8 @@ import { generatePublicId } from "../util/publicId";
 // POST /lender/applications/:code/documents endpoint below.
 import multer from "multer";
 import { getStorage } from "../lib/storage";
+import { validatePgiSubmissionV2 } from "../lib/validation/pgiFields";
+import { buildCarrierPayloadV2 } from "../services/pgiCarrierMapper";
 
 const router = Router();
 
@@ -95,13 +97,71 @@ async function authLender(req: any, res: any, next: any) {
   next();
 }
 
-router.post("/lender/applications", authLender, lenderRateLimit, /* BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1 */ async (req: any, res) => {
-  const b = req.body ?? {};
-  const scoreReq = ["country","naics_code","formation_date","loan_amount","pgi_limit","annual_revenue","ebitda","total_debt","monthly_debt_service","collateral_value","enterprise_value"];
-  const missing = scoreReq.filter((k) => b[k] === undefined || b[k] === "");
-  if (missing.length) return res.status(400).json({ error: "missing_fields", fields: missing });
-  if (b.country !== "CA") return res.status(400).json({ error: "country_unsupported", supported: ["CA"] });
-  if (Number(b.ebitda) < EBITDA_MIN) return res.status(400).json({ error: "ebitda_below_min", min: EBITDA_MIN });
+// BI_SERVER_BLOCK_v354_LENDER_API_CARRIER_ALIGNMENT_v1
+function normalizeLenderBody(input: any): { flat: Record<string, any>; declarations: Record<string, any>; co_guarantors: any[]; shape: "legacy" | "v2" } {
+  if (!input || typeof input !== "object") return { flat: {}, declarations: {}, co_guarantors: [], shape: "legacy" };
+  if (input.guarantor && typeof input.guarantor === "object") {
+    const g = input.guarantor || {};
+    const biz = input.business || {};
+    const loan = input.loan || {};
+    const fin = input.financials || {};
+    const flat: Record<string, any> = {
+      country: biz.country || "CA",
+      q0_country: biz.country === "US" ? "United States" : "Canada",
+      q2_full_name: g.name ?? "", guarantor_name: g.name ?? "",
+      q4_date_of_birth: g.dob ?? "",
+      q7_email: g.email ?? "", guarantor_email: g.email ?? "",
+      q5_residential_address: g.address ?? "",
+      q_ca_id_type: g.q_ca_id_type ?? "", q_ca_id_number: g.q_ca_id_number ?? "",
+      q15_business_legal_name: input.company_name ?? input.business_name ?? "",
+      business_name: input.company_name ?? input.business_name ?? "",
+      q17_business_operating_address: biz.address ?? "", q_business_province: biz.province ?? "",
+      q25_naics_code: biz.naics ?? "", naics_code: biz.naics ?? "",
+      q26_formation_date: biz.start_date ?? biz.formation_date ?? "", formation_date: biz.start_date ?? biz.formation_date ?? "",
+      q41_loan_amount: Number(loan.amount) || 0, loan_amount: Number(loan.amount) || 0,
+      q42_pgi_limit: Number(loan.pgi_limit) || 0, pgi_limit: Number(loan.pgi_limit) || 0,
+      q_ca_loan_type: loan.q_ca_loan_type ?? "",
+      annual_revenue: Number(fin.revenue_last_year ?? fin.annual_revenue) || 0,
+      ebitda: Number(fin.ebitda_last_year ?? fin.ebitda) || 0,
+      total_debt: Number(fin.total_debt) || 0,
+      monthly_debt_service: Number(fin.monthly_payments ?? fin.monthly_debt_service) || 0,
+      collateral_value: Number(fin.collateral_value) || 0,
+      enterprise_value: Number(fin.enterprise_value) || 0,
+      lender_name: input.lender_name ?? null, loan_funding_date: loan.loan_funding_date ?? null,
+      policy_start_date: loan.policy_start_date ?? null, use_of_proceeds: loan.use_of_proceeds ?? null,
+      guarantor_phone: g.phone ?? "",
+    };
+    return { flat, declarations: input.declarations || {}, co_guarantors: Array.isArray(input.co_guarantors) ? input.co_guarantors : [], shape: "v2" };
+  }
+  return { flat: { ...input }, declarations: {}, co_guarantors: [], shape: "legacy" };
+}
+
+router.post("/lender/applications", authLender, lenderRateLimit, /* v236 */ async (req: any, res) => {
+  const norm = normalizeLenderBody(req.body ?? {});
+  const b = norm.flat;
+  if (norm.shape === "legacy") {
+    res.setHeader("Deprecation", "true");
+    res.setHeader("Sunset", "2026-12-31");
+    res.setHeader("Link", '<https://www.boreal.insure/lender/api>; rel="successor-version"');
+  }
+  const v2Envelope = { form_data: {
+    q0_country: b.q0_country || (b.country === "US" ? "United States" : "Canada"),
+    q2_full_name: b.q2_full_name || b.guarantor_name,
+    q4_date_of_birth: b.q4_date_of_birth, q7_email: b.q7_email || b.guarantor_email,
+    q5_residential_address: b.q5_residential_address,
+    q_ca_id_type: b.q_ca_id_type, q_ca_id_number: b.q_ca_id_number,
+    q15_business_legal_name: b.q15_business_legal_name || b.business_name,
+    q17_business_operating_address: b.q17_business_operating_address,
+    q_business_province: b.q_business_province,
+    q25_naics_code: b.q25_naics_code || b.naics_code,
+    q26_formation_date: b.q26_formation_date || b.formation_date,
+    q_ca_loan_type: b.q_ca_loan_type,
+    q41_loan_amount: Number(b.q41_loan_amount || b.loan_amount),
+    q42_pgi_limit: Number(b.q42_pgi_limit || b.pgi_limit),
+    ...(norm.declarations || {}),
+  } };
+  const v = validatePgiSubmissionV2(v2Envelope);
+  if (!v.ok) return res.status(400).json({ error: "validation_failed", issues: v.issues, shape: norm.shape, hint: norm.shape === "legacy" ? "Your payload is in the deprecated flat shape. See https://www.boreal.insure/lender/api for the v2 schema." : undefined });
 
   const score = await pgiScore({
     country: b.country, naics_code: b.naics_code,
@@ -132,6 +192,10 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* BI_SERVER_BL
   // (2) Dual-populate `created_by_lender_id` (modern FK, used by
   //     /lender/applications/mine) AND `lender_id` (legacy, used by the
   //     existing /lender/applications GET). req.lenderId fills both.
+  const derivedBankruptcy = (norm.declarations?.section_1_2 === "yes");
+  const derivedInsolvency = (norm.declarations?.section_2_b === "yes");
+  const derivedJudgment = (norm.declarations?.section_2_d === "yes");
+  const fullFormData = { ...b, declarations: norm.declarations || {}, co_guarantors: norm.co_guarantors || [] };
   await pool.query(`INSERT INTO bi_applications
        (id, public_id, status, source, source_type,
         created_by_actor, created_by_lender_id, created_by_lender_user_id, lender_id,
@@ -151,10 +215,24 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* BI_SERVER_BL
      b.country, b.naics_code, b.formation_date, b.loan_amount, b.pgi_limit,
      b.annual_revenue, b.ebitda, b.total_debt, b.monthly_debt_service,
      b.collateral_value, b.enterprise_value,
-     Boolean(b.bankruptcy_history), Boolean(b.insolvency_history), Boolean(b.judgment_history),
+     derivedBankruptcy, derivedInsolvency, derivedJudgment,
      score.score_id, ("score" in score) ? score.score : null, score.decision,
-     b,
+     fullFormData,
      req.lenderUserId ?? null]);
+
+  if (norm.co_guarantors && norm.co_guarantors.length > 0) {
+    for (const cg of norm.co_guarantors) {
+      try {
+        await pool.query(`INSERT INTO bi_co_guarantors
+             (application_id, first_name, last_name, email, date_of_birth, phone,
+              address, city, province, postal_code, relationship)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [id, cg.first_name || "", cg.last_name || "", cg.email || null, cg.date_of_birth || null, cg.phone || null, cg.address || null, cg.city || null, cg.province || null, cg.postal_code || null, cg.relationship || "Guarantor"]);
+      } catch (err) {
+        console.warn("[v354] co_guarantor insert failed", { application_id: id, error: (err as Error).message });
+      }
+    }
+  }
 
   // BI_SERVER_BLOCK_BI_ROUND7_LENDER_DOCS_v1
   // Populate application_code so the row can be looked up by code
@@ -183,7 +261,8 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* BI_SERVER_BL
     lenderCompanyName = (lr.rows[0]?.company_name as string | undefined) || null;
     lenderIsDemo = lr.rows[0]?.is_demo === true;
   } catch {}
-  const carrierRequestBody = { guarantor_name: b.guarantor_name, guarantor_email: b.guarantor_email, business_name: b.business_name, lender_name: lenderCompanyName ?? b.lender_name ?? undefined, form_data: { country: b.country, naics_code: b.naics_code, formation_date: b.formation_date, loan_amount: Number(b.loan_amount), pgi_limit: Number(b.pgi_limit), annual_revenue: Number(b.annual_revenue), ebitda: Number(b.ebitda), total_debt: Number(b.total_debt), monthly_debt_service: Number(b.monthly_debt_service), collateral_value: Number(b.collateral_value), enterprise_value: Number(b.enterprise_value), bankruptcy_history: Boolean(b.bankruptcy_history), insolvency_history: Boolean(b.insolvency_history), judgment_history: Boolean(b.judgment_history), }, };
+  const carrierRowSnapshot = { id, public_id: publicId, guarantor_name: b.guarantor_name, guarantor_email: b.guarantor_email, business_name: b.business_name, lender_name: lenderCompanyName ?? b.lender_name ?? undefined, country: b.country, naics_code: b.naics_code, formation_date: b.formation_date, loan_amount: b.loan_amount, pgi_limit: b.pgi_limit, annual_revenue: b.annual_revenue, ebitda: b.ebitda, total_debt: b.total_debt, monthly_debt_service: b.monthly_debt_service, collateral_value: b.collateral_value, enterprise_value: b.enterprise_value, q4_date_of_birth: b.q4_date_of_birth, q7_email: b.q7_email || b.guarantor_email, q5_residential_address: b.q5_residential_address, q_ca_id_type: b.q_ca_id_type, q_ca_id_number: b.q_ca_id_number, q17_business_operating_address: b.q17_business_operating_address, q_business_province: b.q_business_province, q_ca_loan_type: b.q_ca_loan_type, form_data: fullFormData, declarations: norm.declarations || {} };
+  const carrierRequestBody: any = buildCarrierPayloadV2(carrierRowSnapshot as any, fullFormData as any, (norm.declarations || {}) as any);
   let pgi_application_id: string | null = null;
   let pgi_status: string | null = null;
   let pgi_error: string | null = null;
@@ -534,6 +613,11 @@ router.post(
   lenderRateLimit,
   lenderDocUpload.array("files"),
   async (req: any, res: any) => {
+    const ALLOWED_DOC_TYPES = new Set(["loan_agreement", "profit_loss", "balance_sheet", "ar_aging", "ap_aging", "founder_cv", "financial_forecast"]);
+    const docTypesRaw = Array.isArray(req.body?.doc_types) ? req.body.doc_types : req.body?.doc_types ? [req.body.doc_types] : [];
+    const invalidDocType = docTypesRaw.find((t: string) => !ALLOWED_DOC_TYPES.has(String(t).trim()));
+    if (invalidDocType) return res.status(400).json({ error: "invalid_doc_type", invalid_value: invalidDocType, allowed: Array.from(ALLOWED_DOC_TYPES) });
+
     const code = String(req.params.code ?? "").trim();
     if (!code) return res.status(400).json({ error: "missing_code" });
 
@@ -565,10 +649,10 @@ router.post(
     const files = (req.files as Express.Multer.File[]) ?? [];
     if (files.length === 0) return res.status(400).json({ error: "no_files" });
 
-    const docTypesRaw = req.body?.doc_types;
-    const docTypes = Array.isArray(docTypesRaw)
+    const rawDocTypesForFiles = req.body?.doc_types;
+    const docTypes = Array.isArray(rawDocTypesForFiles)
       ? docTypesRaw
-      : typeof docTypesRaw === "string" ? [docTypesRaw] : [];
+      : typeof rawDocTypesForFiles === "string" ? [rawDocTypesForFiles] : [];
 
     const store = getStorage();
     const created: Array<{ id: string; doc_type: string; filename: string }> = [];
