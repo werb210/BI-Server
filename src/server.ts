@@ -362,28 +362,42 @@ export async function bootstrap() {
 }
 
 async function bootstrapInner() {
-  // BI_SERVER_BLOCK_v362_LEGACY_SUNSET_AND_STUB_GUARD_v1
-  // Hard boot guard. Production must have PGI_API_KEY + PGI_BASE_URL set
-  // AND USE_PGI_STUB must be explicitly false. Fail loudly rather than
-  // run for hours with stub-mode silently swallowing submits.
+  // BI_SERVER_BLOCK_v375_V362_SOFTEN_v1 — pre-fix this block exited on
+  // USE_PGI_STUB=true in production, but during launch testing the
+  // operator deliberately holds USE_PGI_STUB=true so the server returns
+  // stub PGI responses (no real carrier traffic). Azure was restarting
+  // the container every ~10-20 min, OTP intermittently went "Load
+  // failed" because requests hit a dead bi-server between restarts.
+  // Post-fix matrix:
+  //   USE_PGI_STUB=true   in prod → WARN, boot continues (test mode)
+  //   USE_PGI_STUB unset  in prod → WARN, boot continues (assume stub)
+  //   USE_PGI_STUB=false  in prod, missing PGI creds → FATAL, exit
+  //   USE_PGI_STUB=false  in prod, creds present → boot continues (real PGI)
   if (process.env.NODE_ENV === "production") {
-    const stubRaw = process.env.USE_PGI_STUB;
-    const stubIsOn = stubRaw === "true" || stubRaw === "1";
-    const stubIsExplicitlyOff = stubRaw === "false" || stubRaw === "0";
+    const stubIsOn = process.env.USE_PGI_STUB === "true";
+    const stubIsExplicitlyOff = process.env.USE_PGI_STUB === "false";
     if (stubIsOn) {
       // eslint-disable-next-line no-console
-      console.error("[v362] FATAL: USE_PGI_STUB=true in production. Set USE_PGI_STUB=false explicitly.");
-      process.exit(1);
-    }
-    if (!stubIsExplicitlyOff) {
+      console.warn(
+        "[v375] WARN: USE_PGI_STUB=true in production — stub responses active. " +
+        "OK for launch testing; set USE_PGI_STUB=false when ready to use the real PGI carrier.",
+      );
+    } else if (!stubIsExplicitlyOff) {
       // eslint-disable-next-line no-console
-      console.error("[v362] FATAL: USE_PGI_STUB unset in production. Set USE_PGI_STUB=false explicitly (or =true if intentionally stubbing).");
-      process.exit(1);
-    }
-    if (!process.env.PGI_API_KEY || !process.env.PGI_BASE_URL) {
-      // eslint-disable-next-line no-console
-      console.error("[v362] FATAL: PGI_API_KEY and PGI_BASE_URL required when USE_PGI_STUB=false in production.");
-      process.exit(1);
+      console.warn(
+        "[v375] WARN: USE_PGI_STUB is unset in production. Treating as stub mode for safety. " +
+        "Set USE_PGI_STUB=true or USE_PGI_STUB=false explicitly to silence this warning.",
+      );
+    } else {
+      // USE_PGI_STUB=false → real PGI carrier required. Credentials are mandatory.
+      if (!process.env.PGI_API_KEY || !process.env.PGI_BASE_URL) {
+        // eslint-disable-next-line no-console
+        console.error(
+          "[v375] FATAL: USE_PGI_STUB=false but PGI_API_KEY and/or PGI_BASE_URL is missing. " +
+          "Either set the carrier credentials, or set USE_PGI_STUB=true to use stub responses.",
+        );
+        process.exit(1);
+      }
     }
   }
   // BI_BOOT_FIX_v61 — fast DB probe. If the DB isn't reachable in 5s, skip
