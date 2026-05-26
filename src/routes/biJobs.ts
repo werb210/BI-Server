@@ -59,12 +59,20 @@ async function runDocsReminderCronTickInner(): Promise<{ scanned: number; sent: 
   // they're status=rejected, on the assumption that the
   // rejection-triggered SMS (see biDocumentRoutes.ts line 291) is its
   // own communication channel.
+  // BI_SERVER_BLOCK_v361_CRON_COLUMN_FIX_v1
+  // (1) Replace `pipeline_stage` (non-existent column) with `a.stage`
+  //     (the actual enum column from master schema).
+  // (2) Broaden status filter: apps that SUBMIT but never upload docs
+  //     have status='in_progress' (not 'created'). They should also
+  //     get reminders. Same for 'document_review' (some docs uploaded,
+  //     others missing).
   const candidates = await pool.query(
     `SELECT a.id, a.public_id, a.applicant_phone_e164, a.business_name,
             a.docs_due_at, a.docs_reminder_last_sent_at, a.docs_reminder_count
        FROM bi_applications a
        LEFT JOIN bi_documents d ON d.application_id = a.id AND d.purged_at IS NULL
-      WHERE (a.status = 'created' OR a.pipeline_stage IN ('new_application'))
+      WHERE a.source = 'public'
+        AND a.status IN ('created', 'in_progress', 'document_review')
         AND a.applicant_phone_e164 IS NOT NULL
         AND a.docs_reminder_escalated = FALSE
         AND a.docs_reminder_count < $1
