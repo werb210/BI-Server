@@ -365,14 +365,30 @@ router.post("/applications/:publicId/submit", async (req, res) => {
   const missing = required.filter((k) => app[k] === null || app[k] === undefined || app[k] === "");
   if (missing.length) return res.status(400).json({ error: "missing_fields", fields: missing });
 
-  // BI_SERVER_BLOCK_v349_PURBECK_CONSENTS_v1
-  const c = app.consents ?? {};
+  // BI_SERVER_BLOCK_v357_CONSENT_DERIVATION_v1
+  // info_accurate and business_solvent are functionally covered by the
+  // declarations (section_3_c truthfulness oath; section_6_a solvency).
+  // Derive them at submit time rather than asking the user twice.
+  const decls = (app.declarations ?? {}) as Record<string, unknown>;
+  const c = { ...(app.consents ?? {}) } as Record<string, unknown>;
+  if (c.info_accurate === undefined || c.info_accurate === null) {
+    c.info_accurate = decls.section_3_c === "Agree";
+  }
+  if (c.business_solvent === undefined || c.business_solvent === null) {
+    c.business_solvent = decls.section_6_a === "yes";
+  }
   const consentKeys = [
     "electronic_signature", "info_accurate", "business_solvent",
     "no_undisclosed_events", "data_use", "credit_pull", "coverage_understood",
   ];
   const unconsented = consentKeys.filter((k) => !c[k]);
   if (unconsented.length) return res.status(400).json({ error: "missing_consents", fields: unconsented });
+  // Persist the derived consents back to the row so downstream readers (CRM
+  // mirror, audit log, carrier mapper) see the same shape staff sees.
+  await pool.query(
+    `UPDATE bi_applications SET consents = $1::jsonb, updated_at = NOW() WHERE id = $2`,
+    [JSON.stringify(c), app.id]
+  );
 
   // BI_SERVER_BLOCK_v349_PURBECK_GUARDS_v1
   if (typeof app.q_business_province === "string" && app.q_business_province.toUpperCase() === "QC") {
