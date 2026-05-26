@@ -61,7 +61,14 @@ export function buildCarrierPayloadV2(
     q_ca_loan_type: s(get("q_ca_loan_type")) as PgiFormDataV2["q_ca_loan_type"],
     q41_loan_amount: n(get("q41_loan_amount", "loan_amount")),
     q42_pgi_limit: n(get("q42_pgi_limit", "pgi_limit")),
-    section_1_a: "no", section_1_2: "no", section_2_a: "no", section_2_b: "no", section_2_c: "no", section_2_d: "no", section_3_a: "no", section_3_c: "Agree", section_4_a: "no", section_5_a: "no", section_6_a: "no",
+    // BI_SERVER_BLOCK_v369_MAPPER_SAFE_DEFAULTS_v1
+    // Declarations are no longer initialized to "no" here. The for-loop
+    // below populates from the passed declarations object — that is the
+    // ONLY writer. If a caller bypasses the v2 validator and passes
+    // empty/missing declarations, the payload arrives at the carrier
+    // with explicitly undefined declaration fields instead of a silent
+    // "company is insolvent" default. The carrier will then 400 (which
+    // is the safe answer) rather than auto-decline.
   };
   const province = s(get("q_business_province", "business_province"));
   if (province) (fd as AnyRecord).q_business_province = province;
@@ -75,7 +82,12 @@ export function buildCarrierPayloadV2(
       (fd as AnyRecord).section_3_c = v;
       if (v === "Disagree") { const reason = s(declarations.section_3_c_reason); if (reason) (fd as AnyRecord).section_3_c_reason = reason; }
     } else {
-      const v = ynOrUndefined(raw) ?? "no";
+      // BI_SERVER_BLOCK_v369_MAPPER_SAFE_DEFAULTS_v1
+      // No silent default. If a declaration is genuinely missing, leave it
+      // off the wire (validator should have rejected earlier; if it didn't,
+      // letting the carrier reject is safer than defaulting to "no").
+      const v = ynOrUndefined(raw);
+      if (v === undefined) continue;
       (fd as AnyRecord)[key] = v;
       if ((ADVERSE_YES_SECTIONS as readonly string[]).includes(key) && v === "yes") {
         const rk = `${key}_reason`; const reason = s(declarations[rk]); if (reason) (fd as AnyRecord)[rk] = reason;
