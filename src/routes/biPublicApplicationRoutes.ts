@@ -510,6 +510,19 @@ router.post("/applications/:publicId/submit", async (req, res) => {
   // -> 'ready_for_submission' for lender) happens when docs are
   // uploaded via the /documents endpoint, not here.
   await pool.query(`UPDATE bi_applications SET status='in_progress', updated_at=NOW() WHERE id=$1`, [app.id]);
+
+  // BI_SERVER_BLOCK_v366_NOTIFICATION_SMS_v2
+  // Submit confirmation SMS. Non-fatal — submit response goes back regardless.
+  if (app.applicant_phone_e164) {
+    try {
+      const { sendOutreachSms } = await import("../services/smsService");
+      const docsUrl = `${process.env.BI_PUBLIC_URL || "https://www.boreal.insure"}/applications/${app.public_id}/documents`;
+      const body = `Boreal Risk: We got your application. Next step — upload supporting documents here: ${docsUrl}`;
+      await sendOutreachSms(app.applicant_phone_e164, body);
+    } catch (err) {
+      console.warn("[v366] submit confirmation SMS failed (non-fatal)", { app_id: app.id, error: (err as Error)?.message });
+    }
+  }
   // BI_SERVER_BLOCK_v320_LAUNCH_RESCUE_v1
   void ensureContactAndCompanyForApp(app.id).catch(() => {});
   return res.json({ ok: true, status: "in_progress" });
