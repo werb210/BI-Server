@@ -713,6 +713,17 @@ router.post(
               blob_name, blob_url, sha256_hash, mime_type, bytes,
               uploaded_by_actor, uploaded_by_user_id)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'lender', $10)
+           ON CONFLICT (application_id, doc_type) WHERE purged_at IS NULL
+           DO UPDATE SET
+             original_filename = EXCLUDED.original_filename,
+             mime_type = EXCLUDED.mime_type,
+             bytes = EXCLUDED.bytes,
+             blob_url = EXCLUDED.blob_url,
+             storage_key = EXCLUDED.storage_key,
+             uploaded_at = NOW(),
+             review_status = 'pending',
+             pgi_document_id = NULL,
+             forwarded_to_carrier_at = NULL
            RETURNING id`,
           [
             app.id, docType, file.originalname, put.blobName,
