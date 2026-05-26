@@ -16,6 +16,7 @@ import { pool } from "../db";
 import { pgiSubmit } from "../services/pgiAdapter";
 import { logger } from "../platform/logger";
 import { getStorage } from "../lib/storage";
+import { buildCarrierPayloadV2 } from "../services/pgiCarrierMapper";
 
 const router = express.Router();
 
@@ -163,13 +164,28 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
   let pgi_application_id: string | null = null;
   let pgi_status: string | null = null;
   let pgi_error: string | null = null;
-  const carrierRequestBody = {
+  const carrierRowSnapshot = {
+    id: appId,
+    public_id: code,
     guarantor_name: b.guarantor?.name,
     guarantor_email: b.guarantor?.email || `${(b.guarantor?.phone || "unknown").replace(/[^0-9]/g, "")}@no-email.boreal`,
     business_name: b.company_name,
     lender_name: lenderCompanyName ?? undefined,
-    form_data: { country, naics_code, formation_date, loan_amount, pgi_limit, annual_revenue, ebitda, total_debt, monthly_debt_service, collateral_value, enterprise_value, bankruptcy_history, insolvency_history, judgment_history },
+    country, naics_code, formation_date, loan_amount, pgi_limit,
+    annual_revenue, ebitda, total_debt, monthly_debt_service,
+    collateral_value, enterprise_value,
+    q4_date_of_birth: b.guarantor?.dob,
+    q7_email: b.guarantor?.email,
+    q5_residential_address: b.guarantor?.address,
+    q_ca_id_type: b.guarantor?.q_ca_id_type,
+    q_ca_id_number: b.guarantor?.q_ca_id_number,
+    q17_business_operating_address: b.business?.address,
+    q_business_province: b.business?.province,
+    q_ca_loan_type: b.loan?.q_ca_loan_type,
+    form_data: { ...coreInputs, declarations: b.declarations || {}, co_guarantors: b.co_guarantors || [] },
+    declarations: b.declarations || {},
   };
+  const carrierRequestBody: any = buildCarrierPayloadV2(carrierRowSnapshot as any, carrierRowSnapshot.form_data as any, (b.declarations || {}) as any);
   try {
     let submit;
     if (lenderIsDemo) {
