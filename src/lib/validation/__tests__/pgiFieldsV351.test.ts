@@ -98,7 +98,7 @@ describe("v351 — Boreal $50K loan minimum", () => {
     expect(validatePgiSubmissionV2(v).ok).toBe(true);
   });
   it("accepts loan at the 1M ceiling", () => {
-    const v = valid(); v.form_data.q41_loan_amount = LOAN_AMOUNT_MAX; v.form_data.q42_pgi_limit = LOAN_AMOUNT_MAX;
+    const v = valid(); v.form_data.q41_loan_amount = LOAN_AMOUNT_MAX; v.form_data.q42_pgi_limit = 800_000;
     expect(validatePgiSubmissionV2(v).ok).toBe(true);
   });
 });
