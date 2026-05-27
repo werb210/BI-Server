@@ -190,7 +190,9 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
          carrier_submission_response = $4::jsonb,
          carrier_last_event = 'application.submitted',
          carrier_last_event_at = NOW(),
-         submitted_at = COALESCE(submitted_at, NOW()),
+         -- BI_SERVER_BLOCK_v379_TEST1_FIX_PACK_v1 (Bug F)
+         -- bi_applications has no submitted_at column;
+         -- carrier_received_at above already records this timestamp.
          updated_at = NOW()
      WHERE id = $1`,
     [applicationId, result.externalId, JSON.stringify(payload), JSON.stringify(result)]
