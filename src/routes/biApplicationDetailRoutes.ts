@@ -91,6 +91,64 @@ async function acceptDocumentLogic(req: Request, res: Response, idParam: string,
       [appId, userId, `Document accepted: ${doc.doc_type}`, JSON.stringify({ docId })],
     );
 
+    // BI_SERVER_BLOCK_v391_AUTO_SUBMIT_ON_LAST_DOC_ACCEPT_v1
+    try {
+      const appRow = await pool.query<{ id: string; stage: string; source_type: string }>(
+        `SELECT id, stage, source_type FROM bi_applications WHERE id=$1 LIMIT 1`,
+        [appId],
+      );
+      const a = appRow.rows[0];
+      if (a && a.source_type === "public" && (a.stage === "document_review" || a.stage === "documents_pending")) {
+        const reqQ = await pool.query<{ required: number; accepted: number }>(`
+          WITH formation AS (
+            SELECT formation_date FROM bi_applications WHERE id=$1
+          ),
+          startup AS (
+            SELECT CASE WHEN (SELECT formation_date FROM formation) IS NULL
+                         THEN FALSE
+                        WHEN (SELECT formation_date FROM formation) > (NOW() - INTERVAL '3 years')
+                         THEN TRUE
+                        ELSE FALSE END AS is_startup
+          ),
+          required AS (
+            SELECT doc_type FROM bi_required_doc_catalog
+            WHERE active = TRUE
+              AND (if_startup = FALSE OR (SELECT is_startup FROM startup))
+          )
+          SELECT
+            (SELECT COUNT(*) FROM required) AS required,
+            (SELECT COUNT(DISTINCT d.doc_type)
+               FROM bi_documents d
+              WHERE d.application_id = $1
+                AND d.purged_at IS NULL
+                AND d.review_status = 'accepted'
+                AND d.doc_type IN (SELECT doc_type FROM required)) AS accepted
+        `, [appId]);
+        const counts = reqQ.rows[0];
+        if (counts && Number(counts.required) > 0 && Number(counts.accepted) >= Number(counts.required)) {
+          const { submitLenderApplicationToCarrier } = await import("../services/lenderCarrierSubmit");
+          const snap = await pool.query(`SELECT * FROM bi_applications WHERE id=$1 LIMIT 1`, [appId]);
+          const r = snap.rows[0];
+          await submitLenderApplicationToCarrier({
+            applicationId: appId,
+            publicId: r.application_code,
+            isDemo: Boolean(r.is_demo),
+            guarantor_name: r.guarantor_name,
+            guarantor_email: r.guarantor_email,
+            business_name: r.business_name,
+            lender_name: r.lender_name,
+            rowSnapshot: r,
+            formData: r.core_inputs ?? {},
+            declarations: r.declarations ?? {},
+          }).catch((err: Error) => {
+            console.warn("[v391] auto-submit failed", err.message);
+          });
+        }
+      }
+    } catch (autoSubmitErr) {
+      console.warn("[v391] auto-submit check failed", (autoSubmitErr as Error).message);
+    }
+
     const counts = await pool.query<{ pending: string; accepted: string; total: string }>(
       `SELECT
          COUNT(*) FILTER (WHERE COALESCE(review_status, 'pending') NOT IN ('accepted', 'rejected')) AS pending,
@@ -548,6 +606,24 @@ router.get("/:id/co-guarantors", requireStaffOrAdmin, async (req: Request, res: 
     logger.error({ err, appId }, "bi.applications.co_guarantors.list_failed");
     return res.status(500).json({ error: "co_guarantor_list_failed" });
   }
+});
+
+
+// BI_SERVER_BLOCK_v390_SEND_TO_CARRIER_DEPRECATED_v1
+// Per 2026-05-27 ruling: Public apps auto-submit when the last required
+// document is accepted (see acceptDocumentLogic below). Lender apps go
+// direct-to-carrier in biLenderApplicationCreate. No manual staff button.
+router.post("/:id/submit-to-pgi", requireStaffOrAdmin, async (_req, res) => {
+  return res.status(410).json({
+    error: "endpoint_removed",
+    message: "Public apps auto-submit on last-doc-accept; lender apps go direct.",
+  });
+});
+router.post("/:id/send-to-purbeck", requireStaffOrAdmin, async (_req, res) => {
+  return res.status(410).json({
+    error: "endpoint_removed",
+    message: "Public apps auto-submit on last-doc-accept; lender apps go direct.",
+  });
 });
 
 // ------------------------------------------------------------------
