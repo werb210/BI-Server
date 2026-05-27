@@ -72,7 +72,10 @@ import biApplicantDocFlowRoutes from "./routes/biApplicantDocFlowRoutes";
 import biSmsInboundRoutes from "./routes/biSmsInboundRoutes";
 import biCarrierHealthRoutes from "./routes/biCarrierHealthRoutes";
 import { startCarrierHealthJob, getCarrierHealth } from "./services/carrierHealthService";
-import { startDocReminderJob } from "./services/docReminderService";
+// BI_SERVER_BLOCK_v382_SUBMIT_SMS_AND_REMINDER_SIMPLIFY_v1 —
+// Path A (docReminderService) deleted. The 07:00 MT M-F cron in
+// biJobs.ts:runDocsReminderCronTick is now the sole doc-reminder
+// path. See block intent for rationale.
 
 import biNotesRoutes from "./routes/biNotesRoutes";
 import biApolloRoutes from "./routes/biApolloRoutes";
@@ -582,7 +585,8 @@ async function bootstrapInner() {
       ["premiumAccrual",   startPremiumAccrualJob],
       ["purge",            startPurgeJob],
       ["apolloSync",       startApolloSyncJob],
-      ["docReminder",      startDocReminderJob],
+      // BI_SERVER_BLOCK_v382_SUBMIT_SMS_AND_REMINDER_SIMPLIFY_v1 —
+      // ["docReminder", startDocReminderJob] removed; Path A deleted.
       ["docsReminderCron", startDocsReminderCronJob],
       // BI_SERVER_BLOCK_v376_AZURE_HEALTH_AND_BOOT_v1 — startCarrierHealthJob
       // was imported on line 74 but never started. getCarrierHealth() reads

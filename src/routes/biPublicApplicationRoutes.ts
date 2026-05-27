@@ -539,16 +539,23 @@ router.post("/applications/:publicId/submit", async (req, res) => {
   // uploaded via the /documents endpoint, not here.
   await pool.query(`UPDATE bi_applications SET status='in_progress', updated_at=NOW() WHERE id=$1`, [app.id]);
 
-  // BI_SERVER_BLOCK_v366_NOTIFICATION_SMS_v2
-  // Submit confirmation SMS. Non-fatal — submit response goes back regardless.
-  if (app.applicant_phone_e164) {
+  // BI_SERVER_BLOCK_v382_SUBMIT_SMS_AND_REMINDER_SIMPLIFY_v1
+  // Submit-confirmation SMS. Falls back to guarantor_phone when
+  // applicant_phone_e164 is NULL — the website's score-page form
+  // collects "Personal Guarantor Phone" into guarantor_phone, and
+  // applicant_phone_e164 is only populated for callers that send it
+  // through the API explicitly. Pre-v382 this hook ran but skipped
+  // every public applicant because applicant_phone_e164 was NULL on
+  // virtually every row. Non-fatal — submit response goes back regardless.
+  const submitSmsTo: string | null = app.applicant_phone_e164 || app.guarantor_phone || null;
+  if (submitSmsTo) {
     try {
       const { sendOutreachSms } = await import("../services/smsService");
       const docsUrl = `${process.env.BI_PUBLIC_URL || "https://www.boreal.insure"}/applications/${app.public_id}/documents`;
       const body = `Boreal Risk: We got your application. Next step — upload supporting documents here: ${docsUrl}`;
-      await sendOutreachSms(app.applicant_phone_e164, body);
+      await sendOutreachSms(submitSmsTo, body);
     } catch (err) {
-      console.warn("[v366] submit confirmation SMS failed (non-fatal)", { app_id: app.id, error: (err as Error)?.message });
+      console.warn("[v382] submit confirmation SMS failed (non-fatal)", { app_id: app.id, error: (err as Error)?.message });
     }
   }
   // BI_SERVER_BLOCK_v320_LAUNCH_RESCUE_v1
