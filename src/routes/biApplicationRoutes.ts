@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db";
-import { submitApplicationToPGI, assertDocsReadyForCarrier } from "../services/biPgiSubmissionService";
+import { submitApplicationToPGI, assertDocsReadyForCarrier, forwardAcceptedDocsToCarrier } from "../services/biPgiSubmissionService";
 import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
@@ -544,7 +544,15 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
         )
         .catch(() => {});
     }
-    return res.status(200).json({ ok: true, pgi: result });
+    // BI_SERVER_BLOCK_v383_CARRIER_PAYLOAD_AND_DOC_FORWARDING_v1
+    // Forward accepted documents to PGI. Non-fatal: a failed forward
+    // doesn't fail the submit. Staff can retry per-doc from the staff UI.
+    const fwd = await forwardAcceptedDocsToCarrier(id, result.externalId).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn("[v383] post-submit doc forwarding threw", { app_id: id, error: (e as Error)?.message });
+      return { forwarded: 0, skipped: 0, failed: 0 };
+    });
+    return res.status(200).json({ ok: true, pgi: result, docs_forwarded: fwd });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     // Release lock and revert to document_review.
