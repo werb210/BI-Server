@@ -375,6 +375,14 @@ router.patch("/applications/:publicId", async (req, res) => {
     business_judgments: "business_judgments",
     // Consents (jsonb)
     consents: "consents",
+    // BI_SERVER_BLOCK_v377_LAUNCH_SUBMIT_UNBLOCK_v1
+    // declarations (jsonb) — added by 2026_05_26_bi_purbeck_alignment_v349.sql:18.
+    // Without this entry the PATCH handler silently drops the website's
+    // declarations payload, so the submit-time derivation at line 470-474
+    // (info_accurate <- section_3_c==="Agree"; business_solvent <-
+    // section_6_a==="yes") always reads undefined and returns 400
+    // missing_consents:[info_accurate, business_solvent].
+    declarations: "declarations",
   };
 
   // BI_SERVER_BLOCK_v258_APPLICATION_SCHEMA_FIX_v1

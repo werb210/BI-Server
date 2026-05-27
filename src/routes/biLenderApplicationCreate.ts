@@ -48,6 +48,14 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
   // Declarations carried in b.declarations.* are validated at submit-to-pgi
   // time via v349 validatePgiSubmissionV2; this layer only checks intake-shape
   // completeness.
+  // BI_SERVER_BLOCK_v377_LAUNCH_SUBMIT_UNBLOCK_v1
+  // financials.revenue_last_year + financials.ebitda_last_year removed from
+  // the intake required list. The lender form (bi-website lenderFormShared.tsx
+  // v335) deliberately omits the financials object on the basis that this
+  // intake layer should tolerate it. When omitted, the INSERT below stores
+  // 0 via num()-with-fallback for annual_revenue/ebitda; the submit-to-pgi
+  // path (v349 validatePgiSubmissionV2) is the correct gate to enforce
+  // non-zero financials, not intake.
   const required: Array<[string, any]> = [
     ["company_name", b.company_name],
     ["guarantor.name", b.guarantor?.name],
@@ -58,8 +66,6 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
     ["loan.amount", b.loan?.amount],
     ["loan.pgi_limit", b.loan?.pgi_limit],
     ["loan.q_ca_loan_type", b.loan?.q_ca_loan_type],
-    ["financials.revenue_last_year", b.financials?.revenue_last_year ?? b.financials?.annual_revenue],
-    ["financials.ebitda_last_year", b.financials?.ebitda_last_year ?? b.financials?.ebitda],
   ];
   const missing = required.filter(([_, v]) => v === undefined || v === null || v === "").map(([k]) => k);
   if (missing.length > 0) return res.status(400).json({ error: "validation", missing });
