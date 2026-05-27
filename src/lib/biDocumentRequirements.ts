@@ -1,21 +1,32 @@
-// BI_DOC_LIST_v61 — canonical Boreal Insurance document requirements.
-// Source: PGI carrier email, 1 May 2026.
+// BI_SERVER_BLOCK_v379_TEST1_FIX_PACK_v1 — canonical doc list.
+// Source of truth: PGI carrier intake page at
+// app.pgicover.com/applications/new/upload?from=score (operator
+// screenshot 2026-05-26 6.58.58 PM). Five always-required + two
+// startup-only (businesses <3 years old). Boreal-internal KYC docs
+// (gov_id_primary/secondary from BI_DOC_LIST_v61) are no longer in
+// this list — they were never collected through the public or
+// lender forms and were the cause of false DOCS_NOT_READY responses
+// in the staff send-to-carrier path.
+//
+// Slot names match the doc_type vocabulary (bi_document_type enum
+// values that biPublicApplicationRoutes.ts and biLenderApplicationCreate.ts
+// already use for uploads). This collapses the parallel doc_type vs
+// doc_slot vocabularies that BI_DOC_LIST_v61 maintained.
 
 export type BiDocSlot =
-  | "pl_12mo"
+  | "loan_agreement"
+  | "profit_loss"
   | "balance_sheet"
   | "ar_aging"
   | "ap_aging"
   | "founder_cv"
-  | "forecast"
-  | "gov_id_primary"
-  | "gov_id_secondary";
+  | "financial_forecast";
 
 export type BiDocRequirement = {
   slot: BiDocSlot;
   label: string;
   description: string;
-  /** Whether this doc is forwarded to PGI (true) or kept BI-internal for KYC (false). */
+  /** Whether this doc is forwarded to PGI (true) or kept BI-internal (false). */
   carrierBound: boolean;
   /** Always required, or only when applicant is a startup (<3 years old). */
   conditional: "always" | "startup_only";
@@ -23,60 +34,53 @@ export type BiDocRequirement = {
 
 export const BI_DOC_REQUIREMENTS: readonly BiDocRequirement[] = [
   {
-    slot: "pl_12mo",
-    label: "Profit & Loss — last 12 months",
-    description: "Monthly breakdown for the last 12 months",
+    slot: "loan_agreement",
+    label: "Lender Agreement / Term Sheet",
+    description: "Upload the lender's agreement or term sheet for the loan being insured.",
+    carrierBound: true,
+    conditional: "always",
+  },
+  {
+    slot: "profit_loss",
+    label: "Profit & Loss Statement",
+    description: "Last 12 months, monthly breakdown.",
     carrierBound: true,
     conditional: "always",
   },
   {
     slot: "balance_sheet",
-    label: "Balance Sheet — most recent month-end",
-    description: "End of last completed month",
+    label: "Balance Sheet",
+    description: "Most recent month-end.",
     carrierBound: true,
     conditional: "always",
   },
   {
     slot: "ar_aging",
-    label: "Accounts Receivable Aging — most recent",
-    description: "End of last completed month",
+    label: "Accounts Receivable Aging Summary",
+    description: "Most recent.",
     carrierBound: true,
     conditional: "always",
   },
   {
     slot: "ap_aging",
-    label: "Accounts Payable Aging — most recent",
-    description: "End of last completed month",
+    label: "Accounts Payable Aging Summary",
+    description: "Most recent.",
     carrierBound: true,
     conditional: "always",
   },
   {
     slot: "founder_cv",
     label: "Founder CV(s)",
-    description: "CVs of all founders — required for businesses under 3 years old",
+    description: "Required for businesses under 3 years old.",
     carrierBound: true,
     conditional: "startup_only",
   },
   {
-    slot: "forecast",
-    label: "Financial forecasts",
-    description: "Forecasts supporting the loan — required for businesses under 3 years old",
+    slot: "financial_forecast",
+    label: "Financial Forecast",
+    description: "Required for businesses under 3 years old.",
     carrierBound: true,
     conditional: "startup_only",
-  },
-  {
-    slot: "gov_id_primary",
-    label: "Government Photo ID — Driver's Licence",
-    description: "Valid, unexpired. Boreal-internal KYC.",
-    carrierBound: false,
-    conditional: "always",
-  },
-  {
-    slot: "gov_id_secondary",
-    label: "Government Photo ID — Passport (preferred) or other",
-    description: "Second piece of government-issued photo ID. Passport preferred. Boreal-internal KYC.",
-    carrierBound: false,
-    conditional: "always",
   },
 ] as const;
 
@@ -92,8 +96,8 @@ export function biDocSlot(slot: BiDocSlot | string): BiDocRequirement | undefine
 
 /**
  * Strict 3-year cutoff. Startup if formation_date is within the last 3 years.
- * Returns false on a missing or unparseable date — the form-level validator
- * is responsible for rejecting bad dates before this is called.
+ * Returns false on a missing or unparseable date — form-layer validators reject
+ * bad dates before this is called.
  */
 export function isStartup(formationDateIso: string | null | undefined, now: Date = new Date()): boolean {
   if (!formationDateIso) return false;
@@ -104,7 +108,6 @@ export function isStartup(formationDateIso: string | null | undefined, now: Date
   return d.getTime() > cutoff.getTime();
 }
 
-/** The currently-required slots given a formation_date. */
 export function requiredSlotsFor(formationDateIso: string | null | undefined, now: Date = new Date()): BiDocSlot[] {
   const startup = isStartup(formationDateIso, now);
   return BI_DOC_REQUIREMENTS
@@ -112,7 +115,7 @@ export function requiredSlotsFor(formationDateIso: string | null | undefined, no
     .map((r) => r.slot);
 }
 
-/** Subset of slots that get forwarded to the PGI carrier doc upload endpoint. */
+/** Subset of required slots that get forwarded to the PGI carrier. */
 export function carrierBoundSlots(formationDateIso: string | null | undefined, now: Date = new Date()): BiDocSlot[] {
   return requiredSlotsFor(formationDateIso, now).filter((s) => SLOT_BY_KEY[s].carrierBound);
 }

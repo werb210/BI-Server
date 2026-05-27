@@ -1,4 +1,6 @@
-// BI_DOC_LIST_v61
+// BI_SERVER_BLOCK_v379_TEST1_FIX_PACK_v1 — canonical doc list assertions.
+// Replaces BI_DOC_LIST_v61 test which asserted an 8-slot list using
+// doc_slot vocabulary (pl_12mo, gov_id_primary, etc.).
 import { describe, it, expect } from "vitest";
 import {
   BI_DOC_REQUIREMENTS,
@@ -7,24 +9,28 @@ import {
   carrierBoundSlots,
 } from "../biDocumentRequirements";
 
-describe("BI_DOC_LIST_v61 doc requirements", () => {
-  it("declares all 8 canonical slots", () => {
+describe("BI_SERVER_BLOCK_v379 doc requirements", () => {
+  it("declares the canonical 7 slots in doc_type vocabulary", () => {
     expect(BI_DOC_REQUIREMENTS.map((r) => r.slot).sort()).toEqual([
-      "ap_aging", "ar_aging", "balance_sheet",
-      "forecast", "founder_cv",
-      "gov_id_primary", "gov_id_secondary",
-      "pl_12mo",
-    ].sort());
+      "ap_aging",
+      "ar_aging",
+      "balance_sheet",
+      "financial_forecast",
+      "founder_cv",
+      "loan_agreement",
+      "profit_loss",
+    ]);
   });
 
-  it("KYC slots are NOT carrier-bound", () => {
-    const kyc = BI_DOC_REQUIREMENTS.filter((r) => r.slot.startsWith("gov_id"));
-    expect(kyc.every((r) => r.carrierBound === false)).toBe(true);
+  it("all canonical slots are carrier-bound", () => {
+    expect(BI_DOC_REQUIREMENTS.every((r) => r.carrierBound === true)).toBe(true);
   });
 
-  it("financial slots are carrier-bound", () => {
-    const fin = BI_DOC_REQUIREMENTS.filter((r) => !r.slot.startsWith("gov_id"));
-    expect(fin.every((r) => r.carrierBound === true)).toBe(true);
+  it("5 slots are always-required; 2 are startup-only", () => {
+    const always = BI_DOC_REQUIREMENTS.filter((r) => r.conditional === "always").map((r) => r.slot).sort();
+    const startup = BI_DOC_REQUIREMENTS.filter((r) => r.conditional === "startup_only").map((r) => r.slot).sort();
+    expect(always).toEqual(["ap_aging", "ar_aging", "balance_sheet", "loan_agreement", "profit_loss"]);
+    expect(startup).toEqual(["financial_forecast", "founder_cv"]);
   });
 
   it("isStartup is true for formation_date 1 year ago", () => {
@@ -53,32 +59,25 @@ describe("BI_DOC_LIST_v61 doc requirements", () => {
     expect(isStartup("not-a-date")).toBe(false);
   });
 
-  it("requiredSlotsFor a mature business excludes startup slots", () => {
+  it("requiredSlotsFor a mature business returns the canonical 5", () => {
     const now = new Date("2026-05-01T00:00:00Z");
-    const slots = requiredSlotsFor("2019-01-01", now);
-    expect(slots).toContain("pl_12mo");
-    expect(slots).toContain("gov_id_primary");
-    expect(slots).toContain("gov_id_secondary");
-    expect(slots).not.toContain("founder_cv");
-    expect(slots).not.toContain("forecast");
+    const slots = requiredSlotsFor("2019-01-01", now).sort();
+    expect(slots).toEqual(["ap_aging", "ar_aging", "balance_sheet", "loan_agreement", "profit_loss"]);
   });
 
-  it("requiredSlotsFor a startup includes founder_cv and forecast", () => {
+  it("requiredSlotsFor a startup adds founder_cv and financial_forecast", () => {
     const now = new Date("2026-05-01T00:00:00Z");
     const slots = requiredSlotsFor("2025-01-01", now);
     expect(slots).toContain("founder_cv");
-    expect(slots).toContain("forecast");
+    expect(slots).toContain("financial_forecast");
+    expect(slots).toContain("loan_agreement");
+    expect(slots).toContain("profit_loss");
+    expect(slots).toHaveLength(7);
   });
 
-  it("carrierBoundSlots excludes both KYC ID slots", () => {
+  it("carrierBoundSlots equals requiredSlotsFor (all canonical slots are carrier-bound)", () => {
     const now = new Date("2026-05-01T00:00:00Z");
-    const slots = carrierBoundSlots("2019-01-01", now);
-    expect(slots).not.toContain("gov_id_primary");
-    expect(slots).not.toContain("gov_id_secondary");
-    // But still includes the four always-required financial docs.
-    expect(slots).toContain("pl_12mo");
-    expect(slots).toContain("balance_sheet");
-    expect(slots).toContain("ar_aging");
-    expect(slots).toContain("ap_aging");
+    expect(carrierBoundSlots("2019-01-01", now).sort()).toEqual(requiredSlotsFor("2019-01-01", now).sort());
+    expect(carrierBoundSlots("2025-01-01", now).sort()).toEqual(requiredSlotsFor("2025-01-01", now).sort());
   });
 });

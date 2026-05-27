@@ -488,18 +488,22 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
     });
   }
 
-  // (6) LOCK application
-  const lockResult = await pool.query(
-    `UPDATE bi_applications
-        SET submission_locked = TRUE, updated_at = NOW()
-      WHERE id = $1 AND submission_locked = FALSE
-      RETURNING id`,
-    [id]
-  );
-  if (lockResult.rowCount === 0) {
-    // Race lost — another submitter beat us.
-    return res.status(409).json({ ok: false, error: "ALREADY_LOCKED" });
-  }
+  // (6) LOCK application — REMOVED in BI_SERVER_BLOCK_v379_TEST1_FIX_PACK_v1
+  // (Bug E). submitApplicationToPGI at biPgiSubmissionService.ts:80-90
+  // already does its own atomic claim (UPDATE … WHERE submission_locked
+  // = FALSE … SET submission_locked = TRUE). v270 added that claim;
+  // this route's pre-lock from BI_SERVER_BLOCK_v160 was never removed
+  // to match. The pre-lock flipped submission_locked TRUE first, so
+  // the service's claim updated 0 rows and the service returned
+  // { alreadySubmitted: true } without ever calling the carrier —
+  // route responded 200 OK while the row stayed at status=document_review
+  // and pgi_application_id=NULL forever.
+  // The earlier idempotency check at step (4) (`if row.submission_locked
+  // === true) return 409 ALREADY_LOCKED`) still catches the
+  // concurrent-submit case. The route's failure-path lock-release
+  // below (line 547-556) stays as a safety net for the case where
+  // the service's claim succeeded but a later step in the route
+  // throws.
 
   // (7) payload snapshot to bi_submission_logs (best-effort; do not fail
   // the submit on log insert error, but capture for triage).
