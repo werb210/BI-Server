@@ -649,7 +649,14 @@ router.post("/applications/:publicId/documents", publicDocUpload_v66.array("file
            bytes = EXCLUDED.bytes,
            blob_url = EXCLUDED.blob_url,
            storage_key = EXCLUDED.storage_key,
-           uploaded_at = NOW(),
+           -- BI_SERVER_BLOCK_v379_DOC_UPLOAD_AND_READINESS_COLUMN_FIX_v1
+           -- bi_documents has no uploaded_at column (master schema
+           -- 20260222_00_bi_master_schema.sql:265-277 declares
+           -- created_at, not uploaded_at). On re-upload we still want
+           -- the timestamp to reflect the latest upload — refresh
+           -- created_at, matching v371's dedup query which already
+           -- sorts by created_at DESC to find latest per slot.
+           created_at = NOW(),
            review_status = 'pending',
            pgi_document_id = NULL,
            forwarded_to_carrier_at = NULL

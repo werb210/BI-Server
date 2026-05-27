@@ -293,8 +293,15 @@ export async function assertDocsReadyForCarrier(applicationId: string, formation
   const required = new Set(requiredSlotsFor(formationDate ?? null));
   if (required.size === 0) return { ready: true };
 
+  // BI_SERVER_BLOCK_v379_DOC_UPLOAD_AND_READINESS_COLUMN_FIX_v1
+  // bi_documents has `review_status` (pending/accepted/rejected per
+  // master schema line 273), not `status`. The original SELECT was
+  // throwing 'column "status" does not exist' on every send-to-carrier
+  // call and surfacing as a generic 500. Alias review_status AS status
+  // so the consumer logic below (which checks for 'accepted'/'rejected'
+  // /'pending' against row.status) keeps working unchanged.
   const r = await pool.query<{ doc_slot: string | null; status: string }>(
-    `SELECT doc_slot, status FROM bi_documents WHERE application_id = $1`,
+    `SELECT doc_slot, review_status AS status FROM bi_documents WHERE application_id = $1`,
     [applicationId],
   );
 
