@@ -118,8 +118,20 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
     // claim alone if the bi_lenders SELECT threw (e.g. transient DB).
     lenderIsDemo = getLenderIsDemo(req);
   }
-  // BI_SERVER_BLOCK_v262_CARRIER_PATH_E2E_FIX_v3 — added source_type='lender'.
-  const result = await pool.query(`INSERT INTO bi_applications (entity_type, status, source, source_type, lender_id, created_by_lender_id, created_by_lender_user_id, application_code, company_name, guarantor_name, guarantor_phone, guarantor_email, lender_name, is_demo, core_inputs, consents, lender_notes, created_by_actor, created_at, updated_at) VALUES ('applicant', 'new_application', 'lender', 'lender', $1, $1, $12, $2, $3, $4, $5, $6, $10, $11, $7::jsonb, $8::jsonb, $9, 'lender', NOW(), NOW()) RETURNING id, application_code`, [lenderId, applicationCode, b.company_name, b.guarantor?.name, b.guarantor?.phone, b.guarantor?.email || null, JSON.stringify(coreInputs), JSON.stringify({ data_use: true, credit_pull: true, info_accurate: true, source: "lender_attestation" }), b.lender_notes || null, lenderCompanyName, lenderIsDemo, lenderUserId]);
+  // BI_SERVER_BLOCK_v379_TEST1_FIX_PACK_v1 (Bug C)
+  // Pre-v379 this INSERT wrote status='new_application'. v281's
+  // bi_applications_status_check constraint (which sorts AFTER v246 +
+  // v330 alphabetically and therefore wins) excludes 'new_application'
+  // from the allowlist, so every lender intake threw
+  // `new row for relation "bi_applications" violates check constraint
+  //  "bi_applications_status_check"` and returned 500.
+  // 'new_application' is a valid bi_pipeline_stage enum value, not a
+  // valid status text — the author confused the two columns.
+  // Fix: drop `status` from the INSERT entirely. The column is
+  // NULLABLE; lenderCarrierSubmit.ts:53 then UPDATEs it to 'submitted'
+  // on successful carrier ACK. Pre-carrier null is a valid transient
+  // state and matches the public path's pre-/submit shape.
+  const result = await pool.query(`INSERT INTO bi_applications (entity_type, source, source_type, lender_id, created_by_lender_id, created_by_lender_user_id, application_code, company_name, guarantor_name, guarantor_phone, guarantor_email, lender_name, is_demo, core_inputs, consents, lender_notes, created_by_actor, created_at, updated_at) VALUES ('applicant', 'lender', 'lender', $1, $1, $12, $2, $3, $4, $5, $6, $10, $11, $7::jsonb, $8::jsonb, $9, 'lender', NOW(), NOW()) RETURNING id, application_code`, [lenderId, applicationCode, b.company_name, b.guarantor?.name, b.guarantor?.phone, b.guarantor?.email || null, JSON.stringify(coreInputs), JSON.stringify({ data_use: true, credit_pull: true, info_accurate: true, source: "lender_attestation" }), b.lender_notes || null, lenderCompanyName, lenderIsDemo, lenderUserId]);
   const row = result.rows[0]; const appId: string = row.id; const code: string = row.application_code;
 
   // BI_SERVER_BLOCK_v350_LENDER_DECLARATIONS_AND_COGUARANTORS_v1
