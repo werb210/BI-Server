@@ -107,19 +107,27 @@ router.post("/api/v1/webhooks/pgi", express.raw({ type: "application/json" }), a
          VALUES($1, 'system', 'policy_bound', $2)`,
         [appId, `Policy bound by carrier (${evt.policy_id ?? "no policy id"})`]
       ).catch(() => {});
-      // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1 — ISSUE #4 fix: ensure a bi_commissions
+      // BI_SERVER_BLOCK_v381_COMMISSION_RATE_5PCT_v1
+      // Boreal commission rate is 5% of annual premium (operator-confirmed
+      // 2026-05-26), not 10% as v241 originally wrote. INSERT now writes
+      // commission_rate = 0.05 explicitly alongside the computed
+      // commission_amount so the rate and amount columns stay consistent
+      // — and the rate is auditable per row instead of inheriting from
+      // the table default.
       await pool.query(
-        `INSERT INTO bi_commissions (application_id, annual_premium_amount, commission_amount, status)
-         SELECT id, annual_premium, ROUND(COALESCE(annual_premium, 0) * 0.10, 2), 'estimated'
+        `INSERT INTO bi_commissions (application_id, annual_premium_amount, commission_rate, commission_amount, status)
+         SELECT id, annual_premium, 0.05, ROUND(COALESCE(annual_premium, 0) * 0.05, 2), 'estimated'
            FROM bi_applications WHERE id = $1
          ON CONFLICT (application_id) DO UPDATE
             SET annual_premium_amount = EXCLUDED.annual_premium_amount,
+                commission_rate = EXCLUDED.commission_rate,
                 commission_amount = EXCLUDED.commission_amount,
                 updated_at = NOW()
-          WHERE bi_commissions.annual_premium_amount IS DISTINCT FROM EXCLUDED.annual_premium_amount`,
+          WHERE bi_commissions.annual_premium_amount IS DISTINCT FROM EXCLUDED.annual_premium_amount
+             OR bi_commissions.commission_rate IS DISTINCT FROM EXCLUDED.commission_rate`,
         [appId],
       ).catch((err) => {
-        console.warn("[v241] ensure bi_commissions row failed (non-fatal)", err);
+        console.warn("[v381] ensure bi_commissions row failed (non-fatal)", err);
       });
       await onApplicationApproved(appId).catch((err) => {
         // eslint-disable-next-line no-console

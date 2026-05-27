@@ -297,7 +297,7 @@ CREATE TABLE IF NOT EXISTS bi_commissions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   application_id UUID UNIQUE NOT NULL REFERENCES bi_applications(id) ON DELETE CASCADE,
   annual_premium_amount NUMERIC(14,2),
-  commission_rate NUMERIC(6,4) NOT NULL DEFAULT 0.10,
+  commission_rate NUMERIC(6,4) NOT NULL DEFAULT 0.05,
   commission_amount NUMERIC(14,2),
   status bi_commission_status NOT NULL DEFAULT 'estimated',
   premium_received_at TIMESTAMP,
