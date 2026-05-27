@@ -383,6 +383,26 @@ router.patch("/applications/:publicId", async (req, res) => {
     // section_6_a==="yes") always reads undefined and returns 400
     // missing_consents:[info_accurate, business_solvent].
     declarations: "declarations",
+    // BI_SERVER_BLOCK_v378_PATCH_ALLOWLIST_Q_KEYS_v1
+    // q-keyed columns added by 2026_05_26_bi_purbeck_alignment_v349.sql
+    // (lines 11-15). Same silent-drop bug as v377's `declarations`:
+    // the website PATCHes these on every autosave, the server's
+    // for-loop at line 409-413 skips them because they're not in the
+    // cols map, the columns stay NULL, and the BF-portal staff view
+    // shows "Not collected yet" / "Not set" for Gov ID type/number
+    // and Loan type (carrier). The carrier-eligibility check in
+    // ApplicationTab.tsx:85 then falls back to loan_purpose
+    // (=working_capital) and produces a false "not eligible" banner.
+    //
+    // DB-layer guards: v349 added CHECK constraints
+    // bi_applications_q_ca_loan_type_chk and
+    // bi_applications_q_business_province_chk, so the table itself
+    // refuses bad values; this allow-list change does not bypass
+    // those.
+    q_ca_loan_type: "q_ca_loan_type",
+    q_ca_id_type: "q_ca_id_type",
+    q_ca_id_number: "q_ca_id_number",
+    q_business_province: "q_business_province",
   };
 
   // BI_SERVER_BLOCK_v258_APPLICATION_SCHEMA_FIX_v1
