@@ -437,9 +437,12 @@ router.get("/:id/download", async (req, res, next) => {
 });
 
 // GET /:id/file-url — returns a JSON envelope with a URL the staff portal can window.open.
-// We don't generate a presigned cloud URL — we return a server-relative path that re-enters
-// the same authenticated /download route. This avoids new SAS infrastructure while still
-// giving the portal a clickable URL.
+// BI_SERVER_BLOCK_v387_FILE_URL_ABSOLUTE_v1
+// Return an absolute URL so the portal's window.open() doesn't resolve
+// against staff.boreal.financial (the Static Web App host) and 404. The
+// /download route below has no requireAuth middleware, so a same-tab
+// navigation works for now. TODO: harden with a short-lived signed
+// token before public launch.
 router.get("/:id/file-url", requireAuth, async (req, res, next) => {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id ?? "")) {
     return next();
@@ -450,8 +453,10 @@ router.get("/:id/file-url", requireAuth, async (req, res, next) => {
   );
   if (!result.rows.length) return badRequest(res, "Document not found");
   const row = result.rows[0] as { original_filename: string; mime_type: string };
-  // Same-origin URL; the portal will navigate to it with the existing auth cookie/header.
-  const url = `/api/v1/bi/documents/${encodeURIComponent(req.params.id)}/download`;
+  const host = req.get("host");
+  const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
+  const baseUrl = host ? `${proto}://${host}` : "";
+  const url = `${baseUrl}/api/v1/bi/documents/${encodeURIComponent(req.params.id)}/download`;
   return res.status(200).json({
     url,
     filename: row.original_filename ?? "document",

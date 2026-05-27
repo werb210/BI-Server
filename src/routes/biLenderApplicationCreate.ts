@@ -134,12 +134,15 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
   const result = await pool.query(`INSERT INTO bi_applications (entity_type, source, source_type, lender_id, created_by_lender_id, created_by_lender_user_id, application_code, company_name, guarantor_name, guarantor_phone, guarantor_email, lender_name, is_demo, core_inputs, consents, lender_notes, created_by_actor, created_at, updated_at) VALUES ('applicant', 'lender', 'lender', $1, $1, $12, $2, $3, $4, $5, $6, $10, $11, $7::jsonb, $8::jsonb, $9, 'lender', NOW(), NOW()) RETURNING id, application_code`, [lenderId, applicationCode, b.company_name, b.guarantor?.name, b.guarantor?.phone, b.guarantor?.email || null, JSON.stringify(coreInputs), JSON.stringify({ data_use: true, credit_pull: true, info_accurate: true, source: "lender_attestation" }), b.lender_notes || null, lenderCompanyName, lenderIsDemo, lenderUserId]);
   const row = result.rows[0]; const appId: string = row.id; const code: string = row.application_code;
 
+  // BI_SERVER_BLOCK_v388_LENDER_Q_ID_v1
   // BI_SERVER_BLOCK_v350_LENDER_DECLARATIONS_AND_COGUARANTORS_v1
   // Persist v349-shape declarations + co-guarantors so the submit-to-pgi
   // path (v349) finds them on the row at carrier-submit time.
   const declarations = (b.declarations && typeof b.declarations === "object") ? b.declarations : {};
   const coGuarantors = Array.isArray(b.co_guarantors) ? b.co_guarantors : [];
   const hasCoGuarantors = coGuarantors.length > 0;
+  const qIdType = String(b.guarantor?.q_ca_id_type || "").trim() || null;
+  const qIdNumber = String(b.guarantor?.q_ca_id_number || "").trim() || null;
 
   try {
     await pool.query(
@@ -147,9 +150,11 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
           SET declarations = $1::jsonb,
               has_co_guarantors = $2,
               q_business_province = $3,
-              q_ca_loan_type = $4
-        WHERE id = $5`,
-      [JSON.stringify(declarations), hasCoGuarantors, province, loanType, appId],
+              q_ca_loan_type = $4,
+              q_ca_id_type = COALESCE($5, q_ca_id_type),
+              q_ca_id_number = COALESCE($6, q_ca_id_number)
+        WHERE id = $7`,
+      [JSON.stringify(declarations), hasCoGuarantors, province, loanType, qIdType, qIdNumber, appId],
     );
   } catch (e) {
     // Non-blocking: row exists, augmentation failed. Log and continue.

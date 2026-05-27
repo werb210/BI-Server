@@ -440,6 +440,21 @@ router.patch("/applications/:publicId", async (req, res) => {
       vals.push(b[k]);
     }
   }
+  // BI_SERVER_BLOCK_v389_PATCH_DERIVE_Q_BUSINESS_PROVINCE_v1
+  // Public form sends business_address as a nested object with .province.
+  // Portal ApplicationTab.tsx reads the top-level q_business_province
+  // column. Mirror the nested province into the column so the portal
+  // shows it. Idempotent: only fires when q_business_province wasn't
+  // sent explicitly in the same PATCH body.
+  if (b.business_address && typeof b.business_address === "object" && !("q_business_province" in b)) {
+    const ba = b.business_address as { province?: unknown };
+    const prov = typeof ba.province === "string" ? ba.province.trim().toUpperCase() : "";
+    if (prov && /^[A-Z]{2}$/.test(prov)) {
+      sets.push(`q_business_province = $${i++}`);
+      vals.push(prov);
+    }
+  }
+
   if (!sets.length) return res.json({ ok: true, no_op: true });
   sets.push(`lender_company_id = $${i++}`);
   vals.push(lenderCompanyId);
