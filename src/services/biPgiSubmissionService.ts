@@ -295,23 +295,32 @@ export async function assertDocsReadyForCarrier(applicationId: string, formation
   const required = new Set(requiredSlotsFor(formationDate ?? null));
   if (required.size === 0) return { ready: true };
 
-  // BI_SERVER_BLOCK_v379_DOC_UPLOAD_AND_READINESS_COLUMN_FIX_v1
-  // bi_documents has `review_status` (pending/accepted/rejected per
-  // master schema line 273), not `status`. The original SELECT was
-  // throwing 'column "status" does not exist' on every send-to-carrier
-  // call and surfacing as a generic 500. Alias review_status AS status
-  // so the consumer logic below (which checks for 'accepted'/'rejected'
-  // /'pending' against row.status) keeps working unchanged.
-  const r = await pool.query<{ doc_slot: string | null; status: string }>(
-    `SELECT doc_slot, review_status AS status FROM bi_documents WHERE application_id = $1`,
+  // BI_SERVER_BLOCK_v380_READINESS_COALESCE_v1
+  // Completes v379's Bug D fix. The previous version of this query was
+  // a partial-merge of v379 that only fixed Bug B (column rename
+  // status → review_status AS status). The full Bug D fix also needs:
+  //   1. SELECT keys off doc_type when doc_slot is NULL. The public
+  //      upload route at biPublicApplicationRoutes.ts:642 INSERTs rows
+  //      with doc_slot=NULL (it only collects doc_type). The lender
+  //      upload route (biLenderApplicationCreate.ts:260) sets
+  //      doc_slot = docType (same string). COALESCE handles both paths.
+  //   2. AND purged_at IS NULL — soft-deleted rows shouldn't satisfy
+  //      the readiness gate.
+  //   3. Loop reads row.slot (the COALESCE'd value), not row.doc_slot.
+  // Without all three, the public send-to-carrier path returns
+  // DOCS_NOT_READY missing:[every required slot] even when 5 valid
+  // docs are uploaded and accepted.
+  const r = await pool.query<{ slot: string | null; status: string }>(
+    `SELECT COALESCE(doc_slot, doc_type::text) AS slot, review_status AS status
+       FROM bi_documents WHERE application_id = $1 AND purged_at IS NULL`,
     [applicationId],
   );
 
   // For each required slot, find the latest version's status.
   const latest = new Map<string, string>();
   for (const row of r.rows) {
-    if (!row.doc_slot) continue;
-    if (!latest.has(row.doc_slot)) latest.set(row.doc_slot, row.status);
+    if (!row.slot) continue;
+    if (!latest.has(row.slot)) latest.set(row.slot, row.status);
   }
 
   const missing: BiDocSlot[] = [];
