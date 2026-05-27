@@ -339,9 +339,13 @@ router.post("/admin/apollo/lists/:id/import", async (req, res) => {
         throw err;
       }
       totalPages = pagination.total_pages || 1;
+      // BI_SERVER_BLOCK_v392_MARKETING_IMPORT_FIX_v1
       logger.info({
         label_id: labelId,
         page,
+        apollo_total_entries: pagination.total_entries ?? 0,
+        fetched_on_page: people.length,
+        deduped_count: people.length,
         people_http_ok: peopleHttpOk,
         response_shape: {
           has_people: Array.isArray(people),

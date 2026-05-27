@@ -447,9 +447,8 @@ router.patch("/applications/:publicId", async (req, res) => {
   // shows it. Idempotent: only fires when q_business_province wasn't
   // sent explicitly in the same PATCH body.
   if (b.business_address && typeof b.business_address === "object" && !("q_business_province" in b)) {
-    const ba = b.business_address as { province?: unknown };
-    const prov = typeof ba.province === "string" ? ba.province.trim().toUpperCase() : "";
-    if (prov && /^[A-Z]{2}$/.test(prov)) {
+    const prov = String((b.business_address as any).province || "").trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(prov)) {
       sets.push(`q_business_province = $${i++}`);
       vals.push(prov);
     }
