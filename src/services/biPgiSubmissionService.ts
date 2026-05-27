@@ -1,7 +1,8 @@
 import { pool } from "../db";
-import { buildCarrierPayloadFromRow } from "./pgiCarrierMapper"; // PGI_API_ALIGN_v57
-import { submitToPGI, type BIApplication } from "./pgiAdapter";
+import { buildCarrierPayloadFromRow, buildCarrierPayloadV2 } from "./pgiCarrierMapper"; // PGI_API_ALIGN_v57 + v383
+import { pgiSubmitV2, pgiUploadDocument, type BIApplication } from "./pgiAdapter";
 import { requiredSlotsFor, type BiDocSlot } from "../lib/biDocumentRequirements";
+import { getStorage } from "../lib/storage";
 // BI_PGI_ALIGNMENT_v56 — reads from bi_applications.data which now contains the full PGI form_data shape.
 // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — adds documents_text bundle to PGI submission.
 
@@ -149,22 +150,59 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
     throw new Error("Application not found");
   }
 
-  const payload = buildBIApplicationFromRow(app);
-
-  // BI_SERVER_BLOCK_v373_SECOND_ACCEPT_AND_TEXT_BUNDLE_v1
-  // The OCR text bundle is no longer sent to the carrier. v359's
-  // pgiUploadDocument sends binary multipart files which is what the v2
-  // carrier spec expects. Sending the same content twice in two shapes
-  // was redundant and risked the carrier reconciling them incorrectly.
-  // The assembleDocumentsTextBundle function is still useful for internal
-  // CRM/staff review — kept the import but no longer attaches to payload.
+  // BI_SERVER_BLOCK_v383_CARRIER_PAYLOAD_AND_DOC_FORWARDING_v1
+  // Previous code used buildBIApplicationFromRow which read fields from
+  // row.data.* (a phantom path — public PATCH writes typed columns +
+  // form_data JSONB, not flat keys on row.data). Result was a
+  // BIApplication object with defaults — firstName="Applicant",
+  // businessName="Unknown business", loanAmount=0, everything in
+  // scoringAnswers zero. Real PGI would either reject or process the
+  // wrong economics. Test #2 leg [D] caught this against fresh main.
+  // Fix: route the public path through the same V2 mapper the lender
+  // path uses (lenderCarrierSubmit.ts:36) — reads typed columns via
+  // legacyKey fallbacks so all operator-canonical fields land in the
+  // carrier payload. Addresses come in as JSONB objects from the
+  // public PATCH path; flatten before passing so the mapper's string
+  // conversion doesn't emit "[object Object]".
+  const flattenAddress = (a: any): string => {
+    if (typeof a === "string") return a;
+    if (a && typeof a === "object") {
+      return [a.line1, a.line2, a.city, a.province, a.postal_code, a.country]
+        .map((p) => (typeof p === "string" ? p.trim() : ""))
+        .filter(Boolean)
+        .join(" ");
+    }
+    return "";
+  };
+  const appAny = app as Record<string, unknown>;
+  const v2Row: Record<string, unknown> = {
+    ...appAny,
+    guarantor_address: flattenAddress(appAny.guarantor_address),
+    business_address: flattenAddress(appAny.business_address),
+  };
+  const payload = buildCarrierPayloadV2(
+    v2Row,
+    (appAny.form_data as Record<string, unknown>) ?? {},
+    (appAny.declarations as Record<string, unknown>) ?? {},
+    {
+      guarantor_name: app.guarantor_name ?? undefined,
+      guarantor_email: app.guarantor_email ?? undefined,
+      business_name: (appAny.business_name as string | undefined) ?? app.company_name ?? undefined,
+      lender_name: app.lender_name ?? undefined,
+    }
+  );
 
   // BI_SERVER_BLOCK_v270_ORCHESTRATOR_RACE_CLAIM_v1
   // Call the carrier OUTSIDE any lock. Submission_locked=TRUE from the
   // claim already prevents concurrent submits; this is the long step.
   let result: { externalId: string; status: string };
   try {
-    result = await submitToPGI(payload);
+    // v383 — pgiSubmitV2 is the canonical V2 endpoint. The lender path
+    // uses pgiSubmit (v1) which works fine because both stub + real
+    // PGI accept the V2 envelope at /api/v2/applications/. Using V2
+    // explicitly for clarity + future-proofing.
+    const submitResp = await pgiSubmitV2(payload as any);
+    result = { externalId: submitResp.application_id, status: submitResp.status };
   } catch (err) {
     // Release the claim so the user can retry (only release rows that
     // never reached the carrier — guards against releasing a row that
@@ -337,4 +375,85 @@ export async function assertDocsReadyForCarrier(applicationId: string, formation
     return { ready: true };
   }
   return { ready: false, missing, rejected, pending };
+}
+
+// BI_SERVER_BLOCK_v383_CARRIER_PAYLOAD_AND_DOC_FORWARDING_v1
+// Forward all accepted-but-not-yet-forwarded docs for an application
+// to the PGI carrier. Idempotent: skips any doc with pgi_document_id
+// already set. Best-effort: a failure on one doc doesn't stop the
+// loop, and individual failures are logged but not thrown.
+//
+// Shared by:
+//   - src/routes/biApplicationRoutes.ts staff "Send to Purbeck" handler
+//     (calls this AFTER submitApplicationToPGI returns externalId)
+//   - src/routes/biApplicationDetailRoutes.ts auto-fire-on-last-accept
+//     handler (still has its v359-era inline copy of this logic;
+//     a follow-up cleanup block can collapse to this helper).
+const FORWARDABLE_DOC_TYPES = new Set<string>([
+  "loan_agreement",
+  "profit_loss",
+  "balance_sheet",
+  "ar_aging",
+  "ap_aging",
+  "founder_cv",
+  "financial_forecast",
+]);
+
+export async function forwardAcceptedDocsToCarrier(
+  applicationId: string,
+  pgiApplicationId: string,
+): Promise<{ forwarded: number; skipped: number; failed: number }> {
+  const pending = await pool.query<{
+    id: string;
+    doc_type: string;
+    original_filename: string;
+    mime_type: string;
+    storage_key: string;
+  }>(
+    `SELECT id, doc_type, original_filename, mime_type, storage_key
+       FROM bi_documents
+      WHERE application_id = $1
+        AND review_status = 'accepted'
+        AND pgi_document_id IS NULL
+        AND purged_at IS NULL
+      ORDER BY created_at`,
+    [applicationId],
+  );
+  let forwarded = 0;
+  let skipped = 0;
+  let failed = 0;
+  if (pending.rows.length === 0) return { forwarded, skipped, failed };
+
+  const store = getStorage();
+  for (const d of pending.rows) {
+    if (!FORWARDABLE_DOC_TYPES.has(d.doc_type)) { skipped += 1; continue; }
+    try {
+      const blob = await store.get(d.storage_key);
+      if (!blob?.buffer) throw new Error("blob not found");
+      const fwd = await pgiUploadDocument({
+        pgiApplicationId,
+        docType: d.doc_type as any,
+        filename: d.original_filename,
+        buffer: blob.buffer,
+        mimeType: d.mime_type || (blob as any).contentType || "application/octet-stream",
+      });
+      await pool.query(
+        `UPDATE bi_documents
+            SET pgi_document_id = $1,
+                forwarded_to_carrier_at = NOW()
+          WHERE id = $2`,
+        [fwd.document_id, d.id],
+      );
+      forwarded += 1;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[v383] forwardAcceptedDocsToCarrier doc forward failed", {
+        doc_id: d.id,
+        doc_type: d.doc_type,
+        error: (e as Error)?.message,
+      });
+      failed += 1;
+    }
+  }
+  return { forwarded, skipped, failed };
 }
