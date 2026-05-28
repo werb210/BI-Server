@@ -12,6 +12,7 @@ const STEPS: Step[] = [
   { name: "bi_contacts_email_unique_lower", sql: `CREATE UNIQUE INDEX IF NOT EXISTS uq_bi_contacts_email_lower ON bi_contacts (LOWER(TRIM(email))) WHERE email IS NOT NULL AND TRIM(email) <> '';` },
   { name: "bi_activity.contact_id", sql: `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bi_activity' AND column_name='contact_id') THEN ALTER TABLE bi_activity ADD COLUMN contact_id UUID; END IF; END $$;` },
   { name: "bi_applications.company_id", sql: `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bi_applications' AND column_name='company_id') THEN ALTER TABLE bi_applications ADD COLUMN company_id UUID; END IF; END $$;` },
+  { name: "bi_companies.updated_at", sql: `DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='bi_companies') THEN ALTER TABLE bi_companies ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ; ALTER TABLE bi_companies ALTER COLUMN updated_at SET DEFAULT NOW(); UPDATE bi_companies SET updated_at = COALESCE(created_at, NOW()) WHERE updated_at IS NULL; ALTER TABLE bi_companies ALTER COLUMN updated_at SET NOT NULL; END IF; END $$;` },
 ];
 export async function runSchemaRescue(): Promise<void> {
   let ok = 0, failed = 0;
