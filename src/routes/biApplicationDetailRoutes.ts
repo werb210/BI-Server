@@ -87,7 +87,7 @@ async function acceptDocumentLogic(req: Request, res: Response, idParam: string,
 
     await pool.query(
       `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-            VALUES($1, 'staff', $2, 'document_accepted', $3, $4::jsonb)`,
+            VALUES($1, 'staff', (SELECT id FROM bi_users WHERE id = $2), 'document_accepted', $3, $4::jsonb)`,
       [appId, userId, `Document accepted: ${doc.doc_type}`, JSON.stringify({ docId })],
     );
 
@@ -182,7 +182,7 @@ async function acceptDocumentLogic(req: Request, res: Response, idParam: string,
       if (stageAdvanced) {
         await pool.query(
           `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-                VALUES($1, 'system', $2, 'application_stage_changed', $3, $4::jsonb)`,
+                VALUES($1, 'system', (SELECT id FROM bi_users WHERE id = $2), 'application_stage_changed', $3, $4::jsonb)`,
           [
             appId, userId,
             `Application advanced to ready_for_submission after all documents accepted`,
@@ -249,7 +249,7 @@ async function acceptDocumentLogic(req: Request, res: Response, idParam: string,
           }
           await pool.query(
             `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-                  VALUES($1, 'system', $2, 'auto_submitted_to_pgi', $3, $4::jsonb)`,
+                  VALUES($1, 'system', (SELECT id FROM bi_users WHERE id = $2), 'auto_submitted_to_pgi', $3, $4::jsonb)`,
             [
               appId, userId,
               `Auto-forwarded to PGI after last document accepted (external_id=${result.externalId})`,
@@ -266,7 +266,7 @@ async function acceptDocumentLogic(req: Request, res: Response, idParam: string,
           logger.warn({ err, appId }, "bi.applications.accept.auto_pgi_failed");
           await pool.query(
             `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-                  VALUES($1, 'system', $2, 'auto_submit_to_pgi_failed', $3, $4::jsonb)`,
+                  VALUES($1, 'system', (SELECT id FROM bi_users WHERE id = $2), 'auto_submit_to_pgi_failed', $3, $4::jsonb)`,
             [
               appId, userId,
               `Auto-PGI submission failed: ${pgiSubmitError}. Manual retry available.`,
@@ -333,7 +333,7 @@ async function rejectDocumentLogic(req: Request, res: Response, idParam: string,
 
     await pool.query(
       `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-            VALUES($1, 'staff', $2, 'document_rejected', $3, $4::jsonb)`,
+            VALUES($1, 'staff', (SELECT id FROM bi_users WHERE id = $2), 'document_rejected', $3, $4::jsonb)`,
       [appId, userId, `Document rejected: ${doc.doc_type}`, JSON.stringify({ docId, reason })],
     );
 
@@ -710,7 +710,7 @@ router.post("/:id/staff-decline", requireStaffOrAdmin, async (req: Request, res:
 
     await pool.query(
       `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-            VALUES($1, 'staff', $2, 'application_staff_declined', $3, $4::jsonb)`,
+            VALUES($1, 'staff', (SELECT id FROM bi_users WHERE id = $2), 'application_staff_declined', $3, $4::jsonb)`,
       [appId, userId, `Application declined by staff`, JSON.stringify({ reason, prior_stage: app.stage })],
     );
 
