@@ -1,33 +1,32 @@
--- BI_SERVER_BLOCK_v384
--- Align required document catalog to carrier's seven slots.
-BEGIN;
+-- 2026_05_27_carrier_doc_catalog_align_v384.sql
+-- v398 FIX of v384.
+-- Original bug: rows were inserted into bi_required_doc_catalog without
+-- display_label, which is NOT NULL (see 20260503_pgi_doc_policy_v61b_seed.sql),
+-- raising 23502 and aborting this migration on every boot. Because this is the
+-- first un-applied migration, the abort also blocked every migration after it.
+-- This version supplies display_label + description for every row and is fully
+-- idempotent (re-running only refreshes the label/description/flags).
+--
+-- The 7 doc types mirror the PGI/Purbeck partner schema:
+--   loan_agreement      -> REQUIRED for all Canadian submissions
+--   profit_loss, balance_sheet, ar_aging, ap_aging, founder_cv,
+--   financial_forecast  -> optional financial docs included in submission
+-- The table is created by an earlier migration; we do not redefine it here.
 
-CREATE TABLE IF NOT EXISTS bi_required_doc_catalog (
-  doc_type text PRIMARY KEY,
-  active boolean NOT NULL DEFAULT TRUE,
-  if_startup boolean NOT NULL DEFAULT FALSE,
-  sort_order integer NOT NULL DEFAULT 0,
-  created_at timestamptz NOT NULL DEFAULT NOW(),
-  updated_at timestamptz NOT NULL DEFAULT NOW()
-);
-
-INSERT INTO bi_required_doc_catalog (doc_type, active, if_startup, sort_order)
+INSERT INTO bi_required_doc_catalog
+  (doc_type, display_label, description, if_startup, sort_order, active)
 VALUES
-  ('loan_agreement', TRUE, FALSE, 10),
-  ('profit_loss', TRUE, FALSE, 20),
-  ('balance_sheet', TRUE, FALSE, 30),
-  ('ar_aging', TRUE, FALSE, 40),
-  ('ap_aging', TRUE, FALSE, 50),
-  ('founder_cv', TRUE, TRUE, 60),
-  ('financial_forecast', TRUE, TRUE, 70)
-ON CONFLICT (doc_type) DO UPDATE
-SET active = EXCLUDED.active,
-    if_startup = EXCLUDED.if_startup,
-    sort_order = EXCLUDED.sort_order,
-    updated_at = NOW();
-
-UPDATE bi_required_doc_catalog
-SET active = FALSE, updated_at = NOW()
-WHERE doc_type NOT IN ('loan_agreement','profit_loss','balance_sheet','ar_aging','ap_aging','founder_cv','financial_forecast');
-
-COMMIT;
+  ('loan_agreement',     'Loan Agreement / Term Sheet', 'Lender agreement or term sheet. Required for Canadian (Purbeck) submissions.', FALSE, 10, TRUE),
+  ('profit_loss',        'Profit & Loss Statement',     'Optional financial document included in the Purbeck submission.',              FALSE, 20, TRUE),
+  ('balance_sheet',      'Balance Sheet',               'Optional financial document included in the Purbeck submission.',              FALSE, 30, TRUE),
+  ('ar_aging',           'Accounts Receivable Aging',   'Optional financial document included in the Purbeck submission.',              FALSE, 40, TRUE),
+  ('ap_aging',           'Accounts Payable Aging',      'Optional financial document included in the Purbeck submission.',              FALSE, 50, TRUE),
+  ('founder_cv',         'Founder CV / Resume',         'Optional supporting document included in the Purbeck submission.',             FALSE, 60, TRUE),
+  ('financial_forecast', 'Financial Forecast',          'Optional financial document included in the Purbeck submission.',              FALSE, 70, TRUE)
+ON CONFLICT (doc_type) DO UPDATE SET
+  display_label = EXCLUDED.display_label,
+  description   = EXCLUDED.description,
+  if_startup    = EXCLUDED.if_startup,
+  sort_order    = EXCLUDED.sort_order,
+  active        = EXCLUDED.active,
+  updated_at    = NOW();
