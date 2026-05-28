@@ -207,11 +207,20 @@ export class PgiCarrierValidationError extends Error {
 }
 
 export async function pgiSubmitV2(payload: CarrierPayloadV2): Promise<{ application_id: string; status: string; message?: string }> {
-  const base = process.env.PGI_API_BASE || "https://api.pgicover.com";
-  const key = process.env.PGI_API_KEY || "";
-  const url = `${base.replace(/\/$/, "")}/api/v2/applications/`;
-  if (process.env.USE_PGI_STUB === "true") return { application_id: `STUB-${Math.random().toString(36).slice(2, 10).toUpperCase()}`, status: "received", message: "stub" };
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` }, body: JSON.stringify(payload) });
+  // BI_SERVER_BLOCK_v391_PGI_BASE_UNIFY_v1
+  // Use the SAME base-URL + stub resolution as pgiScore/pgiSubmit/
+  // pgiUploadDocument. Previously this read process.env.PGI_API_BASE —
+  // a var that is never set (env.ts validates PGI_BASE_URL, and every
+  // other adapter fn reads PGI_BASE = env.PGI_BASE_URL). The mismatch
+  // meant the PUBLIC carrier-submit path silently ignored a configured
+  // PGI_BASE_URL and always hit the hardcoded api.pgicover.com, while
+  // the lender path correctly honored PGI_BASE_URL — so pointing the
+  // app at a PGI sandbox moved lender traffic but NOT public traffic.
+  // STUB resolution now also matches the rest of the adapter (honors
+  // USE_PGI_STUB=true|1|false|0 and the NODE_ENV-aware default).
+  if (STUB) return { application_id: `STUB-${Math.random().toString(36).slice(2, 10).toUpperCase()}`, status: "received", message: "stub" };
+  const url = `${PGI_BASE.replace(/\/$/, "")}/api/v2/applications/`;
+  const res = await fetch(url, { method: "POST", headers: authHeaders(), body: JSON.stringify(payload) });
   if (res.status === 400) { const body = (await res.json().catch(() => ({}))) as { errors?: Record<string, string> }; throw new PgiCarrierValidationError(body.errors ?? { _root: "carrier returned 400 with no errors dict" }); }
   if (!res.ok) { const text = await res.text().catch(() => ""); throw new Error(`pgi_submit_failed status=${res.status} body=${text.slice(0, 500)}`); }
   return (await res.json()) as { application_id: string; status: string; message?: string };
