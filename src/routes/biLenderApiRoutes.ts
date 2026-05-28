@@ -349,10 +349,15 @@ router.post("/lender/otp/start", async (req, res) => {
         LIMIT 1`,
       [email],
     );
-    if (contact.rows[0]) {
-      const sr = await sendEmailOtpSafe(email);
-      if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
+    // BI_SERVER_BLOCK_v400_LENDER_OTP_PROVISIONING_404_v1
+    // Surface the 404 so LenderLogin.tsx can show the "not registered"
+    // message; silently returning ok stranded every unprovisioned lender
+    // waiting for a code that was never sent.
+    if (!contact.rows[0]) {
+      return res.status(404).json({ error: "lender_not_provisioned" });
     }
+    const sr = await sendEmailOtpSafe(email);
+    if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
     return res.json({ ok: true, channel: "email" });
   }
 
@@ -364,10 +369,12 @@ router.post("/lender/otp/start", async (req, res) => {
     `SELECT c.id FROM bi_lender_login_contacts c JOIN bi_lenders l ON l.id = c.lender_id WHERE c.phone_e164 = $1 AND c.is_active = TRUE AND l.is_active = TRUE LIMIT 1`,
     [phone],
   );
-  if (r.rows[0]) {
-    const sr = await sendOtpSafe(phone);
-    if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
+  // BI_SERVER_BLOCK_v400_LENDER_OTP_PROVISIONING_404_v1
+  if (!r.rows[0]) {
+    return res.status(404).json({ error: "lender_not_provisioned" });
   }
+  const sr = await sendOtpSafe(phone);
+  if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
   res.json({ ok: true, channel: "sms" });
 });
 
