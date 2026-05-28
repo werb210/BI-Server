@@ -482,8 +482,8 @@ router.delete("/:id", requireAuth, requireStaffOrAdmin, async (req, res) => {
   if (!r.rows.length) return badRequest(res, "Document not found or already deleted");
   const row = r.rows[0] as { id: string; application_id: string; doc_type: string };
   await pool.query(
-    `INSERT INTO bi_activity (application_id, actor, actor_user_id, kind, message, metadata)
-     VALUES ($1, 'staff', $2, 'document_deleted', $3, $4::jsonb)`,
+    `INSERT INTO bi_activity (application_id, actor_type, actor_user_id, event_type, summary, meta)
+     VALUES ($1, 'staff', (SELECT id FROM bi_users WHERE id = $2), 'document_deleted', $3, $4::jsonb)`,
     [row.application_id, userId, `Document deleted: ${row.doc_type}`, JSON.stringify({ docId: row.id })]
   ).catch(() => {});
   return ok(res, { success: true, id: row.id });
