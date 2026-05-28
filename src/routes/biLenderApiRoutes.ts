@@ -538,7 +538,12 @@ router.get("/lender/me", authLender, async (req: any, res) => {
   );
   if (!r.rows[0]) return res.status(404).json({ error: "lender_not_found" });
   let user = null;
-  if (req.lenderUserId) { const ur = await pool.query(`SELECT id, full_name, email, role FROM bi_lender_contacts WHERE id=$1 LIMIT 1`, [req.lenderUserId]); if (ur.rows[0]) user = ur.rows[0]; }
+  // BI_SERVER_BLOCK_v388_LENDER_ME_TABLE_FIX_v1
+  // OTP verify (line ~457 above) mints the JWT with user_id = bi_lender_login_contacts.id.
+  // Querying bi_lender_contacts here silently returned null for every
+  // OTP-logged-in lender. Use the same table as the JWT source so the
+  // /lender/me response actually surfaces the contact.
+  if (req.lenderUserId) { const ur = await pool.query(`SELECT id, full_name, email, role FROM bi_lender_login_contacts WHERE id=$1 LIMIT 1`, [req.lenderUserId]); if (ur.rows[0]) user = ur.rows[0]; }
   res.json({ lender: r.rows[0], user });
 });
 
