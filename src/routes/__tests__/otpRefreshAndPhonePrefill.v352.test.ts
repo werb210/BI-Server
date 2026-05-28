@@ -1,4 +1,5 @@
 // BI_SERVER_BLOCK_v352_OTP_AND_PHONE_PREFILL_v1
+// Cancellation assertions superseded by BI_SERVER_BLOCK_v399_OTP_RESEND_DEBOUNCE_v1.
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -19,14 +20,16 @@ describe("v352 — phone pre-fill on /applicants/me/pending-application", () => 
   });
 });
 
-describe("v352 — Twilio Verify session cancellation on re-OTP", () => {
-  it("sendOtpSafe cancels previous verification before creating a new one", () => {
-    expect(otpSrc).toMatch(/cancelPreviousVerificationFor/);
+describe("v399 — OTP resend debounce (no cancel-on-send)", () => {
+  it("does NOT cancel the previous verification", () => {
+    expect(otpSrc).not.toMatch(/cancelPreviousVerificationFor/);
+    expect(otpSrc).not.toMatch(/status:\s*["']canceled["']/);
   });
-  it("cancellation is best-effort (does not throw)", () => {
-    expect(otpSrc).toMatch(/} catch \{\s*\/\/[^}]*\}/);
+  it("debounces duplicate sends with an in-memory recentSendAt map", () => {
+    expect(otpSrc).toMatch(/recentSendAt/);
+    expect(otpSrc).toMatch(/RESEND_DEBOUNCE_MS/);
   });
-  it("stores the latest verification SID per phone in lastSid map", () => {
-    expect(otpSrc).toMatch(/lastSid\.set\(phone, sid\)/);
+  it("clears the debounce once a code is approved", () => {
+    expect(otpSrc).toMatch(/if \(approved\) recentSendAt\.delete\(phone\)/);
   });
 });
