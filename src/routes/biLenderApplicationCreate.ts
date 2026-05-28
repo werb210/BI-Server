@@ -281,6 +281,42 @@ router.post(
       }
       created.push({ id: inserted.rows[0].id, doc_type: docType, filename: file.originalname });
       await pool.query(`INSERT INTO bi_activity(application_id, actor_type, event_type, summary) VALUES($1,'lender','document_uploaded',$2)`, [app.id, `Document uploaded: ${file.originalname}`]).catch(() => {});
+
+      // BI_SERVER_BLOCK_v391_LENDER_DOC_CARRIER_FORWARD_v1
+      // Forward to PGI immediately when the application has already been
+      // submitted to the carrier (pgi_application_id set — always true
+      // for the lender flow, since create auto-submits). Lender apps
+      // route straight to the carrier with no staff-review gate, so the
+      // doc must reach PGI on upload. This handler is mounted BEFORE
+      // biLenderApiRoutes in server.ts and therefore serves this route;
+      // the forwarding block in that sibling was dead code. Non-fatal:
+      // a carrier hiccup logs + leaves forwarded_to_carrier_at NULL so a
+      // retry/backfill can pick it up, but never fails the upload.
+      const PGI_DOC_TYPES = ["loan_agreement", "profit_loss", "balance_sheet", "ar_aging", "ap_aging", "founder_cv", "financial_forecast"];
+      try {
+        const appRow = await pool.query<{ pgi_application_id: string | null }>(
+          `SELECT pgi_application_id FROM bi_applications WHERE id = $1 LIMIT 1`,
+          [app.id]
+        );
+        const pgiAppId = appRow.rows[0]?.pgi_application_id ?? null;
+        if (pgiAppId && PGI_DOC_TYPES.includes(docType)) {
+          const { pgiUploadDocument } = await import("../services/pgiAdapter");
+          const fwd = await pgiUploadDocument({
+            pgiApplicationId: pgiAppId,
+            docType: docType as "loan_agreement" | "profit_loss" | "balance_sheet" | "ar_aging" | "ap_aging" | "founder_cv" | "financial_forecast",
+            filename: file.originalname,
+            buffer: file.buffer,
+            mimeType: file.mimetype,
+          });
+          await pool.query(
+            `UPDATE bi_documents SET pgi_document_id = $1, forwarded_to_carrier_at = NOW() WHERE id = $2`,
+            [fwd.document_id, inserted.rows[0].id]
+          );
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("[v391] lender doc carrier-forward failed (non-fatal)", { app_id: app.id, doc_type: docType, error: (err as Error)?.message });
+      }
     }
     return res.json({ ok: true, documents: created });
   }
