@@ -936,4 +936,38 @@ router.get("/crm/contacts/:id/activity", async (req, res) => {
   return res.json({ items: r.rows });
 });
 
+router.post("/crm/contacts/bulk-delete", async (req, res) => {
+  if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
+  const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown): x is string => typeof x === "string") : [];
+  if (ids.length === 0) return res.status(400).json({ error: "ids_required" });
+  await pool.query(`DELETE FROM bi_contacts WHERE id = ANY($1::uuid[])`, [ids]);
+  return res.json({ ok: true, deleted: ids.length });
+});
+
+router.post("/crm/contacts/bulk-tag", async (req, res) => {
+  if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
+  const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown): x is string => typeof x === "string") : [];
+  const tag = typeof req.body?.tag === "string" ? req.body.tag.trim() : "";
+  if (ids.length === 0 || !tag) return res.status(400).json({ error: "ids_and_tag_required" });
+  await pool.query(`UPDATE bi_contacts SET tags = array(SELECT DISTINCT unnest(COALESCE(tags,'{}'::text[]) || $1::text[])) WHERE id = ANY($2::uuid[])`, [[tag], ids]);
+  return res.json({ ok: true, tagged: ids.length });
+});
+
+router.post("/crm/companies/bulk-delete", async (req, res) => {
+  if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
+  const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown): x is string => typeof x === "string") : [];
+  if (ids.length === 0) return res.status(400).json({ error: "ids_required" });
+  await pool.query(`DELETE FROM bi_companies WHERE id = ANY($1::uuid[])`, [ids]);
+  return res.json({ ok: true, deleted: ids.length });
+});
+
+router.post("/crm/companies/bulk-tag", async (req, res) => {
+  if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
+  const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown): x is string => typeof x === "string") : [];
+  const tag = typeof req.body?.tag === "string" ? req.body.tag.trim() : "";
+  if (ids.length === 0 || !tag) return res.status(400).json({ error: "ids_and_tag_required" });
+  await pool.query(`UPDATE bi_companies SET tags = array(SELECT DISTINCT unnest(COALESCE(tags,'{}'::text[]) || $1::text[])) WHERE id = ANY($2::uuid[])`, [[tag], ids]);
+  return res.json({ ok: true, tagged: ids.length });
+});
+
 export default router;
