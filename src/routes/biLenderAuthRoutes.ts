@@ -8,20 +8,12 @@ import jwt from "jsonwebtoken";
 import { pool } from "../db";
 import { env } from "../platform/env";
 import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
+import { normalizeE164 } from "../util/phoneE164";
 
 const router = express.Router();
 
 if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-}
-
-function normalizeE164(v: unknown): string | null {
-  if (typeof v !== "string") return null;
-  const s = v.trim().replace(/[^\d+]/g, "");
-  if (/^\+\d{8,15}$/.test(s)) return s;
-  if (/^\d{10}$/.test(s)) return `+1${s}`;
-  if (/^1\d{10}$/.test(s)) return `+${s}`;
-  return null;
 }
 
 function getSecret(): string {
