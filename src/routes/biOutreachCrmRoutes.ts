@@ -111,6 +111,7 @@ router.get("/crm/outreach/contacts", async (req: Request, res: Response) => {
   const sql = `
     SELECT id, full_name, email, phone_e164, title, notes, tags,
            outreach_status, outreach_owner_id, outreach_updated_at,
+           outreach_segment, promoted_lender_id, -- BI_SERVER_BLOCK_v411
            company_id, created_at
       FROM bi_contacts
      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
