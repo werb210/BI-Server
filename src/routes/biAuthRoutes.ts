@@ -4,6 +4,7 @@ import { pool } from "../db";
 import { signStaffToken } from "../platform/auth";
 import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
 import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
+import { normalizeE164 } from "../util/phoneE164";
 import { calculatePremium } from "../services/premiumService";
 import { badRequest, ok } from "../utils/apiResponse";
 import { capabilitiesForEmail } from "../platform/capabilities";
@@ -12,15 +13,21 @@ const publicRouter = Router();
 export const biAppApplicantRoutes = Router();
 
 publicRouter.post("/otp/request", async (req, res) => {
-  const { phone, name, email, userType } = req.body as {
+  const { phone: rawPhone, name, email, userType } = req.body as {
     phone?: string;
     name?: string;
     email?: string;
     userType?: string;
   };
 
-  if (!phone || !name || !email) {
+  if (!rawPhone || !name || !email) {
     return badRequest(res, "Name, email, and phone are required");
+  }
+
+  // v407: canonicalize before send/store so Twilio, storage and verify agree.
+  const phone = normalizeE164(rawPhone);
+  if (!phone) {
+    return badRequest(res, "Invalid phone number");
   }
 
   // BI_AUDIT_FIX_v58 — userType MUST be on the allowlist.
@@ -82,9 +89,15 @@ publicRouter.post("/otp/request", async (req, res) => {
 });
 
 publicRouter.post("/otp/verify", async (req, res) => {
-  const { phone, code } = req.body as { phone?: string; code?: string };
+  const { phone: rawPhone, code } = req.body as { phone?: string; code?: string };
 
-  if (!phone || !code) {
+  if (!rawPhone || !code) {
+    return badRequest(res, "Phone and code required");
+  }
+
+  // v407: normalize identically to /otp/request so the stored code is found.
+  const phone = normalizeE164(rawPhone);
+  if (!phone) {
     return badRequest(res, "Phone and code required");
   }
 
