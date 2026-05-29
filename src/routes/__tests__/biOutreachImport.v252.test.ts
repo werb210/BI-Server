@@ -7,12 +7,18 @@ import * as XLSX from "xlsx";
 
 const queryMock = vi.fn();
 vi.mock("../../db", () => ({
-  pool: { query: (...args: unknown[]) => queryMock(...args) },
+  pool: {
+    query: (...args: unknown[]) => queryMock(...args),
+    connect: async () => ({
+      query: (...args: unknown[]) => queryMock(...args),
+      release: vi.fn(),
+    }),
+  },
 }));
 
 const SECRET = "test-shared-secret-min-10";
 vi.mock("../../platform/env", () => ({
-  env: { JWT_SECRET: SECRET, DATABASE_URL: "postgres://test" },
+  env: { JWT_SECRET: "test-shared-secret-min-10", DATABASE_URL: "postgres://test" },
 }));
 vi.mock("../../platform/logger", () => ({
   logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
@@ -245,5 +251,125 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/contacts/:id/demo-invite",
     );
     expect(activityCall).toBeDefined();
     expect(activityCall![1]).toContain("failed");
+  });
+});
+
+describe("BI_SERVER_BLOCK_v410 — POST /crm/outreach/contacts/:id/start-onboarding", () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+    sendSmsMock.mockReset();
+  });
+
+  it("creates a lender, links it to the contact, advances stage, and sends SMS", async () => {
+    queryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "c1",
+            full_name: "Jane Doe",
+            email: "JANE@EXAMPLE.COM",
+            phone_e164: "+14165551234",
+            company_name: "Acme Inc",
+            promoted_lender_id: null,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: "lender-1" }] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // COMMIT
+    sendSmsMock.mockResolvedValueOnce({ sid: "SM1" });
+
+    const r = await request(makeApp())
+      .post("/crm/outreach/contacts/c1/start-onboarding")
+      .set("Authorization", `Bearer ${staffToken()}`)
+      .send({});
+
+    expect(r.status).toBe(201);
+    expect(r.body).toEqual({ ok: true, lender_id: "lender-1" });
+
+    const lenderInsertCall = queryMock.mock.calls.find((call) =>
+      String(call[0]).includes("INSERT INTO bi_lenders"),
+    );
+    expect(lenderInsertCall).toBeDefined();
+    expect(String(lenderInsertCall![0])).toMatch(/website_url, address_line1, city, province, postal_code/);
+    expect(lenderInsertCall![1]).toEqual([
+      "Acme Inc",
+      "Jane Doe",
+      "jane@example.com",
+      "+14165551234",
+    ]);
+
+    const contactUpdateCall = queryMock.mock.calls.find((call) =>
+      String(call[0]).includes("UPDATE bi_contacts"),
+    );
+    expect(contactUpdateCall).toBeDefined();
+    expect(String(contactUpdateCall![0])).toContain("promoted_lender_id");
+    expect(String(contactUpdateCall![0])).toContain("outreach_status = 'onboarding'");
+    expect(contactUpdateCall![1]).toEqual(["c1", "lender-1"]);
+    expect(sendSmsMock).toHaveBeenCalledWith(
+      "+14165551234",
+      expect.stringContaining("you have been added as a lender"),
+    );
+  });
+
+  it("409s without inserting when the contact is already linked to a lender", async () => {
+    queryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "c1",
+            full_name: "Jane Doe",
+            email: "jane@example.com",
+            phone_e164: "+14165551234",
+            company_name: "Acme Inc",
+            promoted_lender_id: "existing-lender",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // ROLLBACK
+
+    const r = await request(makeApp())
+      .post("/crm/outreach/contacts/c1/start-onboarding")
+      .set("Authorization", `Bearer ${staffToken()}`)
+      .send({});
+
+    expect(r.status).toBe(409);
+    expect(r.body.error).toBe("ALREADY_ONBOARDED");
+    expect(r.body.lender_id).toBe("existing-lender");
+    expect(
+      queryMock.mock.calls.some((call) => String(call[0]).includes("INSERT INTO bi_lenders")),
+    ).toBe(false);
+    expect(sendSmsMock).not.toHaveBeenCalled();
+  });
+
+  it("400s without inserting when required contact fields are missing", async () => {
+    queryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "c1",
+            full_name: "Jane Doe",
+            email: null,
+            phone_e164: "+14165551234",
+            company_name: "Acme Inc",
+            promoted_lender_id: null,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // ROLLBACK
+
+    const r = await request(makeApp())
+      .post("/crm/outreach/contacts/c1/start-onboarding")
+      .set("Authorization", `Bearer ${staffToken()}`)
+      .send({});
+
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe("MISSING_CONTACT_FIELDS");
+    expect(
+      queryMock.mock.calls.some((call) => String(call[0]).includes("INSERT INTO bi_lenders")),
+    ).toBe(false);
   });
 });

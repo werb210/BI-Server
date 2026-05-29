@@ -32,6 +32,10 @@ const ALLOWED_STATUS = new Set([
   "demo_completed",
   "not_interested",
   "lender",
+  "new",
+  "contacted",
+  "onboarding",
+  "active",
 ]);
 
 const ALLOWED_EVENT_TYPES = new Set([
@@ -619,6 +623,99 @@ Book a time: ${bookingsUrl}`
     }
 
     return res.json({ ok: true, sid, body });
+  },
+);
+
+// BI_SERVER_BLOCK_v410_START_ONBOARDING_v1
+// Promote an outreach contact to a lender using the same bi_lenders
+// insert shape as the admin/lenders create path, then link the new
+// lender back onto the contact to prevent double onboarding.
+router.post(
+  "/crm/outreach/contacts/:id/start-onboarding",
+  async (req: Request, res: Response) => {
+    const contactId = typeof req.params.id === "string" ? req.params.id : "";
+    if (!contactId) return res.status(400).json({ ok: false, error: "ID_REQUIRED" });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const contact = (await client.query<{
+        id: string;
+        full_name: string | null;
+        email: string | null;
+        phone_e164: string | null;
+        company_name: string | null;
+        promoted_lender_id: string | null;
+      }>(
+        `SELECT c.id, c.full_name, c.email, c.phone_e164,
+                COALESCE(co.legal_name, c.full_name) AS company_name,
+                c.promoted_lender_id
+           FROM bi_contacts c
+           LEFT JOIN bi_companies co ON co.id = c.company_id
+          WHERE c.id = $1
+          FOR UPDATE OF c`,
+        [contactId],
+      )).rows[0];
+
+      if (!contact) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ ok: false, error: "CONTACT_NOT_FOUND" });
+      }
+      if (contact.promoted_lender_id) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "ALREADY_ONBOARDED",
+          lender_id: contact.promoted_lender_id,
+        });
+      }
+
+      const fullName = contact.full_name?.trim() ?? "";
+      const email = contact.email?.trim().toLowerCase() ?? "";
+      const phone = contact.phone_e164?.trim() ?? "";
+      const companyName = contact.company_name?.trim() || fullName;
+      if (!fullName || !email || !phone) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ ok: false, error: "MISSING_CONTACT_FIELDS" });
+      }
+
+      const lender = await client.query<{ id: string }>(
+        `INSERT INTO bi_lenders
+           (company_name, website_url, address_line1, city, province, postal_code,
+            country, contact_full_name, contact_email, contact_phone_e164, is_active)
+         VALUES ($1, NULL, NULL, NULL, NULL, NULL, 'CA', $2, $3, $4, TRUE)
+         RETURNING id`,
+        [companyName, fullName, email, phone],
+      );
+      const lenderId = lender.rows[0]!.id;
+
+      await client.query(
+        `UPDATE bi_contacts
+            SET promoted_lender_id = $2,
+                outreach_status = 'onboarding',
+                outreach_updated_at = NOW()
+          WHERE id = $1`,
+        [contactId, lenderId],
+      );
+
+      await client.query("COMMIT");
+
+      void sendOutreachSms(
+        phone,
+        `Boreal Risk: ${fullName}, you have been added as a lender. Sign in: https://www.boreal.insure/lender/login. Use this mobile number when prompted. Reply STOP to opt out.`,
+      ).catch((err: unknown) => {
+        logger.error({ err, to: phone, contactId, lenderId }, "start_onboarding_sms_failed");
+      });
+
+      return res.status(201).json({ ok: true, lender_id: lenderId });
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      logger.error({ err, contactId }, "start_onboarding_failed");
+      return res.status(500).json({ ok: false, error: "START_ONBOARDING_FAILED" });
+    } finally {
+      client.release();
+    }
   },
 );
 
