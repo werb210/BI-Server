@@ -131,7 +131,11 @@ router.get("/crm/contacts", async (req, res) => {
   `;
   try {
     const r = await pool.query(sql, params);
-    ok(res, r.rows);
+    // BI_SERVER_BLOCK_v411_CRM_LIST_TOTAL_v1 — return total row count so the
+    // portal can paginate (100/page) instead of capping at the default page.
+    const countSql = `SELECT COUNT(*)::int AS total FROM bi_contacts c LEFT JOIN bi_companies co ON co.id = c.company_id ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`;
+    const cr = await pool.query(countSql, params);
+    return res.status(200).json({ status: "ok", data: r.rows, total: cr.rows[0]?.total ?? r.rows.length, page, pageSize });
   } catch (err: any) {
     logger.error({ err }, "bi_crm_contacts_list_failed");
     return res.status(500).json({ error: "list_failed" });
@@ -459,7 +463,10 @@ router.get("/crm/companies", async (req, res) => {
   `;
   try {
     const r = await pool.query(sql, params);
-    ok(res, r.rows);
+    // BI_SERVER_BLOCK_v411_CRM_LIST_TOTAL_v1
+    const countSql = `SELECT COUNT(*)::int AS total FROM bi_companies ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`;
+    const cr = await pool.query(countSql, params);
+    return res.status(200).json({ status: "ok", data: r.rows, total: cr.rows[0]?.total ?? r.rows.length, page, pageSize });
   } catch (err: any) {
     logger.error({ err }, "bi_crm_companies_list_failed");
     return res.status(500).json({ error: "list_failed" });
