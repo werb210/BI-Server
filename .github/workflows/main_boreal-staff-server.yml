@@ -90,7 +90,6 @@ jobs:
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          slot-name: staging
           # IMPORTANT: this secret must hold the STAGING SLOT's publish
           # profile (not the production app's). A push now deploys to the
           # staging slot only; production is updated by a manual Swap in
