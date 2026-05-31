@@ -97,7 +97,8 @@ jobs:
           # profile (not the production app's). Manual workflow runs deploy
           # to the staging slot only; production is updated by a manual Swap in
           # the Azure portal once the slot is verified healthy.
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          # BI_SERVER_BLOCK_v414_DEPLOY_USES_STAGING_SECRET — deploy to the staging slot
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE_STAGING }}
           package: .
           # NOTE: NO startup-command. Windows web apps + publish-profile
           # auth reject this input. iisnode finds server.js automatically.
