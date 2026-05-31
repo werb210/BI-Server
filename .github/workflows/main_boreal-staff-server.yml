@@ -5,11 +5,11 @@
 name: Build and deploy Node.js app to Azure Web App - BI-Server
 
 on:
-  # BI_SERVER_BLOCK_v412_DEPLOY_MANUAL_ONLY — auto-deploy on merge removed so a
-  # broken change can no longer reach production automatically. Trigger deploys
-  # manually (Actions tab -> this workflow -> Run workflow). The deploy targets
-  # the staging slot (per the publish-profile secret); promote to production
-  # with a manual Swap in the Azure portal after verifying staging is healthy.
+  # BI_SERVER_BLOCK_v415_AUTO_DEPLOY_TO_STAGING — merges to main auto-deploy to the
+  # STAGING slot (publish-profile secret = AZURE_WEBAPP_PUBLISH_PROFILE_STAGING).
+  # Production is updated only by a manual Swap in the Azure portal.
+  push:
+    branches: [main]
   workflow_dispatch:
 concurrency:
   group: bi-server-staging
