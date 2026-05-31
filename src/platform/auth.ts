@@ -36,6 +36,21 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
       }
     }
     req.user = decoded;
+    // BI_SERVER_BLOCK_v411_STAFF_CAPS_FROM_ROLE_v1 — BF-Server staff JWTs carry
+    // BF capability strings, not BI's marketing:* set, so capability-gated BI
+    // CRM writes (bulk-tag / bulk-delete) returned 403 for valid staff. Grant
+    // the BI capability set to any authenticated staff/admin based on role.
+    try {
+      const u = req.user as Record<string, unknown> | undefined;
+      const role = typeof u?.role === "string" ? u.role : "";
+      if (u && (role === "admin" || role === "owner" || role === "staff" || role === "marketing")) {
+        const existing = Array.isArray(u.capabilities) ? (u.capabilities as string[]) : [];
+        const biCaps = role === "admin" || role === "owner"
+          ? ["crm:read", "marketing:lists", "marketing:outreach", "marketing:admin"]
+          : ["crm:read", "marketing:lists", "marketing:outreach"];
+        u.capabilities = Array.from(new Set([...existing, ...biCaps]));
+      }
+    } catch { /* non-fatal: leave capabilities unchanged */ }
     next();
   } catch {
     return res.status(401).json({ status: "error", error: "Invalid token" });
