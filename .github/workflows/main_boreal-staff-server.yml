@@ -9,7 +9,7 @@ on:
     branches: [main]
   workflow_dispatch:
 concurrency:
-  group: bi-server-production
+  group: bi-server-staging
   cancel-in-progress: true
 
 env:
@@ -86,10 +86,15 @@ jobs:
       - name: Wait for previous deployment lock release
         run: sleep 45
 
-      - name: Deploy to Azure Web App
+      - name: Deploy to Azure Web App (staging slot)
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          slot-name: staging
+          # IMPORTANT: this secret must hold the STAGING SLOT's publish
+          # profile (not the production app's). A push now deploys to the
+          # staging slot only; production is updated by a manual Swap in
+          # the Azure portal once the slot is verified healthy.
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: .
           # NOTE: NO startup-command. Windows web apps + publish-profile
