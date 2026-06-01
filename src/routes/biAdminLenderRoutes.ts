@@ -41,20 +41,43 @@ router.use((req: any, res: any, next: any) => {
   next();
 });
 
-// BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 — fire-and-forget SMS to a single number.
-async function sendBiSms(to: string, body: string): Promise<void> {
+// BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 — single-number SMS.
+// BI_SERVER_BLOCK_v412_LENDER_SMS_NORMALIZE_AND_PURGE_v1 — normalize the destination to
+// bare E.164 (stored numbers like "+1 (587) 581-5330" were rejected by Twilio) and
+// return a real result instead of swallowing it, so the portal can show sent/failed.
+type BiSmsResult = { sent: boolean; skipped?: boolean; error?: string; to: string };
+function toE164(raw: string): string | null {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return null;
+  const hasPlus = trimmed.startsWith("+");
+  const digits = trimmed.replace(/\D/g, "");
+  if (!digits) return null;
+  if (hasPlus) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return `+${digits}`;
+}
+async function sendBiSms(to: string, body: string): Promise<BiSmsResult> {
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const tok = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_FROM;
+  const e164 = toE164(to);
   if (!sid || !tok || !from) {
     logger.warn({ to }, "[v235] Twilio not configured — SMS skipped");
-    return;
+    return { sent: false, skipped: true, error: "twilio_not_configured", to: e164 ?? to };
+  }
+  if (!e164) {
+    logger.error({ to }, "[v412] invalid phone — SMS skipped");
+    return { sent: false, error: "invalid_phone", to };
   }
   try {
     const client = twilio(sid, tok);
-    await client.messages.create({ from, to, body });
-  } catch (err) {
-    logger.error({ err, to }, "[v235] SMS send failed");
+    const msg = await client.messages.create({ from, to: e164, body });
+    logger.info({ to: e164, sid: msg.sid }, "[v412] SMS sent");
+    return { sent: true, to: e164 };
+  } catch (err: any) {
+    logger.error({ err, to: e164 }, "[v235] SMS send failed");
+    return { sent: false, error: err?.message ? String(err.message) : "send_failed", to: e164 };
   }
 }
 
@@ -82,7 +105,7 @@ async function revokeLenderKeys(lenderId: string): Promise<number> {
 }
 
 
-router.get("/admin/lenders", async (_req, res) => { const r = await pool.query(`SELECT id, company_name, website_url, address_line1, city, province, postal_code, country, contact_full_name, contact_email, contact_phone_e164, is_active, created_at FROM bi_lenders ORDER BY company_name`); return ok(res, { lenders: r.rows }); });
+router.get("/admin/lenders", async (req, res) => { const inc = String(req.query?.include_inactive ?? "").toLowerCase(); const includeInactive = inc === "true" || inc === "1"; const where = includeInactive ? "" : "WHERE is_active = TRUE"; const r = await pool.query(`SELECT id, company_name, website_url, address_line1, city, province, postal_code, country, contact_full_name, contact_email, contact_phone_e164, is_active, created_at FROM bi_lenders ${where} ORDER BY company_name`); return ok(res, { lenders: r.rows }); });
 
 // BI_SERVER_BLOCK_v247_BI_API_FIXES_v1 -- staff portal lists referrers from
 // the Referrer page in the BI silo. Route was missing -> 404. The master
@@ -160,7 +183,7 @@ router.get("/admin/referrers/:id/detail", async (req, res) => {
     return res.status(500).json({ status: "error", error: "REFERRER_DETAIL_FAILED" });
   }
 });
-router.post("/admin/lenders", async (req, res) => { const b = (req.body ?? {}) as Record<string, unknown>; const company_name = String(b.company_name ?? "").trim(); const contact_full_name = String(b.contact_full_name ?? "").trim(); const contact_email = String(b.contact_email ?? "").trim().toLowerCase(); const contact_phone_e164 = String(b.contact_phone_e164 ?? "").trim(); const country = String(b.country ?? "CA").toUpperCase(); if (!company_name) return badRequest(res, "company_name required"); if (!contact_full_name) return badRequest(res, "contact_full_name required"); if (!contact_email) return badRequest(res, "contact_email required"); if (!contact_phone_e164) return badRequest(res, "contact_phone_e164 required"); if (!COUNTRY_RE.test(country)) return badRequest(res, "country must be CA or US"); try { const r = await pool.query<{ id: string }>(`INSERT INTO bi_lenders (company_name, website_url, address_line1, city, province, postal_code, country, contact_full_name, contact_email, contact_phone_e164, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE) RETURNING id`, [company_name,(b.website_url as string) || null,(b.address_line1 as string) || null,(b.city as string) || null,(b.province as string) || null,(b.postal_code as string) || null,country,contact_full_name, contact_email, contact_phone_e164]); const lender_id = r.rows[0]!.id; await mirrorToContact({ source: "lender_contact", full_name: contact_full_name, email: contact_email, phone_e164: contact_phone_e164, company_name, extra_tags: [`lender:${lender_id}`] }); /* BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 */ void sendBiSms(contact_phone_e164, `Boreal Risk: ${contact_full_name}, you have been added as a lender. Sign in to the lender portal: https://www.boreal.insure/lender/login. Use this mobile number when prompted. Reply STOP to opt out.`); return ok(res, { id: lender_id }); } catch (err) { logger.error({ err }, "create lender failed"); return badRequest(res, "create failed"); } });
+router.post("/admin/lenders", async (req, res) => { const b = (req.body ?? {}) as Record<string, unknown>; const company_name = String(b.company_name ?? "").trim(); const contact_full_name = String(b.contact_full_name ?? "").trim(); const contact_email = String(b.contact_email ?? "").trim().toLowerCase(); const contact_phone_e164 = String(b.contact_phone_e164 ?? "").trim(); const country = String(b.country ?? "CA").toUpperCase(); if (!company_name) return badRequest(res, "company_name required"); if (!contact_full_name) return badRequest(res, "contact_full_name required"); if (!contact_email) return badRequest(res, "contact_email required"); if (!contact_phone_e164) return badRequest(res, "contact_phone_e164 required"); if (!COUNTRY_RE.test(country)) return badRequest(res, "country must be CA or US"); try { const r = await pool.query<{ id: string }>(`INSERT INTO bi_lenders (company_name, website_url, address_line1, city, province, postal_code, country, contact_full_name, contact_email, contact_phone_e164, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE) RETURNING id`, [company_name,(b.website_url as string) || null,(b.address_line1 as string) || null,(b.city as string) || null,(b.province as string) || null,(b.postal_code as string) || null,country,contact_full_name, contact_email, contact_phone_e164]); const lender_id = r.rows[0]!.id; await mirrorToContact({ source: "lender_contact", full_name: contact_full_name, email: contact_email, phone_e164: contact_phone_e164, company_name, extra_tags: [`lender:${lender_id}`] }); /* BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 */ const _sms = await sendBiSms(contact_phone_e164, `Boreal Risk: ${contact_full_name}, you have been added as a lender. Sign in to the lender portal: https://www.boreal.insure/lender/login. Use this mobile number when prompted. Reply STOP to opt out.`); return ok(res, { id: lender_id, sms: _sms }); } catch (err) { logger.error({ err }, "create lender failed"); return badRequest(res, "create failed"); } });
 router.patch("/admin/lenders/:id", async (req, res) => { const id = req.params.id; const b = (req.body ?? {}) as Record<string, unknown>; if (b.country !== undefined && !COUNTRY_RE.test(String(b.country).toUpperCase())) return badRequest(res, "country must be CA or US"); const setSql: string[] = []; const vals: unknown[] = [id]; let i = 2; const cols = ["company_name","website_url","address_line1","city","province","postal_code","country","contact_full_name","contact_email","contact_phone_e164","is_active"]; for (const c of cols) { if (b[c] !== undefined) { setSql.push(`${c} = $${i++}`); vals.push(c === "country" ? String(b[c]).toUpperCase() : b[c]); }} if (!setSql.length) return badRequest(res, "no fields to update"); await pool.query(`UPDATE bi_lenders SET ${setSql.join(", ")} WHERE id = $1`, vals); /* BI_SERVER_BLOCK_v237_REVOKE_KEYS_ON_DEACTIVATE_v1 */ let _keysRevoked = 0; if (b.is_active === false) { _keysRevoked = await revokeLenderKeys(id); } return ok(res, { updated: true, keys_revoked: _keysRevoked }); });
 /* BI_SERVER_BLOCK_v237_REVOKE_KEYS_ON_DEACTIVATE_v1 — atomically revoke API keys on lender deactivation */
 router.delete("/admin/lenders/:id", async (req, res) => {
@@ -168,6 +191,34 @@ router.delete("/admin/lenders/:id", async (req, res) => {
   await pool.query(`UPDATE bi_lenders SET is_active = FALSE WHERE id = $1`, [id]);
   const revoked = await revokeLenderKeys(id);
   return ok(res, { deactivated: true, keys_revoked: revoked });
+});
+
+// BI_SERVER_BLOCK_v412_LENDER_SMS_NORMALIZE_AND_PURGE_v1 — HARD delete (admin-only; this
+// whole router is admin-gated at the top). All child FKs are ON DELETE CASCADE (api keys,
+// contacts, login contacts) or SET NULL (applications, CRM contacts), so this removes the
+// lender + its own records and only nulls the lender link on applications — apps are kept.
+router.delete("/admin/lenders/:id/purge", async (req, res) => {
+  const id = req.params.id;
+  const r = await pool.query(`DELETE FROM bi_lenders WHERE id = $1 RETURNING id`, [id]);
+  if (!r.rowCount) return badRequest(res, "lender not found");
+  return ok(res, { purged: true, id });
+});
+
+// BI_SERVER_BLOCK_v412_LENDER_SMS_NORMALIZE_AND_PURGE_v1 — re-send the lender invite SMS.
+router.post("/admin/lenders/:id/resend-invite", async (req, res) => {
+  const id = req.params.id;
+  const lr = await pool.query<{ company_name: string; contact_full_name: string | null; contact_phone_e164: string | null }>(
+    `SELECT company_name, contact_full_name, contact_phone_e164 FROM bi_lenders WHERE id = $1`,
+    [id],
+  );
+  if (!lr.rowCount) return badRequest(res, "lender not found");
+  const row = lr.rows[0]!;
+  if (!row.contact_phone_e164) return badRequest(res, "lender has no contact phone");
+  const sms = await sendBiSms(
+    row.contact_phone_e164,
+    `Boreal Risk: ${row.contact_full_name || "your lender account"}, sign in to the lender portal: https://www.boreal.insure/lender/login. Use this mobile number when prompted. Reply STOP to opt out.`,
+  );
+  return ok(res, { id, sms });
 });
 // BI_SERVER_BLOCK_v65_LENDER_API_KEY_MINT_v1 — staff mints/lists/revokes
 // API keys for a given BI-lender. Secret is shown ONCE on creation, hashed
