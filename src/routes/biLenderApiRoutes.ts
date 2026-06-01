@@ -551,7 +551,11 @@ router.get("/lender/me", authLender, async (req: any, res) => {
   // OTP-logged-in lender. Use the same table as the JWT source so the
   // /lender/me response actually surfaces the contact.
   if (req.lenderUserId) { const ur = await pool.query(`SELECT id, full_name, email, role FROM bi_lender_login_contacts WHERE id=$1 LIMIT 1`, [req.lenderUserId]); if (ur.rows[0]) user = ur.rows[0]; }
-  res.json({ lender: r.rows[0], user });
+  // BI_SERVER_BLOCK_v415_DEMO_HIDE_WHEN_KEYED_v1 — surface whether the lender has an
+  // active API key so the portal can hide the demo option for live, keyed lenders.
+  const keyRes = await pool.query(`SELECT 1 FROM bi_lender_api_keys WHERE lender_id = $1 AND is_active = TRUE LIMIT 1`, [req.lenderId]);
+  const has_active_key = (keyRes.rowCount ?? 0) > 0;
+  res.json({ lender: r.rows[0], user, has_active_key });
 });
 
 router.post("/lender/api-keys", authLender, lenderRateLimit, /* BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1 */ async (req: any, res) => {
