@@ -150,13 +150,15 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
           business_name, lender_name,
           loan_amount, pgi_limit, annual_revenue, collateral_value,
           naics_code, naics_confidence,
+          entity_type, guarantor_dob, guarantor_address, business_address, loan_purpose, formation_date,
           data,
           created_at, updated_at)
        VALUES ($1,$2,$3,
                'created','bf_pgi_referral','public','system',
                $4,
                $5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-               $16::jsonb, NOW(), NOW())`,
+               $16,$17,$18,$19,$20,$21,
+               $22::jsonb, NOW(), NOW())`,
       [
         id, publicId, applicationCode,
         bfApplicationId,
@@ -164,6 +166,9 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
         businessName, lenderName,
         loanAmount, pgiLimit, annualRevenue, collateralValue,
         naicsCode, naicsConfidence,
+        // BI_SERVER_BLOCK_v404 — populate the columns the BI form pre-fills from
+        // (these were previously stored only inside `data`).
+        s(b.entity_type), s(b.guarantor_dob), s(b.guarantor_address), s(b.business_address), s(b.loan_purpose), s(b.formation_date),
         JSON.stringify(formData),
       ],
     );
