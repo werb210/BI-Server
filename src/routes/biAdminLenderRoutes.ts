@@ -698,4 +698,34 @@ router.post("/admin/lenders/:id/contacts/:contactId/resend-invite", async (req, 
   return ok(res, sms);
 });
 
+// BF_BLOCK_v416_PURGE_DEMO_APPS_v1 — hard-delete demo/test BI applications.
+// Admin-only. FK CASCADE on bi_applications children (bi_documents,
+// bi_activity, etc.) cleans up automatically. Targets apps flagged is_demo
+// OR belonging to a demo/test lender (lender is_demo flag, or company_name
+// containing 'demo'/'test'). Lenders are NOT touched
+// (Todd ruling 2026-06-01: delete demo/test APPS only).
+router.post("/admin/apps/purge-demo", async (req, res) => {
+  const role = String(((req as any).user?.role) ?? "").toLowerCase();
+  if (role !== "admin") {
+    return res.status(403).json({ ok: false, error: "forbidden", message: "Only Admin may purge demo data." });
+  }
+  try {
+    const r = await pool.query<{ id: string }>(
+      `DELETE FROM bi_applications a
+        WHERE COALESCE(a.is_demo, FALSE) = TRUE
+           OR a.lender_id IN (
+                SELECT id FROM bi_lenders
+                 WHERE COALESCE(is_demo, FALSE) = TRUE
+                    OR company_name ILIKE '%demo%'
+                    OR company_name ILIKE '%test%'
+              )
+        RETURNING a.id`
+    );
+    return res.status(200).json({ ok: true, deleted: r.rowCount ?? 0, ids: r.rows.map((x) => x.id) });
+  } catch (err) {
+    logger.error({ err }, "purge demo apps failed");
+    return res.status(500).json({ ok: false, error: "purge_failed" });
+  }
+});
+
 export default router;
