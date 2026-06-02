@@ -57,7 +57,9 @@ function genApplicationCode(): string {
 function completionUrl(publicId: string): string {
   // BI-Website public application landing. Applicant OTPs with the
   // phone we passed in, then lands on the partly-filled form.
-  return `https://www.boreal.insure/login?next=/applications/${encodeURIComponent(publicId)}`;
+  // BI_SERVER_BLOCK_v403 — land on /form (the partly-filled underwriting form),
+  // not a bare /applications/<id> that has no route on bi-website.
+  return `https://www.boreal.insure/login?next=/applications/${encodeURIComponent(publicId)}/form`;
 }
 
 router.post("/applications/from-bf", async (req: Request, res: Response) => {
