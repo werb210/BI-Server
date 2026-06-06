@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS bi_sequence_enrollments (
   completed_at TIMESTAMPTZ,
   UNIQUE(sequence_id, contact_id)
 );
+ALTER TABLE bi_sequence_enrollments ADD COLUMN IF NOT EXISTS next_send_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_bi_seq_enrollments_next ON bi_sequence_enrollments(next_send_at) WHERE status = 'active';
 
 CREATE TABLE IF NOT EXISTS bi_sequence_sends (

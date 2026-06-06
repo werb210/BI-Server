@@ -107,6 +107,9 @@ DO $$ BEGIN
                  WHERE table_name='bi_companies' AND column_name='legal_name') THEN
     ALTER TABLE bi_companies ADD COLUMN legal_name TEXT;
   END IF;
+  -- Fresh-replay guard: bi_companies may pre-exist without these timestamp columns.
+  ALTER TABLE bi_companies ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE bi_companies ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_bi_companies_legal_name_lower
   ON bi_companies (LOWER(TRIM(legal_name)))

@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS bi_user_send_quotas (
   window_start_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Fresh-replay guard: table may pre-exist (v110) without these columns.
+ALTER TABLE bi_user_send_quotas ADD COLUMN IF NOT EXISTS daily_limit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE bi_user_send_quotas ADD COLUMN IF NOT EXISTS sent_today INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE bi_user_send_quotas ADD COLUMN IF NOT EXISTS window_start_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE bi_user_send_quotas ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS idx_bi_user_send_quotas_window
   ON bi_user_send_quotas (window_start_at);

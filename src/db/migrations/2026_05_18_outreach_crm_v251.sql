@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS bi_contact_activity (
   meta            JSONB,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Fresh-replay guard: table may pre-exist from an earlier migration with a different shape.
+ALTER TABLE bi_contact_activity ADD COLUMN IF NOT EXISTS contact_id UUID;
+ALTER TABLE bi_contact_activity ADD COLUMN IF NOT EXISTS event_type TEXT;
+ALTER TABLE bi_contact_activity ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_bi_contact_activity_contact_created
   ON bi_contact_activity(contact_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_bi_contact_activity_event_type
