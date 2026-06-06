@@ -78,6 +78,13 @@ router.get("/crm/outreach/contacts", async (req: Request, res: Response) => {
   const params: unknown[] = [];
   let i = 1;
 
+  // BI_SERVER_BLOCK_v346_OUTREACH_TAG_FILTER — the outreach pipeline only ever shows
+  // contacts tagged as a lender or broker (plain 'lender'/'broker' or namespaced
+  // 'lender:<id>'/'lender_contact:<id>'). Untagged contacts are excluded.
+  where.push(
+    `EXISTS (SELECT 1 FROM unnest(coalesce(tags, ARRAY[]::text[])) AS t WHERE lower(t) LIKE 'lender%' OR lower(t) LIKE 'broker%')`,
+  );
+
   if (status === "unassigned") {
     where.push(`outreach_status IS NULL`);
   } else if (status) {
