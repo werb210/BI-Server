@@ -107,7 +107,13 @@ app.use(idempotency);
 
 const limiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 100,
+  // v758 — raised 100 -> 600/min. trust proxy is set so this is per client IP;
+  // 100 was too tight for the staff portal, whose dashboard fires several BI
+  // widget calls (+ their preflights) on load, tripping 429s. 600/min is still
+  // a safe abuse ceiling for an authenticated B2B portal.
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
   // BI_BOOT_FIX_v60 — Azure health probes are aggressive. Without skipping
   // /health and /metrics they consume the global 100/min budget and Azure's
   // own probes return 429, triggering App Service to mark the instance
@@ -195,6 +201,10 @@ const biCors = cors({
     return cb(new Error(`origin not allowed: ${origin}`));
   },
   credentials: true,
+  // v758 — cache preflights for 24h so browsers stop re-sending an OPTIONS
+  // before every cross-origin call (was ~1 preflight per request, doubling
+  // traffic and consuming the rate-limit budget).
+  maxAge: 86400,
 });
 
 // BI_BOOT_FIX_v60 — log every request, including PGI webhooks (raw body).
