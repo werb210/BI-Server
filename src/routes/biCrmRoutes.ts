@@ -50,6 +50,21 @@ router.get("/crm/contacts/:id/engagement", async (req, res) => {
   }
 });
 
+// BI_SERVER_BLOCK_v349_TAG_LIST — distinct tags in use, for the CRM "View by" filter.
+router.get("/crm/contacts/tag-list", async (_req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT DISTINCT t AS tag
+         FROM bi_contacts, unnest(COALESCE(tags, '{}'::text[])) AS t
+        WHERE converted_to_company_id IS NULL
+        ORDER BY t`,
+    );
+    return res.json({ tags: r.rows.map((row: { tag: string }) => row.tag) });
+  } catch (e) {
+    return res.status(500).json({ error: "tag_list_failed", message: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 router.get("/crm/contacts", async (req, res) => {
   const search =
     typeof req.query.q === "string"
@@ -96,13 +111,23 @@ router.get("/crm/contacts", async (req, res) => {
   }
   const tagsQueryRaw = typeof req.query.tags === "string" ? req.query.tags : "";
   if (tagsQueryRaw) {
-    const tags = tagsQueryRaw
+    // BI_SERVER_BLOCK_v349_VIEWBY — multi-select (any-of) plus "__none__" = untagged.
+    const parts = tagsQueryRaw
       .split(",")
       .map((t) => t.trim())
       .filter((t) => t.length > 0);
-    if (tags.length) {
-      where.push(`c.tags && $${i++}::text[]`);
-      params.push(tags);
+    const wantUntagged = parts.includes("__none__");
+    const realTags = parts.filter((t) => t !== "__none__");
+    const ors: string[] = [];
+    if (realTags.length) {
+      ors.push(`c.tags && $${i++}::text[]`);
+      params.push(realTags);
+    }
+    if (wantUntagged) {
+      ors.push(`COALESCE(cardinality(c.tags), 0) = 0`);
+    }
+    if (ors.length) {
+      where.push(`(${ors.join(" OR ")})`);
     }
   }
 
