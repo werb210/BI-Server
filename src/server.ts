@@ -321,7 +321,7 @@ app.use("/api/v1/bi/marketing", requireAuth, biSequencesRoutes);
 app.use("/api/v1/bi/staff", requireAuth, biStaffRoutes);
 // BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — outreach endpoints under /api/v1/bi/crm/outreach/*.
 // Router has its own requireAuth so we mount at /api/v1/bi to get clean internal paths.
-app.use("/api/v1/bi", biOutreachCrmRoutes);
+app.use("/api/v1/bi", biCors, biOutreachCrmRoutes); // BI_SERVER_BLOCK_v347 — explicit CORS (was relying on prefix fall-through)
 
 // BI_SERVER_BLOCK_v268_CLEANUP_v1 — D-1: removed dead mount. The working
 // mount at /api/v1 (line 221) handles /referrer/otp/* and friends; the
