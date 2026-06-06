@@ -4,20 +4,24 @@ import express from "express";
 import request from "supertest";
 import jwt from "jsonwebtoken";
 
-const queryMock = vi.fn();
-vi.mock("../../db", () => ({
-  pool: { query: (...args: unknown[]) => queryMock(...args) },
+// BI_SERVER_BLOCK_v355 — hoist shared values so vi.mock factories can see them.
+const { queryMock, sendSmsMock, SECRET } = vi.hoisted(() => ({
+  queryMock: vi.fn(),
+  sendSmsMock: vi.fn(),
+  SECRET: "test-shared-secret-min-10",
 }));
-
-const SECRET = "test-shared-secret-min-10";
+vi.mock("pg", () => ({
+  // BI_SERVER_BLOCK_v355 — biCrmRoutes owns a local Pool instance, so mock pg directly.
+  Pool: vi.fn(function Pool() {
+    return { query: (...args: unknown[]) => queryMock(...args) };
+  }),
+}));
 vi.mock("../../platform/env", () => ({
   env: { JWT_SECRET: SECRET, DATABASE_URL: "postgres://test" },
 }));
 vi.mock("../../platform/logger", () => ({
   logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
 }));
-
-const sendSmsMock = vi.fn();
 vi.mock("../../services/smsService", () => ({
   sendOutreachSms: (...args: unknown[]) => sendSmsMock(...args),
 }));

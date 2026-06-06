@@ -9,6 +9,7 @@
     "skipLibCheck": true
   },
   "exclude": [
+    "vitest.config.ts",
     "src/db/migrations",
     "node_modules",
     "dist",

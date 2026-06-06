@@ -9,8 +9,8 @@ const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, "..", rel)
 describe("BI_BOOT_FIX_v60 boot-path invariants", () => {
   it("pg.Pool sets connectionTimeoutMillis", () => {
     const src = read("db/index.ts");
-    expect(src).toMatch(/connectionTimeoutMillis:\s*5000/);
-    expect(src).toMatch(/idleTimeoutMillis:\s*30000/);
+    expect(src).toMatch(/connectionTimeoutMillis:\s*10_?000/); // BI_SERVER_BLOCK_v355 — code uses 10_000
+    expect(src).toMatch(/idleTimeoutMillis:\s*30_?000/); // BI_SERVER_BLOCK_v355 — code uses 30_000
   });
 
   it("pg.Pool has an error handler so dropped clients don't crash the process", () => {
