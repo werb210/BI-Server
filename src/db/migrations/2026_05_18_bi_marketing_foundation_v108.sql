@@ -25,10 +25,23 @@ ALTER TABLE bi_contacts ADD COLUMN IF NOT EXISTS industry TEXT;
 ALTER TABLE bi_contacts ADD COLUMN IF NOT EXISTS promoted_lender_id UUID;
 ALTER TABLE bi_contacts ADD COLUMN IF NOT EXISTS tags TEXT[];
 
-UPDATE bi_contacts SET outreach_stage = COALESCE(NULLIF(outreach_status, ''), 'new')
-WHERE outreach_stage IS NULL AND EXISTS (
-  SELECT 1 FROM information_schema.columns WHERE table_name = 'bi_contacts' AND column_name = 'outreach_status'
-);
+-- v108 fresh-replay fix: outreach_status is created by a later migration.
+-- Defer the reference via dynamic SQL so it is only parsed when the column
+-- actually exists. (No-op on prod, where this file already applied.)
+DO $v108_outreach$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'bi_contacts' AND column_name = 'outreach_status'
+  ) THEN
+    EXECUTE $q$
+      UPDATE bi_contacts
+         SET outreach_stage = COALESCE(NULLIF(outreach_status, ''), 'new')
+       WHERE outreach_stage IS NULL
+    $q$;
+  END IF;
+END
+$v108_outreach$;
 
 CREATE INDEX IF NOT EXISTS idx_bi_contacts_outreach_stage ON bi_contacts(outreach_stage);
 CREATE INDEX IF NOT EXISTS idx_bi_contacts_owner_user_id ON bi_contacts(owner_user_id);

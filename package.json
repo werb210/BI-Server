@@ -8,7 +8,8 @@
     "start": "BUILD_TAG=${BUILD_TAG:-v61} node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "tsc --noEmit && tsc",
-    "test:migrations": "tsx src/tests/migrations.smoke.ts"
+    "test:migrations": "tsx src/tests/migrations.smoke.ts",
+    "test:integration": "vitest run"
   },
   "dependencies": {
     "@azure-rest/ai-document-intelligence": "^1.0.0",
