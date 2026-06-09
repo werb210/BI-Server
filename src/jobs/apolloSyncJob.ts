@@ -137,7 +137,37 @@ async function insertEngagementEvent(ev: EngagementEventRow): Promise<boolean> {
      DO NOTHING`,
     [contactRow?.id ?? null, ev.apollo_contact_id, ev.event_type, ev.apollo_message_id, ev.sequence_name, ev.occurred_at, JSON.stringify(ev.metadata)]
   );
-  return (ins.rowCount ?? 0) > 0;
+  const wasNew = (ins.rowCount ?? 0) > 0;
+
+  // BF_SERVER_BLOCK_v810_REPLY_ENGAGED — a genuinely new reply auto-advances the contact to
+  // the canonical "engaged" board stage. Writes the OPERATIVE outreach_status column (NOT the
+  // legacy outreach_stage), and is gated to pre-engaged states only so later stages and
+  // not_interested are never regressed. Values per the board's LEGACY_MAP (cold/new ->
+  // contacted -> engaged ...). Idempotent: only fires on the first insert of a given reply.
+  if (wasNew && ev.event_type === "email_replied" && contactRow) {
+    try {
+      const adv = await pool.query(
+        `UPDATE bi_contacts
+            SET outreach_status = 'engaged', outreach_updated_at = NOW()
+          WHERE id = $1
+            AND (outreach_status IS NULL
+                 OR outreach_status IN ('cold','new','attempting','voicemail','contacted'))`,
+        [contactRow.id]
+      );
+      if ((adv.rowCount ?? 0) > 0) {
+        await pool.query(
+          `INSERT INTO bi_contact_activity
+             (id, contact_id, actor_id, actor_name, event_type, outcome, body, meta)
+           VALUES (gen_random_uuid(), $1, NULL, 'Apollo (auto)', 'status_change', 'engaged', $2, $3::jsonb)`,
+          [contactRow.id, "Auto-advanced to Engaged on email reply",
+           JSON.stringify({ source: "apollo_reply", apollo_message_id: ev.apollo_message_id })]
+        ).catch(() => undefined);
+      }
+    } catch (err) {
+      logger.error({ err, contact_id: contactRow.id }, "reply auto-advance failed");
+    }
+  }
+  return wasNew;
 }
 
 export async function runEngagementSyncOnce(): Promise<{ pages: number; events_inserted: number }> {
