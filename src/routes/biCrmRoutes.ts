@@ -980,6 +980,43 @@ router.post("/crm/contacts/bulk-delete", async (req, res) => {
   return res.json({ ok: true, deleted: ids.length });
 });
 
+// BF_SERVER_BLOCK_v808_BI_ASSIGN_CREATE — assign owner to many contacts. Writes the CANONICAL
+// outreach_owner_id (NOT the legacy owner_user_id used by bulk-update). owner_id null = unassign.
+router.post("/crm/contacts/bulk-assign", async (req, res) => {
+  if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
+  const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown): x is string => typeof x === "string") : [];
+  if (ids.length === 0) return res.status(400).json({ error: "ids_required" });
+  const ownerId = typeof req.body?.owner_id === "string" && req.body.owner_id.trim() ? req.body.owner_id.trim() : null;
+  await pool.query(
+    `UPDATE bi_contacts SET outreach_owner_id = $1, outreach_updated_at = NOW() WHERE id = ANY($2::uuid[])`,
+    [ownerId, ids],
+  );
+  return res.json({ ok: true, assigned: ids.length });
+});
+
+// BF_SERVER_BLOCK_v808_BI_ASSIGN_CREATE — manually create a BI contact (BF parity). Columns and
+// default outreach_status mirror the outreach importer insert exactly.
+router.post("/crm/contacts", async (req, res) => {
+  if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const fullName = str(b.full_name);
+  const email = str(b.email);
+  const phone = str(b.phone_e164);
+  if (!fullName && !email && !phone) return res.status(400).json({ error: "name_email_or_phone_required" });
+  const tags = Array.isArray(b.tags) ? (b.tags as unknown[]).filter((t): t is string => typeof t === "string") : [];
+  const ownerId = str(b.outreach_owner_id);
+  const ins = await pool.query<{ id: string }>(
+    `INSERT INTO bi_contacts
+       (company_id, full_name, email, phone_e164, tags,
+        title, notes, outreach_status, outreach_owner_id, outreach_updated_at)
+     VALUES (NULL, $1, $2, $3, $4::text[], $5, $6, 'cold', $7, NOW())
+     RETURNING id`,
+    [fullName, email, phone, tags, str(b.title), str(b.notes), ownerId],
+  );
+  return res.status(201).json({ ok: true, id: ins.rows[0].id });
+});
+
 router.post("/crm/contacts/bulk-tag", async (req, res) => {
   if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
   const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown): x is string => typeof x === "string") : [];
