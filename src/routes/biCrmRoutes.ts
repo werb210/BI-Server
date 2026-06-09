@@ -281,14 +281,18 @@ router.patch("/crm/contacts/:id", async (req, res) => {
   }
   if (b.tags !== undefined) {
     if (b.tags === null) {
-      sets.push(`tags = $${i++}`);
-      params.push(null);
+      // BI_SERVER_BLOCK_v785_TAG_PATCH_FIX — clearing tags must write an empty
+      // text[] (a null param to a text[] column 500s as "patch_failed").
+      sets.push(`tags = $${i++}::text[]`);
+      params.push([]);
     } else if (Array.isArray(b.tags)) {
-      const tags = b.tags
-        .map((t) => (typeof t === "string" ? t.trim() : ""))
-        .filter((t) => t.length > 0)
-        .filter((t) => t.length <= 60)
-        .slice(0, 20);
+      // BI_SERVER_BLOCK_v785_TAG_PATCH_FIX — lowercase + dedupe so "lender" and
+      // "Lender" collapse to one canonical tag (no more case-duplicate filters).
+      const tags = Array.from(new Set(
+        b.tags
+          .map((t) => (typeof t === "string" ? t.trim().toLowerCase() : ""))
+          .filter((t) => t.length > 0 && t.length <= 60)
+      )).slice(0, 20);
       sets.push(`tags = $${i++}::text[]`);
       params.push(tags);
     } else {
