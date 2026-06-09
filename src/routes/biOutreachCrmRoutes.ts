@@ -424,6 +424,8 @@ router.post(
 
     const results: Array<{ row: number; ok: boolean; id?: string; error?: string }> = [];
     let imported = 0;
+    let updated = 0;
+    let suppressed = 0;
     let skipped = 0;
 
     for (let i = 0; i < rows.length; i++) {
@@ -462,8 +464,22 @@ router.post(
         .split(",")
         .map((t) => t.trim())
         .filter((t) => t.length > 0);
+      // BI_SERVER_BLOCK_v799_IMPORT_UPSERT — every imported contact is a lender (the outreach board only shows lender%/broker% tags).
+      if (!tags.some((t) => t.toLowerCase() === "lender")) tags.push("lender");
 
       try {
+        // BI_SERVER_BLOCK_v799_IMPORT_UPSERT — skip emails on the suppression list so deleted-from-CRM contacts never resurrect on re-import.
+        if (email) {
+          const supp = await pool.query(
+            `SELECT 1 FROM bi_suppressions WHERE lower(email) = lower($1) LIMIT 1`,
+            [email],
+          );
+          if (supp.rows.length) {
+            results.push({ row: i + 2, ok: false, error: "suppressed" });
+            suppressed++;
+            continue;
+          }
+        }
         let companyId: string | null = null;
         if (companyName) {
           const found = await pool.query<{ id: string }>(
@@ -481,15 +497,44 @@ router.post(
           }
         }
 
-        const ins = await pool.query<{ id: string }>(
-          `INSERT INTO bi_contacts
-             (company_id, full_name, email, phone_e164, tags,
-              title, notes, outreach_status, outreach_owner_id, outreach_updated_at)
-           VALUES ($1, $2, $3, $4, $5::text[], $6, $7, 'cold', $8, NOW())
-           RETURNING id`,
-          [companyId, fullName, email, phone, tags, title, notes, ownerId],
-        );
-        const contactId = ins.rows[0].id;
+        // BI_SERVER_BLOCK_v799_IMPORT_UPSERT — upsert by email so re-importing the same
+        // HubSpot export updates contacts in place instead of creating duplicates.
+        let contactId: string;
+        const existing = email
+          ? await pool.query<{ id: string; tags: string[] | null }>(
+              `SELECT id, tags FROM bi_contacts WHERE lower(email) = lower($1) LIMIT 1`,
+              [email],
+            )
+          : { rows: [] as Array<{ id: string; tags: string[] | null }> };
+        if (existing.rows[0]) {
+          const prev = Array.isArray(existing.rows[0].tags) ? existing.rows[0].tags : [];
+          const mergedTags = Array.from(new Set([...prev, ...tags].map((t) => String(t))));
+          const upd = await pool.query<{ id: string }>(
+            `UPDATE bi_contacts SET
+               full_name = COALESCE(NULLIF($2, ''), full_name),
+               phone_e164 = COALESCE($3, phone_e164),
+               company_id = COALESCE($4, company_id),
+               title = COALESCE($5, title),
+               notes = COALESCE($6, notes),
+               tags = $7::text[],
+               updated_at = NOW()
+             WHERE id = $1 RETURNING id`,
+            [existing.rows[0].id, fullName, phone, companyId, title, notes, mergedTags],
+          );
+          contactId = upd.rows[0].id;
+          updated++;
+        } else {
+          const ins = await pool.query<{ id: string }>(
+            `INSERT INTO bi_contacts
+               (company_id, full_name, email, phone_e164, tags,
+                title, notes, outreach_status, outreach_owner_id, outreach_updated_at)
+             VALUES ($1, $2, $3, $4, $5::text[], $6, $7, 'cold', $8, NOW())
+             RETURNING id`,
+            [companyId, fullName, email, phone, tags, title, notes, ownerId],
+          );
+          contactId = ins.rows[0].id;
+          imported++;
+        }
 
         await pool.query(
           `INSERT INTO bi_contact_activity
@@ -504,7 +549,6 @@ router.post(
         );
 
         results.push({ row: i + 2, ok: true, id: contactId });
-        imported++;
       } catch (e: any) {
         logger.error({ err: e, row: i + 2 }, "outreach_import_row_failed");
         results.push({ row: i + 2, ok: false, error: e?.message ?? "insert_failed" });
@@ -515,6 +559,8 @@ router.post(
     return res.json({
       ok: true,
       imported,
+      updated,
+      suppressed,
       skipped,
       total: rows.length,
       results,
@@ -732,5 +778,59 @@ router.post(
     }
   },
 );
+
+// BI_SERVER_BLOCK_v799_MASS_DELETE — two-mode bulk action on outreach contacts.
+//   'remove_from_outreach' -> clear outreach_status (contact stays in the CRM).
+//   'delete_from_crm'      -> delete the contact everywhere AND add it to the suppression
+//                            list so a re-import can't resurrect it.
+router.post("/crm/outreach/contacts/bulk-action", async (req: Request, res: Response) => {
+  const body = req.body ?? {};
+  const mode = String(body.mode ?? "");
+  const ids: string[] = Array.isArray(body.ids)
+    ? Array.from(new Set(body.ids.map((x: any) => String(x).trim()).filter(Boolean)))
+    : [];
+  if (!ids.length) return res.status(400).json({ ok: false, error: "no_ids" });
+  if (mode !== "remove_from_outreach" && mode !== "delete_from_crm") {
+    return res.status(400).json({ ok: false, error: "invalid_mode" });
+  }
+
+  if (mode === "remove_from_outreach") {
+    const r = await pool.query(
+      `UPDATE bi_contacts SET outreach_status = NULL, outreach_updated_at = NOW() WHERE id = ANY($1::uuid[])`,
+      [ids],
+    );
+    return res.json({ ok: true, mode, affected: r.rowCount ?? 0 });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const targets = await client.query<{ id: string; email: string | null; phone_e164: string | null }>(
+      `SELECT id, email, phone_e164 FROM bi_contacts WHERE id = ANY($1::uuid[])`,
+      [ids],
+    );
+    let suppressed = 0;
+    for (const t of targets.rows) {
+      if (t.email || t.phone_e164) {
+        await client.query(
+          `INSERT INTO bi_suppressions (phone_e164, email, channel, reason)
+           VALUES ($1, $2, 'all', 'deleted_from_crm')`,
+          [t.phone_e164, t.email],
+        );
+        suppressed++;
+      }
+    }
+    await client.query(`DELETE FROM bi_contact_activity WHERE contact_id = ANY($1::uuid[])`, [ids]);
+    const del = await client.query(`DELETE FROM bi_contacts WHERE id = ANY($1::uuid[])`, [ids]);
+    await client.query("COMMIT");
+    return res.json({ ok: true, mode, affected: del.rowCount ?? 0, suppressed });
+  } catch (e: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    logger.error({ err: e }, "outreach_bulk_delete_failed");
+    return res.status(500).json({ ok: false, error: "delete_failed", detail: e?.message });
+  } finally {
+    client.release();
+  }
+});
 
 export default router;

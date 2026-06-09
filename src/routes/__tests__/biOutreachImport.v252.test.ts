@@ -64,8 +64,10 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
 
   it("imports a single contact with company lookup-or-create", async () => {
     queryMock
+      .mockResolvedValueOnce({ rows: [] })                       // suppression lookup
       .mockResolvedValueOnce({ rows: [] })                       // company lookup
       .mockResolvedValueOnce({ rows: [{ id: "co-1" }] })          // company insert
+      .mockResolvedValueOnce({ rows: [] })                       // existing contact lookup
       .mockResolvedValueOnce({ rows: [{ id: "c-1" }] })           // contact insert
       .mockResolvedValueOnce({ rows: [], rowCount: 1 });           // activity insert
 
@@ -88,14 +90,17 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
 
     expect(r.status).toBe(200);
     expect(r.body.imported).toBe(1);
+    expect(r.body.updated).toBe(0);
+    expect(r.body.suppressed).toBe(0);
     expect(r.body.skipped).toBe(0);
 
-    // Verify phone normalization on the contact insert.
+    // Verify phone normalization and forced lender tagging on the contact insert.
     const contactInsertCall = queryMock.mock.calls.find((call) =>
       String(call[0]).includes("INSERT INTO bi_contacts"),
     );
     expect(contactInsertCall).toBeDefined();
     expect(contactInsertCall![1]).toContain("+14165551234");
+    expect(contactInsertCall![1][4]).toContain("lender");
   });
 
   it("skips rows missing full_name", async () => {
@@ -103,8 +108,10 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
       { full_name: "Jane Doe", email: "jane@example.com" },
       { full_name: "", email: "nobody@example.com" },
     ]);
-    // Jane: company lookup → contact insert → activity insert (3 queries)
+    // Jane: suppression lookup → existing contact lookup → contact insert → activity insert.
     queryMock
+      .mockResolvedValueOnce({ rows: [] })               // suppression lookup
+      .mockResolvedValueOnce({ rows: [] })               // existing contact lookup
       .mockResolvedValueOnce({ rows: [{ id: "c-1" }] })  // contact insert
       .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // activity
 
@@ -120,10 +127,57 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
     expect(skipped.error).toBe("missing_full_name");
   });
 
+  it("updates existing contacts by email instead of duplicating", async () => {
+    queryMock
+      .mockResolvedValueOnce({ rows: [] }) // suppression lookup
+      .mockResolvedValueOnce({ rows: [{ id: "c-1", tags: ["warm"] }] }) // existing contact lookup
+      .mockResolvedValueOnce({ rows: [{ id: "c-1" }] }) // contact update
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // activity
+
+    const xlsx = buildXlsx([
+      { full_name: "Jane Updated", email: "jane@example.com", tags: "q3" },
+    ]);
+
+    const r = await request(makeApp())
+      .post("/crm/outreach/import")
+      .set("Authorization", `Bearer ${staffToken()}`)
+      .attach("file", xlsx, "list.xlsx");
+
+    expect(r.status).toBe(200);
+    expect(r.body.imported).toBe(0);
+    expect(r.body.updated).toBe(1);
+    const updateCall = queryMock.mock.calls.find((call) =>
+      String(call[0]).includes("UPDATE bi_contacts SET"),
+    );
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1][6]).toContain("warm");
+    expect(updateCall![1][6]).toContain("q3");
+    expect(updateCall![1][6]).toContain("lender");
+  });
+
+  it("skips suppressed email rows", async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ "?column?": 1 }] }); // suppression lookup
+
+    const xlsx = buildXlsx([
+      { full_name: "Jane Doe", email: "jane@example.com" },
+    ]);
+
+    const r = await request(makeApp())
+      .post("/crm/outreach/import")
+      .set("Authorization", `Bearer ${staffToken()}`)
+      .attach("file", xlsx, "list.xlsx");
+
+    expect(r.status).toBe(200);
+    expect(r.body.imported).toBe(0);
+    expect(r.body.updated).toBe(0);
+    expect(r.body.suppressed).toBe(1);
+    expect(r.body.results[0].error).toBe("suppressed");
+  });
+
   it("recognizes header aliases (Name, Company, Phone, Role)", async () => {
     queryMock
       .mockResolvedValueOnce({ rows: [{ id: "co-1" }] })       // company found
-      .mockResolvedValueOnce({ rows: [{ id: "c-1" }] })         // contact
+      .mockResolvedValueOnce({ rows: [{ id: "c-1" }] })         // contact insert
       .mockResolvedValueOnce({ rows: [], rowCount: 1 });         // activity
 
     const xlsx = buildXlsx([
@@ -137,6 +191,47 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
 
     expect(r.status).toBe(200);
     expect(r.body.imported).toBe(1);
+  });
+});
+
+describe("BI_SERVER_BLOCK_v799 — POST /crm/outreach/contacts/bulk-action", () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+    sendSmsMock.mockReset();
+  });
+
+  it("clears outreach_status for remove_from_outreach", async () => {
+    queryMock.mockResolvedValueOnce({ rowCount: 2, rows: [] });
+
+    const r = await request(makeApp())
+      .post("/crm/outreach/contacts/bulk-action")
+      .set("Authorization", `Bearer ${staffToken()}`)
+      .send({ ids: ["c-1", "c-2"], mode: "remove_from_outreach" });
+
+    expect(r.status).toBe(200);
+    expect(r.body.affected).toBe(2);
+    expect(String(queryMock.mock.calls[0][0])).toContain("outreach_status = NULL");
+  });
+
+  it("suppresses and deletes contacts for delete_from_crm", async () => {
+    queryMock
+      .mockResolvedValueOnce({ rows: [], rowCount: null }) // BEGIN
+      .mockResolvedValueOnce({ rows: [{ id: "c-1", email: "jane@example.com", phone_e164: "+14165551234" }] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 }) // suppression insert
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 }) // activity delete
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 }) // contact delete
+      .mockResolvedValueOnce({ rows: [], rowCount: null }); // COMMIT
+
+    const r = await request(makeApp())
+      .post("/crm/outreach/contacts/bulk-action")
+      .set("Authorization", `Bearer ${staffToken()}`)
+      .send({ ids: ["c-1"], mode: "delete_from_crm" });
+
+    expect(r.status).toBe(200);
+    expect(r.body.affected).toBe(1);
+    expect(r.body.suppressed).toBe(1);
+    expect(queryMock.mock.calls.some((call) => String(call[0]).includes("INSERT INTO bi_suppressions"))).toBe(true);
+    expect(queryMock.mock.calls.some((call) => String(call[0]).includes("DELETE FROM bi_contacts"))).toBe(true);
   });
 });
 
