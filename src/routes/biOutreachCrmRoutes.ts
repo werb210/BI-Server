@@ -73,6 +73,7 @@ router.get("/crm/outreach/contacts", async (req: Request, res: Response) => {
     500,
     Math.max(1, Number(req.query.limit) || 100),
   );
+  const offset = Math.max(0, Number(req.query.offset) || 0); // BI_SERVER_BLOCK_v791_OUTREACH_PAGINATION
 
   const where: string[] = [];
   const params: unknown[] = [];
@@ -125,10 +126,14 @@ router.get("/crm/outreach/contacts", async (req: Request, res: Response) => {
      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
      ORDER BY COALESCE(outreach_updated_at, created_at) DESC
      LIMIT ${limit}
+     OFFSET ${offset}
   `;
+  const countSql = `SELECT COUNT(*)::int AS total FROM bi_contacts ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`; // BI_SERVER_BLOCK_v791_OUTREACH_PAGINATION
   try {
     const r = await pool.query(sql, params);
-    return res.json({ ok: true, contacts: r.rows });
+    const c = await pool.query(countSql, params);
+    const total = c.rows[0]?.total ?? r.rows.length;
+    return res.json({ ok: true, contacts: r.rows, total, limit, offset, hasMore: offset + r.rows.length < total });
   } catch (e: any) {
     logger.error({ err: e }, "outreach_list_failed");
     return res.status(500).json({ ok: false, error: "list_failed" });
