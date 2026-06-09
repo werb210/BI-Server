@@ -54,10 +54,10 @@ router.get("/crm/contacts/:id/engagement", async (req, res) => {
 router.get("/crm/contacts/tag-list", async (_req, res) => {
   try {
     const r = await pool.query(
-      `SELECT DISTINCT t AS tag
+      `SELECT DISTINCT lower(t) AS tag
          FROM bi_contacts, unnest(COALESCE(tags, '{}'::text[])) AS t
         WHERE converted_to_company_id IS NULL
-        ORDER BY t`,
+        ORDER BY lower(t)`, /* BI_SERVER_BLOCK_v812 — case-insensitive so lender/Lender collapse */
     );
     return res.json({ tags: r.rows.map((row: { tag: string }) => row.tag) });
   } catch (e) {
@@ -1004,7 +1004,7 @@ router.post("/crm/contacts", async (req, res) => {
   const email = str(b.email);
   const phone = str(b.phone_e164);
   if (!fullName && !email && !phone) return res.status(400).json({ error: "name_email_or_phone_required" });
-  const tags = Array.isArray(b.tags) ? (b.tags as unknown[]).filter((t): t is string => typeof t === "string") : [];
+  const tags = Array.from(new Set(Array.isArray(b.tags) ? (b.tags as unknown[]).filter((t): t is string => typeof t === "string").map((t) => t.trim().toLowerCase()).filter((t) => t.length > 0) : [])); // BI_SERVER_BLOCK_v812 — lowercase + dedupe
   const ownerId = str(b.outreach_owner_id);
   const ins = await pool.query<{ id: string }>(
     `INSERT INTO bi_contacts
@@ -1020,7 +1020,7 @@ router.post("/crm/contacts", async (req, res) => {
 router.post("/crm/contacts/bulk-tag", async (req, res) => {
   if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
   const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown): x is string => typeof x === "string") : [];
-  const tag = typeof req.body?.tag === "string" ? req.body.tag.trim() : "";
+  const tag = typeof req.body?.tag === "string" ? req.body.tag.trim().toLowerCase() : ""; // BI_SERVER_BLOCK_v812 — lowercase tags
   if (ids.length === 0 || !tag) return res.status(400).json({ error: "ids_and_tag_required" });
   await pool.query(`UPDATE bi_contacts SET tags = array(SELECT DISTINCT unnest(COALESCE(tags,'{}'::text[]) || $1::text[])) WHERE id = ANY($2::uuid[])`, [[tag], ids]);
   return res.json({ ok: true, tagged: ids.length });
@@ -1037,7 +1037,7 @@ router.post("/crm/companies/bulk-delete", async (req, res) => {
 router.post("/crm/companies/bulk-tag", async (req, res) => {
   if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
   const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown): x is string => typeof x === "string") : [];
-  const tag = typeof req.body?.tag === "string" ? req.body.tag.trim() : "";
+  const tag = typeof req.body?.tag === "string" ? req.body.tag.trim().toLowerCase() : ""; // BI_SERVER_BLOCK_v812 — lowercase tags
   if (ids.length === 0 || !tag) return res.status(400).json({ error: "ids_and_tag_required" });
   await pool.query(`UPDATE bi_companies SET tags = array(SELECT DISTINCT unnest(COALESCE(tags,'{}'::text[]) || $1::text[])) WHERE id = ANY($2::uuid[])`, [[tag], ids]);
   return res.json({ ok: true, tagged: ids.length });
