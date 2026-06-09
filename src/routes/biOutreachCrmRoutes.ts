@@ -462,7 +462,7 @@ router.post(
       const tagsRaw = typeof norm.tags === "string" ? norm.tags : "";
       const tags = tagsRaw
         .split(",")
-        .map((t) => t.trim())
+        .map((t) => t.trim().toLowerCase()) // BI_SERVER_BLOCK_v812 — lowercase tags on import
         .filter((t) => t.length > 0);
       // BI_SERVER_BLOCK_v799_IMPORT_UPSERT — every imported contact is a lender (the outreach board only shows lender%/broker% tags).
       if (!tags.some((t) => t.toLowerCase() === "lender")) tags.push("lender");
