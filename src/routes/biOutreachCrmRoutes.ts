@@ -375,7 +375,10 @@ const HEADER_ALIASES: Record<string, string> = {
   email_address: "email",
   phone: "phone_e164",
   phone_e164: "phone_e164",
-  mobile: "phone_e164",
+  phone_number: "phone_e164",
+  mobile: "phone_mobile",
+  mobile_phone: "phone_mobile",
+  mobile_phone_number: "phone_mobile",
   title: "title",
   role: "title",
   job_title: "title",
@@ -446,7 +449,7 @@ router.post(
         typeof norm.email === "string" && norm.email.trim().length
           ? norm.email.trim()
           : null;
-      const phone = normalizePhone(norm.phone_e164);
+      const phone = normalizePhone(norm.phone_mobile) ?? normalizePhone(norm.phone_e164); // BI_SERVER_BLOCK_v814 — capture HubSpot mobile + landline
       const companyName =
         typeof norm.company_name === "string" && norm.company_name.trim().length
           ? norm.company_name.trim()
@@ -832,5 +835,227 @@ router.post("/crm/outreach/contacts/bulk-action", async (req: Request, res: Resp
     client.release();
   }
 });
+
+
+// ============================================================================
+// BI_SERVER_BLOCK_v814_COMPANY_IMPORT — import a HubSpot Companies export into
+// bi_companies (tagged with Types Of Financing + Country + "lender", kind='lender')
+// and seed their associated contacts (name + email from the "Associated Contact"
+// column) into bi_contacts (tagged "lender" so they show in the Outreach board).
+// ============================================================================
+const COMPANY_HEADER_ALIASES: Record<string, string> = {
+  company_name: "name",
+  company_legal_name: "legal_name",
+  legal_name: "legal_name",
+  website_url: "website",
+  website: "website",
+  phone_number: "phone",
+  phone: "phone",
+  industry: "industry",
+  city: "city",
+  "state/region": "province",
+  state: "province",
+  postal_code: "postal_code",
+  "country/region": "country",
+  country: "country",
+  types_of_financing: "financing",
+  associated_contact: "assoc_contacts",
+};
+
+function normCompanyFinancing(value: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const token of String(value ?? "").split(";")) {
+    const financing = token.trim().replace(/\s*\/\s*/g, "/"); // "WC/ STL" -> "WC/STL"
+    const key = financing.toLowerCase();
+    if (financing && !seen.has(key)) {
+      seen.add(key);
+      out.push(financing);
+    }
+  }
+  return out;
+}
+
+function normCompanyCountry(value: unknown): string | null {
+  const country = String(value ?? "").trim().toUpperCase();
+  if (!country) return null;
+  if (["CDN", "CANADA", "CA"].includes(country)) return "CA";
+  if (["US", "USA", "UNITED STATES"].includes(country)) return "US";
+  return country.slice(0, 8);
+}
+
+function parseAssocContacts(value: unknown): Array<{ name: string; email: string }> {
+  const out: Array<{ name: string; email: string }> = [];
+  const seen = new Set<string>();
+  for (const part of String(value ?? "").split(";")) {
+    const text = part.trim();
+    if (!text) continue;
+
+    const match = text.match(/^(.*?)\s*\(([^)]*@[^)]*)\)\s*$/);
+    let name = "";
+    let email = "";
+    if (match) {
+      name = match[1].trim();
+      email = match[2].trim();
+    } else if (text.includes("@")) {
+      email = text;
+      name = text.split("@")[0];
+    } else {
+      continue;
+    }
+
+    const key = email.toLowerCase();
+    if (!email || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name: name || email.split("@")[0], email });
+  }
+  return out;
+}
+
+// POST /crm/companies/import — Excel/CSV upload of HubSpot Companies export.
+router.post(
+  "/crm/companies/import",
+  outreachUpload.single("file"),
+  async (req: Request, res: Response) => {
+    const file = (req as any).file as { buffer: Buffer; originalname: string } | undefined;
+    if (!file) return res.status(400).json({ ok: false, error: "file_required" });
+
+    let rows: Array<Record<string, unknown>> = [];
+    try {
+      const wb = XLSX.read(file.buffer, { type: "buffer" });
+      const sheetName = wb.SheetNames[0];
+      if (!sheetName) return res.status(400).json({ ok: false, error: "no_sheets_in_file" });
+      rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: null, raw: false });
+    } catch (e: any) {
+      logger.error({ err: e, file: file.originalname }, "company_import_parse_failed");
+      return res.status(400).json({ ok: false, error: "parse_failed", detail: e?.message });
+    }
+    if (!rows.length) return res.status(400).json({ ok: false, error: "no_rows" });
+
+    const actor = ((req as any).user ?? {}) as { staffUserId?: string };
+    const ownerId = typeof actor.staffUserId === "string" ? actor.staffUserId : null;
+
+    let companiesImported = 0;
+    let companiesUpdated = 0;
+    let contactsImported = 0;
+    let contactsUpdated = 0;
+    let skipped = 0;
+    const results: Array<{ row: number; ok: boolean; error?: string }> = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const raw = rows[i] ?? {};
+      const norm: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(raw)) {
+        const alias = COMPANY_HEADER_ALIASES[normalizeHeader(key)];
+        if (alias && (norm[alias] === undefined || norm[alias] === null || String(norm[alias]).trim() === "")) {
+          norm[alias] = value;
+        }
+      }
+
+      const name =
+        (typeof norm.legal_name === "string" && norm.legal_name.trim()) ||
+        (typeof norm.name === "string" && norm.name.trim()) ||
+        "";
+      if (!name) {
+        results.push({ row: i + 2, ok: false, error: "missing_company_name" });
+        skipped++;
+        continue;
+      }
+
+      const website = typeof norm.website === "string" && norm.website.trim() ? norm.website.trim().slice(0, 300) : null;
+      const phone = normalizePhone(norm.phone);
+      const industry = typeof norm.industry === "string" && norm.industry.trim() ? norm.industry.trim().slice(0, 200) : null;
+      const city = typeof norm.city === "string" && norm.city.trim() ? norm.city.trim().slice(0, 120) : null;
+      const province = typeof norm.province === "string" && norm.province.trim() ? norm.province.trim().slice(0, 120) : null;
+      const postal = typeof norm.postal_code === "string" && norm.postal_code.trim() ? norm.postal_code.trim().slice(0, 40) : null;
+      const country = normCompanyCountry(norm.country);
+      const financing = normCompanyFinancing(norm.financing);
+      const tags = Array.from(new Set<string>([...financing, ...(country ? [country] : []), "lender"])).slice(0, 30);
+
+      try {
+        const found = await pool.query<{ id: string; tags: string[] | null }>(
+          `SELECT id, tags FROM bi_companies WHERE lower(legal_name) = lower($1) LIMIT 1`,
+          [name],
+        );
+        let companyId: string;
+        if (found.rows[0]) {
+          const prev = Array.isArray(found.rows[0].tags) ? found.rows[0].tags : [];
+          const merged = Array.from(new Set([...prev, ...tags])).slice(0, 40);
+          const upd = await pool.query<{ id: string }>(
+            `UPDATE bi_companies SET
+               website = COALESCE($2, website),
+               phone = COALESCE($3, phone),
+               industry = COALESCE($4, industry),
+               city = COALESCE($5, city),
+               province = COALESCE($6, province),
+               postal_code = COALESCE($7, postal_code),
+               kind = 'lender',
+               tags = $8::text[],
+               updated_at = NOW()
+             WHERE id = $1 RETURNING id`,
+            [found.rows[0].id, website, phone, industry, city, province, postal, merged],
+          );
+          companyId = upd.rows[0].id;
+          companiesUpdated++;
+        } else {
+          const ins = await pool.query<{ id: string }>(
+            `INSERT INTO bi_companies
+               (legal_name, website, phone, industry, city, province, postal_code, kind, tags)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'lender', $8::text[])
+             RETURNING id`,
+            [name, website, phone, industry, city, province, postal, tags],
+          );
+          companyId = ins.rows[0].id;
+          companiesImported++;
+        }
+
+        for (const contact of parseAssocContacts(norm.assoc_contacts)) {
+          const existing = await pool.query<{ id: string; tags: string[] | null }>(
+            `SELECT id, tags FROM bi_contacts WHERE lower(email) = lower($1) LIMIT 1`,
+            [contact.email],
+          );
+          if (existing.rows[0]) {
+            const prev = Array.isArray(existing.rows[0].tags) ? existing.rows[0].tags : [];
+            const mergedTags = Array.from(new Set([...prev, "lender"]));
+            await pool.query(
+              `UPDATE bi_contacts SET
+                 full_name = COALESCE(NULLIF($2, ''), full_name),
+                 company_id = COALESCE($3, company_id),
+                 tags = $4::text[],
+                 updated_at = NOW()
+               WHERE id = $1`,
+              [existing.rows[0].id, contact.name, companyId, mergedTags],
+            );
+            contactsUpdated++;
+          } else {
+            await pool.query(
+              `INSERT INTO bi_contacts
+                 (company_id, full_name, email, tags, outreach_status, outreach_owner_id, outreach_updated_at)
+               VALUES ($1, $2, $3, $4::text[], 'cold', $5, NOW())`,
+              [companyId, contact.name, contact.email, ["lender"], ownerId],
+            );
+            contactsImported++;
+          }
+        }
+        results.push({ row: i + 2, ok: true });
+      } catch (e: any) {
+        logger.error({ err: e, row: i + 2 }, "company_import_row_failed");
+        results.push({ row: i + 2, ok: false, error: e?.message ?? "row_failed" });
+        skipped++;
+      }
+    }
+
+    return res.json({
+      ok: true,
+      companies_imported: companiesImported,
+      companies_updated: companiesUpdated,
+      contacts_imported: contactsImported,
+      contacts_updated: contactsUpdated,
+      skipped,
+      total: rows.length,
+      results: results.slice(0, 1000),
+    });
+  },
+);
 
 export default router;
