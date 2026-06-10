@@ -368,6 +368,8 @@ const HEADER_ALIASES: Record<string, string> = {
   full_name: "full_name",
   name: "full_name",
   contact_name: "full_name",
+  first_name: "first_name",
+  last_name: "last_name",
   company: "company_name",
   company_name: "company_name",
   organization: "company_name",
@@ -439,7 +441,13 @@ router.post(
         if (alias) norm[alias] = v;
       }
       const fullName =
-        typeof norm.full_name === "string" ? norm.full_name.trim() : "";
+        typeof norm.full_name === "string" && norm.full_name.trim()
+          ? norm.full_name.trim()
+          : [norm.first_name, norm.last_name] // BI_SERVER_BLOCK_v814 — combine First/Last when there is no single Name column
+              .map((value) => (typeof value === "string" ? value.trim() : ""))
+              .filter(Boolean)
+              .join(" ")
+              .trim();
       if (!fullName) {
         results.push({ row: i + 2, ok: false, error: "missing_full_name" });
         skipped++;

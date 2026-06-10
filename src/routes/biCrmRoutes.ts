@@ -482,6 +482,7 @@ router.get("/crm/companies", async (req, res) => {
            province,
            postal_code,
            industry,
+           coalesce(tags, '{}'::text[]) AS tags,
            created_at,
            (SELECT COUNT(*)::int FROM bi_contacts c WHERE c.company_id = bi_companies.id) AS contact_count
       FROM bi_companies
