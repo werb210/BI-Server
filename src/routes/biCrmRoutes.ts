@@ -97,7 +97,8 @@ router.get("/crm/contacts", async (req, res) => {
   let i = 1;
   if (search) {
     where.push(
-      `(c.full_name ILIKE $${i} OR c.email ILIKE $${i} OR c.phone_e164 ILIKE $${i} OR co.legal_name ILIKE $${i})`,
+      // BI_SERVER_BLOCK_v827_CRM_SEARCH_INCLUDES_TAGS — also search tags.
+      `(c.full_name ILIKE $${i} OR c.email ILIKE $${i} OR c.phone_e164 ILIKE $${i} OR co.legal_name ILIKE $${i} OR array_to_string(COALESCE(c.tags,'{}'::text[]), ' ') ILIKE $${i})`,
     );
     params.push(`%${search}%`);
     i++;
@@ -464,7 +465,8 @@ router.get("/crm/companies", async (req, res) => {
   let i = 1;
   if (search) {
     where.push(
-      `(legal_name ILIKE $${i} OR operating_name ILIKE $${i} OR business_number ILIKE $${i})`,
+      // BI_SERVER_BLOCK_v827_CRM_SEARCH_INCLUDES_TAGS — also search tags.
+      `(legal_name ILIKE $${i} OR operating_name ILIKE $${i} OR business_number ILIKE $${i} OR array_to_string(COALESCE(tags,'{}'::text[]), ' ') ILIKE $${i})`,
     );
     params.push(`%${search}%`);
     i++;
