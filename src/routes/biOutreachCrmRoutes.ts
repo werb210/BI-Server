@@ -45,6 +45,8 @@ const ALLOWED_EVENT_TYPES = new Set([
   "sms",
   "email",
   "note",
+  "task",     // BI_SERVER_BLOCK_v852_OUTREACH_AUTOADVANCE — BI cards log tasks/meetings like BF
+  "meeting",
   "status_change",
   "import",
 ]);
@@ -259,6 +261,19 @@ router.post("/crm/outreach/contacts/:id/activity", async (req: Request, res: Res
                 outreach_updated_at = NOW()
           WHERE id = $2`,
         [OUTCOME_TO_STATUS[outcome], id],
+      );
+    } else if (["email", "call", "sms"].includes(eventType)) {
+      // BI_SERVER_BLOCK_v852_OUTREACH_AUTOADVANCE — logging a real outreach touch
+      // (email/call/sms) advances New -> Contacted. Forward-only. Replaces the
+      // BF-side bumpBiOutreachToContacted, which silently failed (it ran the UPDATE
+      // against the BF database, but bi_contacts lives in the BI database).
+      await pool.query(
+        `UPDATE bi_contacts
+            SET outreach_status = 'contacted',
+                outreach_updated_at = NOW()
+          WHERE id = $1
+            AND COALESCE(outreach_status, 'new') IN ('new', 'cold', 'attempting', 'voicemail')`,
+        [id],
       );
     }
 
