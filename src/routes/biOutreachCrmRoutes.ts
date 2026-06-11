@@ -89,6 +89,9 @@ router.get("/crm/outreach/contacts", async (req: Request, res: Response) => {
     `EXISTS (SELECT 1 FROM unnest(coalesce(tags, ARRAY[]::text[])) AS t WHERE lower(t) LIKE 'lender%' OR lower(t) LIKE 'broker%')`,
   );
 
+  // BI_SERVER_BLOCK_v853_OUTREACH_EXCLUDE — never show contacts removed from outreach.
+  where.push(`COALESCE(outreach_excluded, FALSE) = FALSE`);
+
   if (status === "unassigned") {
     where.push(`outreach_status IS NULL`);
   } else if (status) {
@@ -822,8 +825,13 @@ router.post("/crm/outreach/contacts/bulk-action", async (req: Request, res: Resp
   }
 
   if (mode === "remove_from_outreach") {
+    // BI_SERVER_BLOCK_v853_OUTREACH_EXCLUDE — set the durable exclusion flag instead
+    // of nulling outreach_status. Nulling status put the contact back in the "New"
+    // column (New shows outreach_status IS NULL), so "Remove" appeared to do nothing.
+    // The contact stays in the CRM; it just never shows on the outreach board again,
+    // and Apollo re-sync won't bring it back (sync never touches outreach_excluded).
     const r = await pool.query(
-      `UPDATE bi_contacts SET outreach_status = NULL, outreach_updated_at = NOW() WHERE id = ANY($1::uuid[])`,
+      `UPDATE bi_contacts SET outreach_excluded = TRUE, outreach_updated_at = NOW() WHERE id = ANY($1::uuid[])`,
       [ids],
     );
     return res.json({ ok: true, mode, affected: r.rowCount ?? 0 });
