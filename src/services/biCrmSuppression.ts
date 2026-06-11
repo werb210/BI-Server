@@ -1,6 +1,6 @@
-// BI_SERVER_BLOCK_v820_CRM_DELETE_SUPPRESSION
-// Shared suppression writes so CRM-tab deletes and Outreach deletes can't drift.
-// Pass any pg Pool/PoolClient (biCrmRoutes builds its own Pool; outreach uses ../db).
+// BI_SERVER_BLOCK_v820b_CRM_DELETE_SUPPRESSION
+// Shared suppression so CRM-tab + Outreach deletes can't drift. Writes only
+// columns the v820b migration guarantees (no reliance on identifier).
 type Queryable = { query: (text: string, params?: unknown[]) => Promise<any> };
 
 export async function suppressContacts(db: Queryable, ids: string[]): Promise<number> {
@@ -11,13 +11,11 @@ export async function suppressContacts(db: Queryable, ids: string[]): Promise<nu
   );
   let n = 0;
   for (const r of rows.rows as Array<{ email: string | null; phone_e164: string | null }>) {
-    const ident = (r.email || r.phone_e164 || "").trim();
-    if (!ident) continue;
+    if (!r.email && !r.phone_e164) continue;
     await db.query(
-      `INSERT INTO bi_suppressions (identifier, channel, reason, email, phone_e164)
-       VALUES (lower($1), 'all', 'deleted_from_crm', $2, $3)
-       ON CONFLICT (identifier, channel) DO NOTHING`,
-      [ident, r.email, r.phone_e164],
+      `INSERT INTO bi_suppressions (phone_e164, email, channel, reason)
+       VALUES ($1, $2, 'all', 'deleted_from_crm')`,
+      [r.phone_e164, r.email],
     );
     n++;
   }
@@ -35,9 +33,8 @@ export async function suppressCompanies(db: Queryable, ids: string[]): Promise<n
     const name = (r.legal_name || "").trim();
     if (!name) continue;
     await db.query(
-      `INSERT INTO bi_suppressions (identifier, channel, reason)
-       VALUES (lower($1), 'company', 'deleted_from_crm')
-       ON CONFLICT (identifier, channel) DO NOTHING`,
+      `INSERT INTO bi_suppressions (legal_name, channel, reason)
+       VALUES ($1, 'company', 'deleted_from_crm')`,
       [name],
     );
     n++;
@@ -49,7 +46,8 @@ export async function isCompanySuppressed(db: Queryable, legalName: string): Pro
   const name = (legalName || "").trim();
   if (!name) return false;
   const r = await db.query(
-    `SELECT 1 FROM bi_suppressions WHERE channel='company' AND identifier = lower($1) LIMIT 1`,
+    `SELECT 1 FROM bi_suppressions
+      WHERE channel='company' AND lower(legal_name) = lower($1) LIMIT 1`,
     [name],
   );
   return r.rows.length > 0;

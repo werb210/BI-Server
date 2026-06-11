@@ -7,7 +7,7 @@ import express, { type Request, type Response } from "express";
 import multer from "multer";
 import * as XLSX from "xlsx";
 import { pool } from "../db";
-import { isCompanySuppressed } from "../services/biCrmSuppression"; // BI_SERVER_BLOCK_v820_CRM_DELETE_SUPPRESSION
+import { isCompanySuppressed } from "../services/biCrmSuppression"; // BI_SERVER_BLOCK_v820b_CRM_DELETE_SUPPRESSION
 import { requireAuth } from "../platform/auth";
 import { logger } from "../platform/logger";
 import { sendOutreachSms } from "../services/smsService";
@@ -982,7 +982,7 @@ router.post(
       const tags = Array.from(new Set<string>([...financing, ...(country ? [country] : []), "lender"])).slice(0, 30);
 
       try {
-        // BI_SERVER_BLOCK_v820_CRM_DELETE_SUPPRESSION — skip companies deleted from CRM so they don't resurrect on re-import.
+        // BI_SERVER_BLOCK_v820b_CRM_DELETE_SUPPRESSION — skip companies deleted from CRM so they don't resurrect on re-import.
         if (await isCompanySuppressed(pool, name)) {
           results.push({ row: i + 2, ok: false, error: "suppressed" });
           skipped++;
