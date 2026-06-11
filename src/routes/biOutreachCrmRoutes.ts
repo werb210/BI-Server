@@ -817,17 +817,19 @@ router.post("/crm/outreach/contacts/bulk-action", async (req: Request, res: Resp
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const targets = await client.query<{ id: string; email: string | null; phone_e164: string | null }>(
-      `SELECT id, email, phone_e164 FROM bi_contacts WHERE id = ANY($1::uuid[])`,
+    const targets = await client.query<{ id: string; email: string | null; phone_e164: string | null; full_name: string | null }>(
+      `SELECT id, email, phone_e164, full_name FROM bi_contacts WHERE id = ANY($1::uuid[])`,
       [ids],
     );
     let suppressed = 0;
     for (const t of targets.rows) {
       if (t.email || t.phone_e164) {
         await client.query(
-          `INSERT INTO bi_suppressions (phone_e164, email, channel, reason)
-           VALUES ($1, $2, 'all', 'deleted_from_crm')`,
-          [t.phone_e164, t.email],
+          // BI_SERVER_BLOCK_v842_APOLLO_SUPPRESSION_AND_NAME — store the contact
+          // name so the suppression list shows a name after the contact is gone.
+          `INSERT INTO bi_suppressions (phone_e164, email, channel, reason, display_name)
+           VALUES ($1, $2, 'all', 'deleted_from_crm', $3)`,
+          [t.phone_e164, t.email, t.full_name],
         );
         suppressed++;
       }

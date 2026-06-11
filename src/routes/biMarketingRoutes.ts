@@ -256,7 +256,9 @@ router.patch("/enrollments/:id", async (req, res) => {
 
 router.get("/suppressions", softFail({ items: [], total: 0 })(async (_req, res) => {
   const r = await pool.query(
-      `SELECT s.*, c.full_name AS contact_name
+      // BI_SERVER_BLOCK_v842_APOLLO_SUPPRESSION_AND_NAME — prefer the stored
+      // display_name (survives contact deletion) over the live join.
+      `SELECT s.*, COALESCE(s.display_name, c.full_name, s.phone_e164, s.email) AS contact_name
          FROM bi_suppressions s
          LEFT JOIN bi_contacts c ON c.id = s.contact_id
         ORDER BY s.created_at DESC
@@ -270,10 +272,10 @@ router.post("/suppressions", async (req, res) => {
   if (!b.contact_id && !b.phone_e164 && !b.email) return badRequest(res, "contact_id, phone_e164, or email required");
   try {
     const r = await pool.query(
-      `INSERT INTO bi_suppressions (contact_id, phone_e164, email, channel, reason)
-            VALUES ($1, $2, $3, COALESCE($4,'all'), COALESCE($5,'manual'))
+      `INSERT INTO bi_suppressions (contact_id, phone_e164, email, channel, reason, display_name)
+            VALUES ($1, $2, $3, COALESCE($4,'all'), COALESCE($5,'manual'), COALESCE($6, (SELECT full_name FROM bi_contacts WHERE id = $1)))
             RETURNING *`,
-      [b.contact_id ?? null, b.phone_e164 ?? null, b.email ?? null, b.channel ?? null, b.reason ?? null],
+      [b.contact_id ?? null, b.phone_e164 ?? null, b.email ?? null, b.channel ?? null, b.reason ?? null, b.display_name ?? null],
     );
     return res.status(201).json({ suppression: r.rows[0] });
   } catch (err) {
