@@ -31,6 +31,7 @@ import biAuthRoutes, { biAppApplicantRoutes } from "./routes/biAuthRoutes";
 import biAdminRoutes from "./routes/biAdminRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
+import biCompaniesFromBfRoutes from "./routes/biCompaniesFromBfRoutes"; // BI_SERVER_BLOCK_v418_COMPANIES_BY_IDS_FROM_BF
 import biMarketingRoutes from "./routes/biMarketingRoutes";
 import biSequencesRoutes from "./routes/biSequencesRoutes";
 // BI_SERVER_BLOCK_v257_STAFF_DIRECTORY_v1
@@ -304,6 +305,8 @@ app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biApplicationsFrom
 
 // BI_SERVER_BLOCK_v249_DOCS_FROM_BF_v1 — service-JWT-authed doc mirror.
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biDocumentsFromBfRoutes);
+// BI_SERVER_BLOCK_v418_COMPANIES_BY_IDS_FROM_BF — service-JWT-authed company lookup for BF lender import.
+app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biCompaniesFromBfRoutes);
 // BI_SERVER_BLOCK_v250_MAYA_STAFF_PIPELINE_QUERY_v1 — service-JWT-authed Maya staff query endpoint.
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biMayaStaffRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biApplicationRoutes);
