@@ -12,7 +12,7 @@
 import cron from "node-cron";
 import { pool } from "../db";
 import { logger } from "../platform/logger";
-import { searchContacts, listEmailerMessages, ApolloError, type ApolloEmailerMessage } from "../integrations/apollo/apolloClient";
+import { searchContacts, listEmailerMessages, listSequences, listEmailAccounts, ApolloError, type ApolloEmailerMessage } from "../integrations/apollo/apolloClient";
 import { upsertApolloContact } from "../integrations/apollo/apolloContactSync";
 
 const CONTACT_PAGE_SIZE = 100;
@@ -214,9 +214,79 @@ export async function runEngagementSyncOnce(): Promise<{ pages: number; events_i
   }
 }
 
+// BI_SERVER_BLOCK_v840_APOLLO_CAMPAIGN_AND_MAILBOX_SYNC
+// Pull Apollo campaigns (sequences) into bi_apollo_sequences so the Marketing
+// portal's Sequences view shows them. The /emailer_messages endpoint is empty
+// for this account until sends occur, so engagement still flows via webhook;
+// campaigns + mailbox health come from these list endpoints.
+export async function runSequenceSyncOnce(): Promise<{ upserted: number }> {
+  if (!syncEnabled()) return { upserted: 0 };
+  let upserted = 0;
+  try {
+    const { sequences } = await listSequences({ page: 1, per_page: 100 });
+    for (const c of (sequences as any[])) {
+      if (!c?.id) continue;
+      await pool.query(
+        `INSERT INTO bi_apollo_sequences (apollo_sequence_id, name, status, last_synced_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (apollo_sequence_id) DO UPDATE
+           SET name = EXCLUDED.name, status = EXCLUDED.status, last_synced_at = NOW()`,
+        [String(c.id), String(c.name ?? "Untitled"), c.active === false || c.archived ? "paused" : "active"],
+      );
+      upserted += 1;
+    }
+    await pool.query(`UPDATE bi_apollo_sync_state SET last_sequence_sync_at = NOW(), updated_at = NOW() WHERE id = 1`).catch(() => {});
+    logger.info({ upserted }, "apollo sequence sync completed");
+  } catch (err) {
+    logger.error({ err }, "apollo sequence sync failed");
+  }
+  return { upserted };
+}
+
+// Pull mailbox deliverability from Apollo email_accounts into bi_mailbox_health
+// (today's window). Idempotent: replaces today's row per mailbox/channel.
+export async function runMailboxHealthSyncOnce(): Promise<{ mailboxes: number }> {
+  if (!syncEnabled()) return { mailboxes: 0 };
+  let count = 0;
+  try {
+    const { email_accounts } = await listEmailAccounts();
+    for (const a of (email_accounts as any[])) {
+      const mailbox = String(a?.email ?? "").trim();
+      if (!mailbox) continue;
+      const ds = a?.deliverability_score ?? {};
+      const sent = Math.round(Number(ds.avg_daily_sent ?? 0));
+      // Apollo gives rates, not counts; store sent and derive counts from rates so
+      // the portal's rate math (delivered/sent etc.) round-trips sensibly.
+      const delivered = Math.round(sent * Number(ds.avg_delivered_rate ?? 0));
+      const opened = Math.round(delivered * Number(ds.avg_open_rate ?? 0));
+      const clicked = Math.round(delivered * Number(ds.avg_click_rate ?? 0));
+      const replied = Math.round(delivered * Number(ds.avg_reply_rate ?? 0));
+      const bounced = Math.round(sent * Number(ds.avg_hard_bounce_rate ?? 0));
+      const spam = Math.round(sent * Number(ds.avg_spam_block_rate ?? 0));
+      await pool.query(
+        `DELETE FROM bi_mailbox_health WHERE mailbox = $1 AND channel = 'email' AND window_start = CURRENT_DATE`,
+        [mailbox],
+      );
+      await pool.query(
+        `INSERT INTO bi_mailbox_health (mailbox, channel, window_start, sent, delivered, opened, clicked, replied, bounced, spam_complained)
+         VALUES ($1, 'email', CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8)`,
+        [mailbox, sent, delivered, opened, clicked, replied, bounced, spam],
+      );
+      count += 1;
+    }
+    await pool.query(`UPDATE bi_apollo_sync_state SET last_email_account_sync_at = NOW(), updated_at = NOW() WHERE id = 1`).catch(() => {});
+    logger.info({ mailboxes: count }, "apollo mailbox health sync completed");
+  } catch (err) {
+    logger.error({ err }, "apollo mailbox health sync failed");
+  }
+  return { mailboxes: count };
+}
+
 export async function runApolloSyncOnce(): Promise<{ contacts: { pages: number; upserted: number }; engagement: { pages: number; events_inserted: number } }> {
   const contacts = await runContactSyncOnce();
   const engagement = await runEngagementSyncOnce();
+  await runSequenceSyncOnce();        // BI_SERVER_BLOCK_v840_APOLLO_CAMPAIGN_AND_MAILBOX_SYNC
+  await runMailboxHealthSyncOnce();   // BI_SERVER_BLOCK_v840_APOLLO_CAMPAIGN_AND_MAILBOX_SYNC
   return { contacts, engagement };
 }
 
@@ -237,6 +307,10 @@ export function startApolloSyncJob(): void {
   cron.schedule("*/15 * * * *", async () => {
     try { await runEngagementSyncOnce(); } catch (err) { logger.error({ err }, "engagement sync cron tick failed"); }
   });
+  cron.schedule("*/30 * * * *", async () => {  // BI_SERVER_BLOCK_v840
+    try { await runSequenceSyncOnce(); await runMailboxHealthSyncOnce(); }
+    catch (err) { logger.error({ err }, "sequence/mailbox sync cron tick failed"); }
+  });
   // v328: initial sync ~10s after boot with a 1-year window so the
   // first deploy doesn't make the operator wait 30 min for any data.
   // Watermark takes over after this run; subsequent ticks are incremental.
@@ -246,6 +320,8 @@ export function startApolloSyncJob(): void {
       const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
       const contacts = await runContactSyncOnce({ includeNotInSequence: true, sinceOverride: oneYearAgo });
       const engagement = await runEngagementSyncOnce();
+      await runSequenceSyncOnce();       // BI_SERVER_BLOCK_v840
+      await runMailboxHealthSyncOnce();  // BI_SERVER_BLOCK_v840
       logger.info({ contacts, engagement }, "apollo initial sync completed");
     } catch (err) {
       logger.error({ err }, "apollo initial sync failed");

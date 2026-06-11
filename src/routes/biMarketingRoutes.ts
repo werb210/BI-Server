@@ -31,13 +31,21 @@ function badRequest(res: Response, message: string) {
 // ----- Sequences -----------------------------------------------------
 
 router.get("/sequences", softFail({ items: [], total: 0 })(async (_req, res) => {
+  // BI_SERVER_BLOCK_v840_APOLLO_CAMPAIGN_AND_MAILBOX_SYNC — include Apollo-synced
+  // campaigns (from bi_apollo_sequences) alongside any portal-created sequences.
   const r = await pool.query(
-      `SELECT s.id, s.name, s.description, s.status, s.created_at, s.updated_at,
+      `SELECT s.id::text AS id, s.name, s.description, s.status, s.created_at, s.updated_at,
               (SELECT COUNT(*)::int FROM bi_sequence_steps st WHERE st.sequence_id = s.id) AS step_count,
-              (SELECT COUNT(*)::int FROM bi_sequence_enrollments e WHERE e.sequence_id = s.id AND e.status = 'active') AS active_enrollments
+              (SELECT COUNT(*)::int FROM bi_sequence_enrollments e WHERE e.sequence_id = s.id AND e.status = 'active') AS active_enrollments,
+              'portal'::text AS source
          FROM bi_sequences s
         WHERE s.deleted_at IS NULL
-        ORDER BY s.updated_at DESC`,
+      UNION ALL
+      SELECT a.apollo_sequence_id AS id, a.name, NULL AS description, a.status,
+             a.created_at, a.last_synced_at AS updated_at,
+             0 AS step_count, 0 AS active_enrollments, 'apollo'::text AS source
+         FROM bi_apollo_sequences a
+        ORDER BY updated_at DESC NULLS LAST`,
     );
   return res.json({ sequences: r.rows });
 }));
