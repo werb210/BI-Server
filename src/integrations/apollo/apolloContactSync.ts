@@ -1,5 +1,6 @@
 import { pool } from "../../db";
 import { logger } from "../../platform/logger";
+import { isContactSuppressed } from "../../services/biCrmSuppression";
 import type { ApolloPerson } from "./apolloClient";
 
 export type UpsertedContact = {
@@ -7,7 +8,7 @@ export type UpsertedContact = {
   company_id?: string | null;
   created: boolean;
   apollo_contact_id: string;
-  kind?: "contact" | "company" | "ambiguous";
+  kind?: "contact" | "company" | "ambiguous" | "suppressed";
 };
 
 function safeEmail(p: ApolloPerson): string | null { return p.email ? p.email.toLowerCase().trim() : null; }
@@ -57,6 +58,14 @@ export async function upsertApolloContact(p: ApolloPerson, opts: { sourceLabelId
       await pool.query(`UPDATE bi_contacts SET apollo_contact_id = $2, full_name = $3, phone_e164 = COALESCE($4, phone_e164), company_id = COALESCE($5, company_id), apollo_data = $6::jsonb, apollo_stage = $7, apollo_sequence_names = $8::text[], apollo_last_synced_at = NOW() WHERE id = $1`, [byEmail.rows[0].id, p.id, name, phone, companyId, JSON.stringify(p), stage, seqs]);
       return { contact_id: byEmail.rows[0].id, company_id: companyId, created: false, apollo_contact_id: p.id, kind: ambiguous ? "ambiguous" : "contact" };
     }
+  }
+
+  // BI_SERVER_BLOCK_v842_APOLLO_SUPPRESSION_AND_NAME — never resurrect a contact
+  // that was deleted from the CRM (suppression list). This was the cause of
+  // "deleted contacts keep coming back" after the Apollo sync was enabled.
+  if (await isContactSuppressed(pool, email, phone)) {
+    logger.info({ apollo_id: p.id, email }, "Apollo contact skipped (suppressed)");
+    return { contact_id: null, company_id: companyId, created: false, apollo_contact_id: p.id, kind: "suppressed" };
   }
 
   const ins = await pool.query<{ id: string }>(`INSERT INTO bi_contacts (company_id, full_name, email, phone_e164, apollo_contact_id, apollo_data, apollo_stage, apollo_sequence_names, apollo_last_synced_at) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::text[], NOW()) RETURNING id`, [companyId, name, email, phone, p.id, JSON.stringify(p), stage, seqs]);
