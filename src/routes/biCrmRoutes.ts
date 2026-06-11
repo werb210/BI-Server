@@ -7,6 +7,7 @@ import { ApolloError, matchPerson } from "../integrations/apollo/apolloClient";
 
 import { badRequest, ok } from "../utils/apiResponse";
 import { hasCapability } from "../platform/capabilities";
+import { suppressContacts, suppressCompanies } from "../services/biCrmSuppression"; // BI_SERVER_BLOCK_v820_CRM_DELETE_SUPPRESSION
 
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
@@ -334,6 +335,7 @@ router.delete("/crm/contacts/:id", async (req, res) => {
   const id = typeof req.params.id === "string" ? req.params.id : "";
   if (!id) return res.status(400).json({ error: "id_required" });
   try {
+    await suppressContacts(pool, [id]); // BI_SERVER_BLOCK_v820_CRM_DELETE_SUPPRESSION
     const r = await pool.query(
       `DELETE FROM bi_contacts WHERE id = $1 RETURNING id`,
       [id],
@@ -977,6 +979,7 @@ router.post("/crm/contacts/bulk-delete", async (req, res) => {
   if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
   const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown): x is string => typeof x === "string") : [];
   if (ids.length === 0) return res.status(400).json({ error: "ids_required" });
+  await suppressContacts(pool, ids); // BI_SERVER_BLOCK_v820_CRM_DELETE_SUPPRESSION
   await pool.query(`DELETE FROM bi_contacts WHERE id = ANY($1::uuid[])`, [ids]);
   return res.json({ ok: true, deleted: ids.length });
 });
@@ -1031,6 +1034,7 @@ router.post("/crm/companies/bulk-delete", async (req, res) => {
   if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
   const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown): x is string => typeof x === "string") : [];
   if (ids.length === 0) return res.status(400).json({ error: "ids_required" });
+  await suppressCompanies(pool, ids); // BI_SERVER_BLOCK_v820_CRM_DELETE_SUPPRESSION
   await pool.query(`DELETE FROM bi_companies WHERE id = ANY($1::uuid[])`, [ids]);
   return res.json({ ok: true, deleted: ids.length });
 });
