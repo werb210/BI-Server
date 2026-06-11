@@ -43,14 +43,17 @@ export async function suppressCompanies(db: Queryable, ids: string[]): Promise<n
 }
 
 // BI_SERVER_BLOCK_v842_APOLLO_SUPPRESSION_AND_NAME — is this email/phone suppressed?
-export async function isContactSuppressed(db: Queryable, email: string | null, phone: string | null): Promise<boolean> {
-  if (!email && !phone) return false;
+export async function isContactSuppressed(db: Queryable, email: string | null, phone: string | null, name?: string | null): Promise<boolean> {
+  if (!email && !phone && !name) return false;
   const r = await db.query(
+    // BI_SERVER_BLOCK_v845 — match by email, phone, OR stored display_name so
+    // contacts that Apollo re-supplies without an email still stay suppressed.
     `SELECT 1 FROM bi_suppressions
-      WHERE (($1::text IS NOT NULL AND lower(email) = lower($1)))
-         OR (($2::text IS NOT NULL AND phone_e164 = $2))
+      WHERE ($1::text IS NOT NULL AND lower(email) = lower($1))
+         OR ($2::text IS NOT NULL AND phone_e164 = $2)
+         OR ($3::text IS NOT NULL AND display_name IS NOT NULL AND lower(display_name) = lower($3))
       LIMIT 1`,
-    [email, phone],
+    [email, phone, name ?? null],
   );
   return (r.rows?.length ?? 0) > 0;
 }

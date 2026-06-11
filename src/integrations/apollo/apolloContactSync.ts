@@ -40,6 +40,14 @@ export async function upsertApolloContact(p: ApolloPerson, opts: { sourceLabelId
   const companyId = await findCompanyId(p, ambiguous && email ? emailLocalPart(email) : null);
   const labelId = opts.sourceLabelId ?? null;
 
+  // BI_SERVER_BLOCK_v845 — suppression check BEFORE any upsert path, matching by
+  // email/phone/name, so deleted contacts can never be resurrected by Apollo via
+  // the by-id or by-email update branches either.
+  if (await isContactSuppressed(pool, email, phone, name)) {
+    logger.info({ apollo_id: p.id, email }, "Apollo contact skipped (suppressed)");
+    return { contact_id: null, company_id: companyId, created: false, apollo_contact_id: p.id, kind: "suppressed" };
+  }
+
   if (!isPerson && hasOrganization && !ambiguous) {
     logger.info({ apollo_id: p.id, company_id: companyId }, "Apollo organization imported as company");
     return { contact_id: null, company_id: companyId, created: Boolean(companyId), apollo_contact_id: p.id, kind: "company" };
@@ -58,14 +66,6 @@ export async function upsertApolloContact(p: ApolloPerson, opts: { sourceLabelId
       await pool.query(`UPDATE bi_contacts SET apollo_contact_id = $2, full_name = $3, phone_e164 = COALESCE($4, phone_e164), company_id = COALESCE($5, company_id), apollo_data = $6::jsonb, apollo_stage = $7, apollo_sequence_names = $8::text[], apollo_last_synced_at = NOW() WHERE id = $1`, [byEmail.rows[0].id, p.id, name, phone, companyId, JSON.stringify(p), stage, seqs]);
       return { contact_id: byEmail.rows[0].id, company_id: companyId, created: false, apollo_contact_id: p.id, kind: ambiguous ? "ambiguous" : "contact" };
     }
-  }
-
-  // BI_SERVER_BLOCK_v842_APOLLO_SUPPRESSION_AND_NAME — never resurrect a contact
-  // that was deleted from the CRM (suppression list). This was the cause of
-  // "deleted contacts keep coming back" after the Apollo sync was enabled.
-  if (await isContactSuppressed(pool, email, phone)) {
-    logger.info({ apollo_id: p.id, email }, "Apollo contact skipped (suppressed)");
-    return { contact_id: null, company_id: companyId, created: false, apollo_contact_id: p.id, kind: "suppressed" };
   }
 
   const ins = await pool.query<{ id: string }>(`INSERT INTO bi_contacts (company_id, full_name, email, phone_e164, apollo_contact_id, apollo_data, apollo_stage, apollo_sequence_names, apollo_last_synced_at) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::text[], NOW()) RETURNING id`, [companyId, name, email, phone, p.id, JSON.stringify(p), stage, seqs]);
