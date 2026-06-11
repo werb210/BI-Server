@@ -3,6 +3,10 @@ import { logger } from "../../platform/logger";
 
 type Step = { name: string; sql: string };
 const STEPS: Step[] = [
+  // BI_SERVER_BLOCK_v853_OUTREACH_EXCLUDE — durable "removed from outreach" flag.
+  // Survives Apollo re-sync/imports (those UPDATEs never touch this column), so a
+  // contact removed from the board never reappears.
+  { name: "bi_contacts.outreach_excluded", sql: `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bi_contacts' AND column_name='outreach_excluded') THEN ALTER TABLE bi_contacts ADD COLUMN outreach_excluded BOOLEAN NOT NULL DEFAULT FALSE; CREATE INDEX IF NOT EXISTS idx_bi_contacts_outreach_excluded ON bi_contacts(outreach_excluded) WHERE outreach_excluded = TRUE; END IF; END $$;` },
   { name: "bi_contact_activity.occurred_at", sql: `DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='bi_contact_activity') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bi_contact_activity' AND column_name='occurred_at') THEN ALTER TABLE bi_contact_activity ADD COLUMN occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(); END IF; END $$;` },
   { name: "bi_crm_engagement_events.apollo_sequence_id", sql: `DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='bi_crm_engagement_events') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bi_crm_engagement_events' AND column_name='apollo_sequence_id') THEN ALTER TABLE bi_crm_engagement_events ADD COLUMN apollo_sequence_id TEXT; END IF; END $$;` },
   { name: "bi_crm_engagement_events.metadata", sql: `DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='bi_crm_engagement_events') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bi_crm_engagement_events' AND column_name='metadata') THEN ALTER TABLE bi_crm_engagement_events ADD COLUMN metadata JSONB NOT NULL DEFAULT '{}'::jsonb; END IF; END $$;` },
