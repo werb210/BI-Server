@@ -98,7 +98,7 @@ router.get("/crm/contacts", async (req, res) => {
   if (search) {
     where.push(
       // BI_SERVER_BLOCK_v827_CRM_SEARCH_INCLUDES_TAGS — also search tags.
-      `(c.full_name ILIKE $${i} OR c.email ILIKE $${i} OR c.phone_e164 ILIKE $${i} OR co.legal_name ILIKE $${i} OR array_to_string(COALESCE(c.tags,'{}'::text[]), ' ') ILIKE $${i})`,
+      `(c.full_name ILIKE $${i} OR c.email ILIKE $${i} OR c.phone_e164 ILIKE $${i} OR co.legal_name ILIKE $${i} OR COALESCE(c.outreach_status,'') ILIKE $${i} OR array_to_string(COALESCE(c.tags,'{}'::text[]), ' ') ILIKE $${i})`,
     );
     params.push(`%${search}%`);
     i++;
@@ -438,6 +438,7 @@ const COMPANIES_SORT_COLS: Record<string, string> = {
   name: "legal_name",
   legal_name: "legal_name",
   industry: "industry",
+  owner_name: "owner_id",
   created_at: "created_at",
 };
 
@@ -466,7 +467,8 @@ router.get("/crm/companies", async (req, res) => {
   if (search) {
     where.push(
       // BI_SERVER_BLOCK_v827_CRM_SEARCH_INCLUDES_TAGS — also search tags.
-      `(legal_name ILIKE $${i} OR operating_name ILIKE $${i} OR business_number ILIKE $${i} OR array_to_string(COALESCE(tags,'{}'::text[]), ' ') ILIKE $${i})`,
+      // CRM_UNIFIED_SEARCH — name/business no./industry/location/tags.
+      `(legal_name ILIKE $${i} OR operating_name ILIKE $${i} OR business_number ILIKE $${i} OR COALESCE(industry,'') ILIKE $${i} OR COALESCE(city,'') ILIKE $${i} OR COALESCE(province,'') ILIKE $${i} OR array_to_string(COALESCE(tags,'{}'::text[]), ' ') ILIKE $${i})`,
     );
     params.push(`%${search}%`);
     i++;
@@ -474,6 +476,12 @@ router.get("/crm/companies", async (req, res) => {
   if (industry) {
     where.push(`industry = $${i++}`);
     params.push(industry);
+  }
+  const ownerId =
+    typeof req.query.owner_id === "string" ? req.query.owner_id.trim() : "";
+  if (ownerId) {
+    where.push(`owner_id = $${i++}`);
+    params.push(ownerId);
   }
 
   const sql = `
@@ -486,6 +494,7 @@ router.get("/crm/companies", async (req, res) => {
            province,
            postal_code,
            industry,
+           owner_id,
            coalesce(tags, '{}'::text[]) AS tags,
            created_at,
            (SELECT COUNT(*)::int FROM bi_contacts c WHERE c.company_id = bi_companies.id) AS contact_count
@@ -1048,6 +1057,16 @@ router.post("/crm/companies/bulk-tag", async (req, res) => {
   if (ids.length === 0 || !tag) return res.status(400).json({ error: "ids_and_tag_required" });
   await pool.query(`UPDATE bi_companies SET tags = array(SELECT DISTINCT unnest(COALESCE(tags,'{}'::text[]) || $1::text[])) WHERE id = ANY($2::uuid[])`, [[tag], ids]);
   return res.json({ ok: true, tagged: ids.length });
+});
+
+// CRM_COMPANY_BULK_ASSIGN — assign a staff owner to many companies (parity w/ contacts).
+router.post("/crm/companies/bulk-assign", async (req, res) => {
+  if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
+  const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown): x is string => typeof x === "string") : [];
+  const ownerId = typeof req.body?.owner_id === "string" && req.body.owner_id.trim() ? req.body.owner_id.trim() : null;
+  if (ids.length === 0) return res.status(400).json({ error: "ids_required" });
+  await pool.query(`UPDATE bi_companies SET owner_id = $1 WHERE id = ANY($2::uuid[])`, [ownerId, ids]);
+  return res.json({ ok: true, assigned: ids.length });
 });
 
 export default router;
