@@ -483,6 +483,12 @@ router.get("/crm/companies", async (req, res) => {
     where.push(`owner_id = $${i++}`);
     params.push(ownerId);
   }
+  const tagFilter =
+    typeof req.query.tag === "string" ? req.query.tag.trim().toLowerCase() : "";
+  if (tagFilter) {
+    where.push(`EXISTS (SELECT 1 FROM unnest(COALESCE(tags,'{}'::text[])) t WHERE lower(t) = $${i++})`);
+    params.push(tagFilter);
+  }
 
   const sql = `
     SELECT id,
