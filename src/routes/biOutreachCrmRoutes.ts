@@ -139,6 +139,9 @@ router.get("/crm/outreach/contacts", async (req: Request, res: Response) => {
          WHEN upper(coalesce(country,'')) IN ('US','USA','UNITED STATES','UNITED STATES OF AMERICA') THEN 2
          WHEN substring(regexp_replace(coalesce(phone_e164,''),'[^0-9]','','g') from '^1?([0-9]{3})[0-9]{7}$') IN ('204','226','236','249','250','263','289','306','343','354','365','367','368','382','387','403','416','418','428','431','437','438','450','468','474','506','514','519','524','548','579','581','584','587','604','613','639','647','672','683','705','709','742','753','778','780','782','807','819','825','867','873','879','902','905') THEN 0
          WHEN substring(regexp_replace(coalesce(phone_e164,''),'[^0-9]','','g') from '^1?([0-9]{3})[0-9]{7}$') IS NOT NULL THEN 2
+         -- BI_SERVER_BLOCK_v_OUTREACH_COUNTRY_EMAIL_v1 — last-resort email-TLD hint (matches portal)
+         WHEN lower(substring(coalesce(email,'') from '[^.]+$')) = 'ca' THEN 0
+         WHEN lower(substring(coalesce(email,'') from '[^.]+$')) IN ('us','com','net','org') THEN 2
          ELSE 1
        END ASC,
        COALESCE(outreach_updated_at, created_at) DESC
