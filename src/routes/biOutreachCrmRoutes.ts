@@ -130,7 +130,18 @@ router.get("/crm/outreach/contacts", async (req: Request, res: Response) => {
            (SELECT COALESCE(co.operating_name, co.legal_name) FROM bi_companies co WHERE co.id = bi_contacts.company_id) AS company_name -- BI_SERVER_BLOCK_v349_OUTREACH_COMPANY
       FROM bi_contacts
      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-     ORDER BY COALESCE(outreach_updated_at, created_at) DESC
+     -- BI_SERVER_BLOCK_v_OUTREACH_COUNTRY_SORT_v1 — global order CDN, then unknown, then US,
+     -- applied BEFORE LIMIT/OFFSET so the entire list (not just the current page) is sorted.
+     -- Uses stored bi_contacts.country first; area-code fallback only when country is blank.
+     ORDER BY
+       CASE
+         WHEN upper(coalesce(country,'')) IN ('CDN','CA','CAN','CANADA') THEN 0
+         WHEN upper(coalesce(country,'')) IN ('US','USA','UNITED STATES','UNITED STATES OF AMERICA') THEN 2
+         WHEN substring(regexp_replace(coalesce(phone_e164,''),'[^0-9]','','g') from '^1?([0-9]{3})[0-9]{7}$') IN ('204','226','236','249','250','263','289','306','343','354','365','367','368','382','387','403','416','418','428','431','437','438','450','468','474','506','514','519','524','548','579','581','584','587','604','613','639','647','672','683','705','709','742','753','778','780','782','807','819','825','867','873','879','902','905') THEN 0
+         WHEN substring(regexp_replace(coalesce(phone_e164,''),'[^0-9]','','g') from '^1?([0-9]{3})[0-9]{7}$') IS NOT NULL THEN 2
+         ELSE 1
+       END ASC,
+       COALESCE(outreach_updated_at, created_at) DESC
      LIMIT ${limit}
      OFFSET ${offset}
   `;
