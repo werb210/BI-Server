@@ -459,6 +459,31 @@ router.patch("/applications/:publicId", async (req, res) => {
   vals.push(lenderCompanyId);
   vals.push(r.rows[0].id);
   await pool.query(`UPDATE bi_applications SET ${sets.join(", ")}, updated_at=NOW() WHERE id=$${i}`, vals);
+
+  // BI_SERVER_CONTACT_ENRICH_FROM_DRAFT_v1 - the OTP step creates the CRM
+  // contact as "New applicant (+1...)" and nothing updated it afterwards, so
+  // abandoned drafts sat in BI CRM with no name/email even when the wizard
+  // had already saved guarantor_name/guarantor_email. Promote placeholder
+  // contacts live on every autosave. bi_contacts has NO updated_at column.
+  const gName = typeof b.guarantor_name === "string" ? b.guarantor_name.trim() : "";
+  if (gName && r.rows[0].primary_contact_id) {
+    const gEmail = typeof b.guarantor_email === "string" ? b.guarantor_email.trim() : "";
+    try {
+      await pool.query(
+        `UPDATE bi_contacts c
+            SET full_name = $2,
+                email = COALESCE(NULLIF(c.email, ''), NULLIF($3, ''))
+          WHERE c.id = $1
+            AND (c.full_name IS NULL OR c.full_name = ''
+                 OR c.full_name LIKE 'Applicant +%'
+                 OR c.full_name LIKE 'New applicant (%')`,
+        [r.rows[0].primary_contact_id, gName, gEmail],
+      );
+    } catch (err) {
+      console.warn("[contact_enrich_from_draft] failed", err instanceof Error ? err.message : String(err));
+    }
+  }
+
   return res.json({ ok: true });
 });
 
