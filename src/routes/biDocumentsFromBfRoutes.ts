@@ -66,7 +66,7 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
   // bi_document_type ENUM. Fallback is 'enforcement_notice' because the
   // ENUM has no generic "other" value and that bucket is least loaded
   // for downstream filters. The original BF string is preserved in the
-  // document_type TEXT mirror column.
+  // document_type_legacy TEXT mirror column.
   const BF_TO_BI_DOC_TYPE: Record<string, string> = {
     loan_agreement: "loan_agreement_signed",
     loan_agreement_signed: "loan_agreement_signed",
@@ -93,6 +93,15 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
     enforcement_notice: "enforcement_notice",
   };
   const docTypeEnum = BF_TO_BI_DOC_TYPE[bfDocumentTypeRaw.toLowerCase()] ?? "enforcement_notice";
+
+  // BI_SERVER_DOC_MIRROR_TYPE_CHECK_FIX_v1 - bi_documents_type_check constrains
+  // the document_type TEXT column to the six PGI strings (or NULL). The mirror
+  // was inserting BF's raw string there, so any BF type outside those six
+  // (e.g. bank_statements) violated the CHECK and 500ed the whole mirror.
+  // Store a CHECK-legal value (or NULL) in document_type and preserve BF's
+  // raw string in document_type_legacy (TEXT, unconstrained).
+  const PGI_DOC_TYPE_TEXT = ["profit_loss", "balance_sheet", "ar_aging", "ap_aging", "founder_cv", "financial_forecast"];
+  const docTypeText = PGI_DOC_TYPE_TEXT.includes(bfDocumentTypeRaw.toLowerCase()) ? bfDocumentTypeRaw.toLowerCase() : null;
 
   if (!bfDocumentId) {
     return res.status(400).json({ ok: false, error: "bf_document_id_required" });
@@ -134,21 +143,22 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
     // Real columns per master schema + 20260428_bi_blob_storage + v249:
     //   id, application_id, doc_type (NOT NULL enum), original_filename,
     //   mime_type, bytes, blob_url, uploaded_by_actor (NOT NULL enum),
-    //   document_type (TEXT, BF's original string), source, bf_document_id,
-    //   bf_application_id, created_at.
+    //   document_type (TEXT, CHECK-legal PGI string or NULL),
+    //   document_type_legacy (TEXT, BF's original string), source,
+    //   bf_document_id, bf_application_id, created_at.
     // No updated_at column on bi_documents. No uploaded_by_name column.
     await pool.query(
       `INSERT INTO bi_documents
          (id, application_id, doc_type, original_filename, mime_type, bytes,
           blob_url, uploaded_by_actor,
-          document_type, source, bf_document_id, bf_application_id,
+          document_type, document_type_legacy, source, bf_document_id, bf_application_id,
           created_at)
        VALUES ($1,$2,$3::bi_document_type,$4,$5,$6,$7,'system'::bi_actor_type,
-               $8,'bf_mirror',$9,$10,NOW())`,
+               $8,$9,'bf_mirror',$10,$11,NOW())`,
       [
         id, biApplicationId, docTypeEnum, originalFilename, mimeType, bytes,
         blobUrl,
-        bfDocumentTypeRaw,
+        docTypeText, bfDocumentTypeRaw,
         bfDocumentId, bfApplicationId,
       ],
     );
