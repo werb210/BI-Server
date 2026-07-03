@@ -79,8 +79,77 @@ export async function runAbandonedNudgeTick(): Promise<{ first: number; second: 
   );
   const secondSent = await sendBatch(second.rows, "abandon_nudge2_sent_at");
 
-  if (firstSent || secondSent) {
-    logger.info({ first: firstSent, second: secondSent }, "abandoned_nudge_tick");
+  // BI_SERVER_OTP_CONTACT_NUDGE_v1 - contacts who OTP-verified but never
+  // created an application at all. There is no publicId to resume, so the
+  // message points at the start-of-application URL. Excludes anyone whose
+  // phone has ANY bi_application (they are covered by the abandoned-
+  // application nudges above). Applies to ALL existing eligible contacts on
+  // first tick (operator decision 2026-07-03), then 1h/24h cadence ongoing.
+  const contactMsg =
+    "Thank you for your interest in Boreal Risk Management. You verified your number " +
+    "but did not start your PGI application. Start here: " +
+    "https://boreal.insure/applications/new \u2014 or reply to this text and our intake " +
+    "team will help.";
+
+  const contactFirst = await pool.query<{ id: string; phone_e164: string }>(
+    `SELECT c.id, c.phone_e164
+       FROM bi_contacts c
+      WHERE COALESCE(c.phone_e164, '') <> ''
+        AND c.tags && ARRAY['applicant_otp', 'applicant']::text[]
+        AND c.otp_nudge_sent_at IS NULL
+        AND c.created_at <= NOW() - INTERVAL '1 hour'
+        AND NOT EXISTS (
+          SELECT 1 FROM bi_applications a
+           WHERE right(regexp_replace(coalesce(a.applicant_phone_e164, ''), '[^0-9]', '', 'g'), 10)
+               = right(regexp_replace(c.phone_e164, '[^0-9]', '', 'g'), 10)
+        )
+      ORDER BY c.created_at ASC
+      LIMIT $1`,
+    [BATCH],
+  );
+  let contactFirstSent = 0;
+  for (const row of contactFirst.rows) {
+    try {
+      await pool.query(`UPDATE bi_contacts SET otp_nudge_sent_at = NOW() WHERE id = $1`, [row.id]);
+      await sendOutreachSms(row.phone_e164, contactMsg);
+      contactFirstSent += 1;
+    } catch (err) {
+      logger.error({ contactId: row.id, err: err instanceof Error ? err.message : String(err) }, "otp_contact_nudge_send_failed");
+    }
+  }
+
+  const contactSecond = await pool.query<{ id: string; phone_e164: string }>(
+    `SELECT c.id, c.phone_e164
+       FROM bi_contacts c
+      WHERE COALESCE(c.phone_e164, '') <> ''
+        AND c.otp_nudge_sent_at IS NOT NULL
+        AND c.otp_nudge_sent_at <= NOW() - INTERVAL '24 hours'
+        AND c.otp_nudge2_sent_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM bi_applications a
+           WHERE right(regexp_replace(coalesce(a.applicant_phone_e164, ''), '[^0-9]', '', 'g'), 10)
+               = right(regexp_replace(c.phone_e164, '[^0-9]', '', 'g'), 10)
+        )
+      ORDER BY c.created_at ASC
+      LIMIT $1`,
+    [BATCH],
+  );
+  let contactSecondSent = 0;
+  for (const row of contactSecond.rows) {
+    try {
+      await pool.query(`UPDATE bi_contacts SET otp_nudge2_sent_at = NOW() WHERE id = $1`, [row.id]);
+      await sendOutreachSms(row.phone_e164, contactMsg);
+      contactSecondSent += 1;
+    } catch (err) {
+      logger.error({ contactId: row.id, err: err instanceof Error ? err.message : String(err) }, "otp_contact_nudge_send_failed");
+    }
+  }
+
+  if (firstSent || secondSent || contactFirstSent || contactSecondSent) {
+    logger.info(
+      { first: firstSent, second: secondSent, contactFirst: contactFirstSent, contactSecond: contactSecondSent },
+      "abandoned_nudge_tick",
+    );
   }
   return { first: firstSent, second: secondSent };
 }
