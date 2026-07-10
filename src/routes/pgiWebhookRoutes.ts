@@ -107,6 +107,27 @@ router.post("/api/v1/webhooks/pgi", express.raw({ type: "application/json" }), a
          VALUES($1, 'system', 'policy_bound', $2)`,
         [appId, `Policy bound by carrier (${evt.policy_id ?? "no policy id"})`]
       ).catch(() => {});
+
+      // BI_SERVER_REFERRAL_FROM_BF_v1 - if this application carries a BF referral
+      // code, tell BF-Server the policy bound so it credits the BF referrer 20%
+      // of premium. Best-effort and non-fatal.
+      try {
+        const __ref = await pool.query<{ referrer_code: string | null; annual_premium: string | null }>(
+          `SELECT referrer_code, annual_premium FROM bi_applications WHERE id = $1 LIMIT 1`,
+          [appId]
+        );
+        const __rc = __ref.rows[0];
+        if (__rc?.referrer_code) {
+          const { notifyBfReferralConversion } = await import("../services/notifyBfReferralConversion");
+          await notifyBfReferralConversion({
+            refCode: __rc.referrer_code,
+            externalId: appId,
+            premium: __rc.annual_premium != null ? Number(__rc.annual_premium) : null,
+          });
+        }
+      } catch (err) {
+        console.warn("[referral_from_bf] BF conversion notify failed (non-fatal)", (err as Error)?.message);
+      }
       // BI_SERVER_BLOCK_v381_COMMISSION_RATE_5PCT_v1
       // Boreal commission rate is 5% of annual premium (operator-confirmed
       // 2026-05-26), not 10% as v241 originally wrote. INSERT now writes

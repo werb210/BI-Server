@@ -200,6 +200,16 @@ router.post("/applications/score", async (req, res) => {
     ],
   );
 
+  // BI_SERVER_REFERRAL_FROM_BF_v1 - persist the raw referral code so a BF-minted
+  // ref_code (which has no bi_referrals row) survives to policy-bound, where it
+  // is forwarded to BF-Server to credit the BF referrer.
+  if (rawRef) {
+    await pool.query(
+      `UPDATE bi_applications SET referrer_code = $1 WHERE id = $2 AND (referrer_code IS NULL OR referrer_code = '')`,
+      [rawRef, id]
+    ).catch(() => {});
+  }
+
   // BI_SERVER_BLOCK_v360_REFERRER_ATTRIBUTION_v1 — back-link the referral.
   if (attributedReferralId) {
     await pool.query(
