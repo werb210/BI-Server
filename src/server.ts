@@ -44,7 +44,7 @@ import biLenderRoutes from "./routes/biLenderRoutes";
 import biPayoutRoutes from "./routes/biPayoutRoutes";
 import biPolicyRoutes from "./routes/biPolicyRoutes";
 import biQuoteRoutes from "./routes/biQuoteRoutes";
-import biReferrerRoutes from "./routes/biReferrerRoutes";
+// BI_SERVER_REFERRAL_FROM_BF_v1 - referral system unified in BF; BI referrer self-service API removed.
 // BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1
 import biJobs from "./routes/biJobs";
 import biReportRoutes from "./routes/biReportRoutes";
@@ -282,7 +282,7 @@ app.use(biLenderApplicationCreate);
 app.use("/api/v1", biCors, biLenderApiRoutes);
 app.use("/api/v1", biCors, biLenderOpenApi); // BI_SERVER_BLOCK_69_LENDER_OPENAPI_SPEC_v1
 app.use("/api/v1", biCors, biApplicantOtpRoutes);
-app.use("/api/v1", biCors, biReferrerRoutes);
+// BI_SERVER_REFERRAL_FROM_BF_v1 - biReferrerRoutes unmounted (referrals now handled in BF).
 // BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1 — cron-triggered job
 // endpoints. Mounted under /api/v1 alongside other public routes; auth
 // is enforced per-route via JOB_AUTH_TOKEN bearer (see biJobs.ts).
