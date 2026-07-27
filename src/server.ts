@@ -193,11 +193,23 @@ if (configuredOrigins.length === 0) {
 // any *.azurestaticapps.net host (so SWA preview/build URL rotations don't
 // silently brick CORS). Server-to-server requests (no Origin header) pass through.
 const AZ_SWA_HOST_RE = /^https:\/\/[a-z0-9-]+\.[0-9]+\.azurestaticapps\.net$/i;
+// BI_SERVER_CORS_NATIVE_APP_v1 - the staff portal also ships as a Capacitor iOS app, whose
+// WebView sends Origin: capacitor://localhost, NOT https://staff.boreal.financial.
+// That origin was in neither the fallback list nor the env var, so every BI call
+// from the iOS app was refused at CORS while the identical call from a desktop
+// browser succeeded. ionic://localhost is the legacy scheme, included so an older
+// build or a capacitor.config iosScheme change cannot silently break this again.
+const NATIVE_APP_ORIGINS = new Set([
+  "capacitor://localhost",
+  "ionic://localhost",
+  "http://localhost",
+]);
 const corsOriginSet = new Set(corsOrigins);
 const biCors = cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, true); // non-browser / same-origin
     if (corsOriginSet.has(origin)) return cb(null, true);
+    if (NATIVE_APP_ORIGINS.has(origin)) return cb(null, true); // BI_SERVER_CORS_NATIVE_APP_v1
     if (AZ_SWA_HOST_RE.test(origin)) return cb(null, true);
     return cb(new Error(`origin not allowed: ${origin}`));
   },
