@@ -2,7 +2,7 @@ import { Router } from "express";
 import { pool } from "../db";
 import { audienceParams, buildAudienceBreakdownSql, buildAudienceCountSql, type AudienceFilter } from "../services/biEmailAudience";
 import { renderEmailTemplate, type BrandedEmailTemplate } from "../services/emailTemplateRender";
-import { sendgridConfigured } from "../services/biSendgridService";
+import { sendBiMarketingEmail, sendgridConfigured } from "../services/biSendgridService";
 
 const router: Router = Router();
 const strings = (value: unknown): string[] | undefined => Array.isArray(value)
@@ -13,6 +13,11 @@ const filterFrom = (value: unknown): AudienceFilter => {
     includeTags: strings(body.tags ?? body.includeTags),
     excludeTags: strings(body.excludeTags),
   };
+};
+const queryTags = (value: unknown): string[] | undefined => {
+  if (Array.isArray(value)) return value.flatMap((item) => String(item).split(",")).map((tag) => tag.trim()).filter(Boolean);
+  if (typeof value === "string") return value.split(",").map((tag) => tag.trim()).filter(Boolean);
+  return undefined;
 };
 const templateFrom = (value: unknown): BrandedEmailTemplate & { subject: string } => {
   const body = value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -54,7 +59,10 @@ router.get("/email/segments", async (_req, res) => {
 });
 
 router.get("/email/audience-count", async (req, res) => {
-  const filter = filterFrom(req.query);
+  const filter: AudienceFilter = {
+    includeTags: queryTags(req.query.include ?? req.query.tags ?? req.query.includeTags),
+    excludeTags: queryTags(req.query.exclude ?? req.query.excludeTags),
+  };
   const [count, breakdown] = await Promise.all([
     pool.query(buildAudienceCountSql(), audienceParams(filter)), pool.query(buildAudienceBreakdownSql()),
   ]);
@@ -80,8 +88,17 @@ router.get("/email/template", async (_req, res) => {
 router.post("/email/template", async (req, res) => {
   const template = templateFrom(req.body);
   const html = renderEmailTemplate(template);
-  const saved = await pool.query(`INSERT INTO bi_email_templates(name,subject,body_text,body_html,category,created_by)
-    VALUES('Branded email composer',$1,$2,$3,'marketing',$4) RETURNING id,created_at,updated_at`,
+  const saved = await pool.query(`WITH updated AS (
+      UPDATE bi_email_templates SET subject=$1,body_text=$2,body_html=$3,updated_at=NOW()
+      WHERE id=(SELECT id FROM bi_email_templates WHERE name='Branded email composer' ORDER BY updated_at DESC LIMIT 1)
+      RETURNING id,created_at,updated_at
+    )
+    , inserted AS (
+      INSERT INTO bi_email_templates(name,subject,body_text,body_html,category,created_by)
+      SELECT 'Branded email composer',$1,$2,$3,'marketing',$4 WHERE NOT EXISTS (SELECT 1 FROM updated)
+      RETURNING id,created_at,updated_at
+    )
+    SELECT * FROM updated UNION ALL SELECT * FROM inserted`,
     [template.subject, JSON.stringify(template), html, (req as any).user?.id || null]);
   return res.status(201).json({ template: { ...template, ...saved.rows[0] } });
 });
@@ -96,13 +113,23 @@ router.post("/email/send-template", async (req, res) => {
   const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
   const template = templateFrom(body);
   if (!template.subject) return res.status(400).json({ error: { code: "subject_required" } });
+  const test = typeof body.test === "string" ? body.test.trim() : "";
+  if (test) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(test)) return res.status(400).json({ error: { code: "invalid_test_address" } });
+    await sendBiMarketingEmail({ to: test, subject: template.subject, html: renderEmailTemplate(template), text: template.body || undefined });
+    return res.json({ test: true, ok: true, to: test });
+  }
+  const filter = filterFrom(body);
+  const count = await pool.query(buildAudienceCountSql(), audienceParams(filter));
+  const total = Number(count.rows[0]?.count || 0);
   const hold = Math.max(0, Number(process.env.BI_SEND_HOLD_MINUTES || 2));
-  const job = await pool.query(`INSERT INTO bi_marketing_send_jobs(subject,html,text_body,filters,scheduled_at,created_by)
-    VALUES($1,$2,$3,$4::jsonb,NOW()+($5 * interval '1 minute'),$6) RETURNING *`, [
+  const job = await pool.query(`INSERT INTO bi_marketing_send_jobs(subject,html,text_body,filters,scheduled_at,created_by,total)
+    VALUES($1,$2,$3,$4::jsonb,NOW()+($5 * interval '1 minute'),$6,$7) RETURNING *`, [
     template.subject, renderEmailTemplate(template), template.body || null,
-    JSON.stringify(filterFrom(body)), hold, (req as any).user?.id || null,
+    JSON.stringify(filter), hold, (req as any).user?.id || null, total,
   ]);
-  return res.status(202).json({ job: job.rows[0] });
+  const row = job.rows[0];
+  return res.status(202).json({ queued: true, jobId: row.id, total, notBefore: row.scheduled_at });
 });
 
 router.get("/send-jobs/:id", async (req, res) => {
@@ -112,14 +139,17 @@ router.get("/send-jobs/:id", async (req, res) => {
     FROM bi_marketing_send_jobs j LEFT JOIN bi_marketing_send_recipients r ON r.job_id=j.id
     WHERE j.id=$1 GROUP BY j.id`, [req.params.id]);
   if (!result.rowCount) return res.status(404).json({ error: { code: "send_job_not_found" } });
-  return res.json({ job: result.rows[0] });
+  const row = result.rows[0];
+  const status = row.status === "completed" ? "done" : row.status === "cancelled" ? "canceled" : row.status;
+  return res.json({ ...row, status, not_before: row.scheduled_at, total: row.total ?? row.recipient_count ?? 0 });
 });
 
 router.post("/send-jobs/:id/cancel", async (req, res) => {
   const result = await pool.query(`UPDATE bi_marketing_send_jobs SET status='cancelled',completed_at=NOW()
     WHERE id=$1 AND status IN ('queued','running') RETURNING *`, [req.params.id]);
   if (!result.rowCount) return res.status(409).json({ error: { code: "not_cancellable" } });
-  return res.json({ job: result.rows[0] });
+  const row = result.rows[0];
+  return res.json({ ...row, status: "canceled", not_before: row.scheduled_at });
 });
 
 export default router;
