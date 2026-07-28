@@ -12,8 +12,16 @@ export interface SendgridMessage {
 
 export interface SendgridResult { status: "accepted"; statusCode: number }
 
+function apiKey(): string | undefined {
+  return process.env.BI_SENDGRID_API_KEY || process.env.SENDGRID_API_KEY;
+}
+
+export function biSendgridFrom(): string | undefined {
+  return process.env.BI_SENDGRID_FROM_EMAIL || process.env.SENDGRID_FROM;
+}
+
 export function sendgridConfigured(): boolean {
-  return Boolean(process.env.BI_SENDGRID_API_KEY && process.env.BI_SENDGRID_FROM_EMAIL);
+  return Boolean(apiKey() && biSendgridFrom());
 }
 
 export function mergeFields(template: string, values: Record<string, unknown>): string {
@@ -22,10 +30,10 @@ export function mergeFields(template: string, values: Record<string, unknown>): 
 }
 
 export async function sendBiMarketingEmail(message: SendgridMessage): Promise<SendgridResult> {
-  const apiKey = process.env.BI_SENDGRID_API_KEY;
-  const defaultFrom = process.env.BI_SENDGRID_FROM_EMAIL;
-  if (!apiKey || !defaultFrom) throw new Error("BI SendGrid is not configured");
-  sgMail.setApiKey(apiKey);
+  const configuredApiKey = apiKey();
+  const defaultFrom = biSendgridFrom();
+  if (!configuredApiKey || !defaultFrom) throw new Error("BI SendGrid is not configured");
+  sgMail.setApiKey(configuredApiKey);
   const timeout = new Promise<never>((_, reject) => {
     const timer = setTimeout(() => reject(new Error("SendGrid request timed out after 30s")), 30_000);
     timer.unref();
