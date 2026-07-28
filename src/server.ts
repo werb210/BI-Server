@@ -33,6 +33,7 @@ import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
 import biCompaniesFromBfRoutes from "./routes/biCompaniesFromBfRoutes"; // BI_SERVER_BLOCK_v418_COMPANIES_BY_IDS_FROM_BF
 import biMarketingRoutes from "./routes/biMarketingRoutes";
+import biMarketingEmailRoutes from "./routes/biMarketingEmailRoutes";
 import biSequencesRoutes from "./routes/biSequencesRoutes";
 // BI_SERVER_BLOCK_v257_STAFF_DIRECTORY_v1
 import biStaffRoutes from "./routes/biStaffRoutes";
@@ -341,6 +342,7 @@ app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
 app.use("/api/v1/bi", requireAuth, biCrmRoutes);
 // BI_SERVER_BLOCK_BI_ROUND8_MARKETING_v1
 app.use("/api/v1/bi/marketing", requireAuth, biMarketingRoutes);
+app.use("/api/v1/bi/marketing", requireAuth, biMarketingEmailRoutes);
 app.use("/api/v1/bi/marketing", requireAuth, biSequencesRoutes);
 // BI_SERVER_BLOCK_v257_STAFF_DIRECTORY_v1
 app.use("/api/v1/bi/staff", requireAuth, biStaffRoutes);
