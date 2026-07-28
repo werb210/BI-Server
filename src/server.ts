@@ -56,6 +56,7 @@ import chatRoutes from "./routes/chat";
 import intakeRoutes from "./routes/intake";
 import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
 import pgiWebhookRoutes from "./routes/pgiWebhookRoutes";
+import biSendgridWebhookRoutes from "./routes/biSendgridWebhookRoutes"; // BI_SENDGRID_EVENT_WEBHOOK_v1
 import { requireAuth } from "./platform/auth";
 import { env } from "./platform/env";
 import { errorHandler } from "./platform/errorHandler";
@@ -228,6 +229,10 @@ const biCors = cors({
 app.use(httpLogger);
 // Webhook (raw body) — must be before express.json
 app.use(pgiWebhookRoutes);
+// BI_SENDGRID_EVENT_WEBHOOK_v1 - MUST be before express.json: signature verification needs the
+// exact raw bytes, and re-serialised JSON never matches. Public by design -
+// SendGrid cannot authenticate; the ECDSA signature is the auth.
+app.use(biSendgridWebhookRoutes);
 app.use(express.json({ limit: "10mb" }));
 app.use(limiter);
 app.use(helmet());
