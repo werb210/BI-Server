@@ -22,9 +22,35 @@ const templateFrom = (value: unknown): BrandedEmailTemplate & { subject: string 
 };
 
 router.get("/email/segments", async (_req, res) => {
-  const segments = await pool.query(`SELECT id,name,filter_spec AS filters,created_at,updated_at
-    FROM bi_sequence_lists WHERE deleted_at IS NULL ORDER BY name`);
-  return res.json({ configured: sendgridConfigured(), segments: segments.rows });
+  try {
+    // Composer segments are contact tags, not saved sequence lists. Keep this
+    // eligibility predicate aligned with biEmailAudience so displayed counts
+    // describe contacts that can actually receive a send.
+    const [totalResult, segmentsResult] = await Promise.all([
+      pool.query(buildAudienceCountSql(), audienceParams({})),
+      pool.query(`SELECT lower(trim(tag)) AS tag, count(DISTINCT c.id)::int AS n
+        FROM bi_contacts c
+        CROSS JOIN LATERAL unnest(c.tags) AS tag
+        WHERE c.email IS NOT NULL AND position('@' in c.email) > 1
+          AND c.marketing_consent_basis IS NOT NULL
+          AND (c.marketing_consent_expires_at IS NULL OR c.marketing_consent_expires_at > NOW())
+          AND NOT EXISTS (
+            SELECT 1 FROM bi_suppressions s
+            WHERE lower(s.email) = lower(c.email) AND s.channel IN ('email', 'all')
+          )
+          AND trim(tag) <> ''
+        GROUP BY lower(trim(tag))
+        ORDER BY lower(trim(tag))`),
+    ]);
+    return res.json({
+      configured: sendgridConfigured(),
+      all: totalResult.rows[0]?.count || 0,
+      segments: segmentsResult.rows,
+    });
+  } catch (error) {
+    // A database fault must not masquerade as missing SendGrid credentials.
+    return res.status(500).json({ configured: sendgridConfigured(), all: 0, segments: [], error: "segments_query_failed" });
+  }
 });
 
 router.get("/email/audience-count", async (req, res) => {
@@ -33,7 +59,8 @@ router.get("/email/audience-count", async (req, res) => {
     pool.query(buildAudienceCountSql(), audienceParams(filter)), pool.query(buildAudienceBreakdownSql()),
   ]);
   const row = breakdown.rows[0] || {};
-  return res.json({ eligible: count.rows[0]?.count || 0, breakdown: {
+  const total = count.rows[0]?.count || 0;
+  return res.json({ n: total, eligible: total, breakdown: {
     withEmail: row.with_email || 0, suppressed: row.suppressed || 0,
     noConsentRecorded: row.no_consent_recorded || 0, consentExpired: row.consent_expired || 0,
   }, sendgridConfigured: sendgridConfigured() });
