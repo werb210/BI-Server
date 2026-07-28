@@ -474,9 +474,14 @@ router.post("/internal/reply", async (req, res) => {
 // Email templates CRUD. Snippets/templates referenced by name from sequences.
 router.get("/templates", softFail({ items: [] })(async (req, res) => {
   const includeInactive = String(req.query.include_inactive || "") === "true";
-  const where = includeInactive ? "" : "WHERE is_active = TRUE";
+  const clauses: string[] = [];
+  if (!includeInactive) clauses.push("is_active = TRUE");
+  if (String(req.query.channel || "") === "email") clauses.push("name <> 'Branded email composer'");
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const r = await pool.query(`SELECT id, name, subject, body_text, body_html, category, is_active, created_at, updated_at FROM bi_email_templates ${where} ORDER BY name ASC`);
-  return res.json({ items: r.rows, total: r.rows.length });
+  const items = r.rows.map((row: Record<string, unknown>) => ({ ...row, body: row.body_text ?? null,
+    html: row.body_html ?? null, landingUrl: null }));
+  return res.json({ items, total: items.length });
 }));
 
 router.post("/templates", async (req, res) => {
@@ -488,9 +493,11 @@ router.post("/templates", async (req, res) => {
       `INSERT INTO bi_email_templates (name, subject, body_text, body_html, category, is_active)
        VALUES ($1, $2, $3, $4, $5, COALESCE($6, TRUE))
        RETURNING id, name, subject, body_text, body_html, category, is_active, created_at, updated_at`,
-      [name, b.subject ?? null, b.body_text ?? null, b.body_html ?? null, b.category ?? null, b.is_active ?? null],
+      [name, b.subject ?? null, b.body_text ?? b.body ?? null, b.body_html ?? b.html ?? null,
+        b.category ?? (b.channel ? String(b.channel) : null), b.is_active ?? null],
     );
-    return res.status(201).json(r.rows[0]);
+    return res.status(201).json({ ...r.rows[0], body: r.rows[0].body_text ?? null,
+      html: r.rows[0].body_html ?? null, landingUrl: null });
   } catch (e) {
     return res.status(500).json({ error: "create_failed", message: e instanceof Error ? e.message : String(e) });
   }

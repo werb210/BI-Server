@@ -1,0 +1,2 @@
+ALTER TABLE bi_marketing_send_jobs
+  ADD COLUMN IF NOT EXISTS total INTEGER NOT NULL DEFAULT 0;
