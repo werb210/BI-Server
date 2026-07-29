@@ -6,6 +6,7 @@ import type { Request, Response, NextFunction } from "express";
 import { pool } from "../db";
 import { logger } from "../platform/logger";
 import { hasCapability } from "../platform/capabilities";
+import { scheduleFromNow } from "../services/sequenceSchedule"; // BI_SEQ_ENROLL_HARDENING_v1
 
 const router: Router = Router();
 
@@ -191,24 +192,46 @@ router.post("/sequences/:id/pause", async (req, res) => {
 });
 
 router.post("/sequences/:id/enroll", async (req, res) => {
+  // BI_SEQ_ENROLL_HARDENING_v1
   const b = (req.body || {}) as any;
-  const ids: string[] = Array.isArray(b.contact_ids) ? b.contact_ids : [];
-  if (ids.length === 0) return badRequest(res, "contact_ids required (array)");
+  const raw: unknown[] = Array.isArray(b.contact_ids) ? b.contact_ids : Array.isArray(b.contactIds) ? b.contactIds : [];
+  const ids = [...new Set(raw.map((value) => String(value).trim()).filter((value) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value),
+  ))];
+  if (ids.length === 0) return badRequest(res, "contact_ids required (array of uuids)");
   try {
-    let inserted = 0;
-    let skipped = 0;
-    for (const cid of ids) {
-      const r = await pool.query(
-        `INSERT INTO bi_sequence_enrollments (sequence_id, contact_id, status, current_step, next_step_at)
-              VALUES ($1, $2, 'active', 0, NOW())
-              ON CONFLICT (sequence_id, contact_id) DO NOTHING
-              RETURNING id`,
-        [req.params.id, cid],
-      );
-      if (r.rowCount && r.rowCount > 0) inserted++;
-      else skipped++;
-    }
-    return res.json({ inserted, skipped });
+    const sequenceResult = await pool.query<any>(
+      `SELECT * FROM bi_sequences WHERE id = $1 AND deleted_at IS NULL`,
+      [req.params.id],
+    );
+    const sequence = sequenceResult.rows[0];
+    if (!sequence) return res.status(404).json({ error: { code: "sequence_not_found" } });
+    const firstStep = await pool.query<{ delay_seconds: number }>(
+      `SELECT delay_seconds FROM bi_sequence_steps WHERE sequence_id = $1 ORDER BY position ASC LIMIT 1`,
+      [req.params.id],
+    );
+    const dueAt = scheduleFromNow(Number(firstStep.rows[0]?.delay_seconds ?? 0), {
+      startHour: Number(sequence.send_hours_local_start ?? 9),
+      endHour: Number(sequence.send_hours_local_end ?? 21),
+      weekdaysOnly: sequence.send_weekdays_only !== false,
+    });
+    const result = await pool.query(
+      `INSERT INTO bi_sequence_enrollments (sequence_id, contact_id, status, current_step, next_step_at)
+       SELECT $1, c.id, 'active', 0, $3
+         FROM bi_contacts c
+        WHERE c.id = ANY($2::uuid[])
+          AND c.email IS NOT NULL AND position('@' in c.email) > 1
+          AND c.marketing_consent_basis IS NOT NULL
+          AND (c.marketing_consent_expires_at IS NULL OR c.marketing_consent_expires_at > NOW())
+          AND NOT EXISTS (
+            SELECT 1 FROM bi_suppressions s
+             WHERE lower(s.email) = lower(c.email) AND s.channel IN ('email', 'all')
+          )
+       ON CONFLICT (sequence_id, contact_id) DO NOTHING`,
+      [req.params.id, ids, dueAt],
+    );
+    const inserted = result.rowCount ?? 0;
+    return res.json({ inserted, skipped: ids.length - inserted, requested: ids.length, next_step_at: dueAt });
   } catch (err) {
     logger.error({ err }, "bi.marketing.sequences.enroll.failed");
     return res.status(500).json({ error: { code: "internal" } });

@@ -1,23 +1,69 @@
 import { pool } from "../db";
 
+// BI_SEQ_REPLY_DETECTION_v1
 export async function handleGraphReplyWebhook(notifications: any[]) {
-  for (const n of notifications) {
-    const userId = n.resourceData?.userId;
-    const messageId = n.resourceData?.id;
-    const clientState = n.clientState;
+  for (const notification of notifications) {
+    const userId = notification.resourceData?.userId;
+    const messageId = notification.resourceData?.id;
     if (!userId || !messageId) continue;
-    const userR = await pool.query<any>(`SELECT m365_webhook_secret, m365_access_token FROM users WHERE id = $1 LIMIT 1`, [userId]);
-    const user = userR.rows[0];
-    if (!user || user.m365_webhook_secret !== clientState) continue;
-    const res = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userId)}/messages/${encodeURIComponent(messageId)}?$select=conversationId,bodyPreview`, { headers: { Authorization: `Bearer ${user.m365_access_token}` } });
-    if (!res.ok) continue;
-    const msg = await res.json() as any;
-    const sendR = await pool.query<any>(`SELECT id, enrollment_id FROM bi_sequence_sends WHERE m365_thread_id = $1 ORDER BY sent_at DESC LIMIT 1`, [msg.conversationId]);
-    const send = sendR.rows[0];
-    if (!send) continue;
-    await pool.query(`UPDATE bi_sequence_sends SET status='replied' WHERE id = $1`, [send.id]);
-    await pool.query(`UPDATE bi_sequence_enrollments SET status='replied', next_send_at=NULL WHERE id = $1`, [send.enrollment_id]);
-    await pool.query(`UPDATE bi_contacts c SET outreach_stage='engaged' FROM bi_sequence_enrollments e WHERE e.id = $1 AND c.id = e.contact_id AND c.outreach_stage IN ('queued','contacted')`, [send.enrollment_id]);
-    await pool.query(`INSERT INTO bi_contact_activity (contact_id, kind, payload) SELECT contact_id, 'email_replied', $2::jsonb FROM bi_sequence_enrollments WHERE id = $1`, [send.enrollment_id, JSON.stringify({ snippet: msg.bodyPreview ?? "" })]);
+
+    const userResult = await pool.query<any>(
+      `SELECT m365_webhook_secret, m365_access_token FROM users WHERE id = $1 LIMIT 1`,
+      [userId],
+    );
+    const user = userResult.rows[0];
+    if (!user || user.m365_webhook_secret !== notification.clientState) continue;
+
+    const response = await fetch(
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userId)}/messages/${encodeURIComponent(messageId)}?$select=from,bodyPreview`,
+      { headers: { Authorization: `Bearer ${user.m365_access_token}` } },
+    );
+    if (!response.ok) continue;
+    const message = await response.json() as any;
+    const senderAddress = String(message.from?.emailAddress?.address ?? "").trim().toLowerCase();
+    if (!senderAddress) continue;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const enrollments = await client.query<{ id: string; contact_id: string }>(
+        `UPDATE bi_sequence_enrollments e
+            SET status = 'replied', next_step_at = NULL
+           FROM bi_contacts c
+          WHERE e.contact_id = c.id
+            AND e.status = 'active'
+            AND lower(c.email) = $1
+          RETURNING e.id, e.contact_id`,
+        [senderAddress],
+      );
+
+      for (const enrollment of enrollments.rows) {
+        await client.query(
+          `INSERT INTO bi_sequence_events
+             (enrollment_id, step_id, event_type, channel, sender_id, metadata)
+           VALUES ($1, NULL, 'replied', 'email', NULL, $2::jsonb)`,
+          [enrollment.id, JSON.stringify({ sender: senderAddress, snippet: message.bodyPreview ?? "" })],
+        );
+      }
+
+      if (enrollments.rows.length > 0) {
+        const contactIds = [...new Set(enrollments.rows.map((row) => row.contact_id))];
+        await client.query(
+          `UPDATE bi_contacts SET outreach_stage = 'engaged' WHERE id = ANY($1::uuid[])`,
+          [contactIds],
+        );
+        await client.query(
+          `INSERT INTO bi_contact_activity (contact_id, kind, payload)
+           SELECT unnest($1::uuid[]), 'email_replied', $2::jsonb`,
+          [contactIds, JSON.stringify({ sender: senderAddress, snippet: message.bodyPreview ?? "" })],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 }
