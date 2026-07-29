@@ -117,27 +117,8 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
   }
   const biApplicationId = appRow.rows[0].id;
 
-  // Idempotency: if we've already mirrored this BF document to
-  // this BI app, return the existing row.
-  try {
-    const existing = await pool.query<{ id: string }>(
-      `SELECT id FROM bi_documents
-        WHERE bf_document_id = $1 AND application_id::text = $2
-        LIMIT 1`,
-      [bfDocumentId, biApplicationId],
-    );
-    if (existing.rows[0]) {
-      return res.json({
-        ok: true,
-        idempotent: true,
-        bi_document_id: existing.rows[0].id,
-      });
-    }
-  } catch (e) {
-    logger.error({ err: e, bfDocumentId, biApplicationId }, "docs_from_bf_idempotency_lookup_failed");
-  }
-
   const id = randomUUID();
+  let mirroredId: string = id;
   try {
     // BI_SERVER_BLOCK_v269_DOC_MIRROR_COLUMN_FIX_v1
     // Real columns per master schema + 20260428_bi_blob_storage + v249:
@@ -147,14 +128,27 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
     //   document_type_legacy (TEXT, BF's original string), source,
     //   bf_document_id, bf_application_id, created_at.
     // No updated_at column on bi_documents. No uploaded_by_name column.
-    await pool.query(
+    const mirrored = await pool.query<{ id: string }>(
       `INSERT INTO bi_documents
          (id, application_id, doc_type, original_filename, mime_type, bytes,
           blob_url, uploaded_by_actor,
           document_type, document_type_legacy, source, bf_document_id, bf_application_id,
           created_at)
        VALUES ($1,$2,$3::bi_document_type,$4,$5,$6,$7,'system'::bi_actor_type,
-               $8,$9,'bf_mirror',$10,$11,NOW())`,
+               $8,$9,'bf_mirror',$10,$11,NOW())
+       ON CONFLICT (application_id, bf_document_id) WHERE bf_document_id IS NOT NULL
+       DO UPDATE SET
+         doc_type = EXCLUDED.doc_type,
+         original_filename = EXCLUDED.original_filename,
+         mime_type = EXCLUDED.mime_type,
+         bytes = EXCLUDED.bytes,
+         blob_url = EXCLUDED.blob_url,
+         uploaded_by_actor = EXCLUDED.uploaded_by_actor,
+         document_type = EXCLUDED.document_type,
+         document_type_legacy = EXCLUDED.document_type_legacy,
+         source = EXCLUDED.source,
+         bf_application_id = EXCLUDED.bf_application_id
+       RETURNING id`,
       [
         id, biApplicationId, docTypeEnum, originalFilename, mimeType, bytes,
         blobUrl,
@@ -162,6 +156,7 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
         bfDocumentId, bfApplicationId,
       ],
     );
+    mirroredId = mirrored.rows[0].id;
   } catch (e: any) {
     logger.error({ err: e, bfDocumentId, biApplicationId }, "docs_from_bf_insert_failed");
     return res.status(500).json({ ok: false, error: "insert_failed", detail: e?.message });
@@ -169,7 +164,7 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
 
   return res.json({
     ok: true,
-    bi_document_id: id,
+    bi_document_id: mirroredId,
     bi_application_id: biApplicationId,
   });
 });
