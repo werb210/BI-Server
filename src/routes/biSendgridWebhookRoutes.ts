@@ -22,6 +22,16 @@ import crypto from "node:crypto";
 import { pool } from "../db";
 
 const router: Router = Router();
+const SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
+let unsignedRequestWarningLogged = false;
+
+export function logSendgridWebhookSigningStatus(): void {
+  if (process.env.SENDGRID_WEBHOOK_PUBLIC_KEY) {
+    console.info("[bi_sendgrid_webhook] signature verification enabled");
+    return;
+  }
+  console.warn("[bi_sendgrid_webhook] WARNING: SENDGRID_WEBHOOK_PUBLIC_KEY is unset; webhook accepts unsigned writes");
+}
 
 // Events that mean "never email this address again".
 // - bounce: only HARD bounces. A soft bounce is a full mailbox or a temporary
@@ -49,6 +59,11 @@ function verify(rawBody: Buffer, signature: string, timestamp: string): boolean 
   // Not configured -> accept, matching BF-Server's behaviour. Set the key in
   // Azure to enforce; until then anyone who finds the URL can post events.
   if (!key) return true;
+  if (!signature || !timestamp) return false;
+  const timestampSeconds = Number(timestamp);
+  const timestampFresh = Number.isFinite(timestampSeconds)
+    && Math.abs(Date.now() / 1000 - timestampSeconds) <= SIGNATURE_TOLERANCE_SECONDS;
+  if (!timestampFresh) return false;
   try {
     const pubPem = `-----BEGIN PUBLIC KEY-----\n${key}\n-----END PUBLIC KEY-----\n`;
     const v = crypto.createVerify("sha256");
@@ -64,6 +79,11 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
   const rawBody: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body ?? ""));
   const sig = String(req.header("X-Twilio-Email-Event-Webhook-Signature") ?? "");
   const ts = String(req.header("X-Twilio-Email-Event-Webhook-Timestamp") ?? "");
+
+  if (!process.env.SENDGRID_WEBHOOK_PUBLIC_KEY && !unsignedRequestWarningLogged) {
+    unsignedRequestWarningLogged = true;
+    console.warn("[bi_sendgrid_webhook] accepting unsigned request because SENDGRID_WEBHOOK_PUBLIC_KEY is unset");
+  }
 
   if (!verify(rawBody, sig, ts)) {
     res.status(403).json({ ok: false, error: "bad_signature" });

@@ -25,6 +25,7 @@ import { startBiSendWorker } from "./services/biMarketingSendRunner";
 import { startAbandonedApplicationNudge } from "./workers/abandonedApplicationNudge"; // BI_SERVER_ABANDONED_NUDGE_v1
 import { startSequenceSendWorker } from "./workers/sequenceSendWorker";
 import { startMailboxHealthRollup } from "./workers/mailboxHealthRollup";
+import { logSendgridWebhookSigningStatus } from "./routes/biSendgridWebhookRoutes";
 
 // eslint-disable-next-line no-console
 console.log("BI process start", new Date().toISOString());
@@ -40,6 +41,8 @@ const port = Number(env.PORT || "8080");
 
 // eslint-disable-next-line no-console
 console.log("Starting BI-Server bootstrap...");
+
+logSendgridWebhookSigningStatus();
 
 const server = app.listen(port, "0.0.0.0", () => {
   // BI_SERVER_BLOCK_v376_AZURE_HEALTH_AND_BOOT_v1 — wrap each worker start

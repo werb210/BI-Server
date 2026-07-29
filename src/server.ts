@@ -16,6 +16,7 @@ import { startPurgeJob } from "./jobs/purgeJob";
 import { startApolloSyncJob } from "./jobs/apolloSyncJob";
 import { startDocsReminderCronJob } from "./jobs/docsReminderCronJob";
 import { biRateLimiter } from "./middleware/biRateLimit";
+import { rateLimitKeyFromRequest } from "./middleware/rateLimitKey";
 import { enforceBIPrefix } from "./middleware/biIsolation";
 import biApplicationRoutes from "./routes/biApplicationRoutes";
 import biPublicApplicationRoutes from "./routes/biPublicApplicationRoutes"; // BI_AUDIT_FIX_v58
@@ -124,6 +125,7 @@ const limiter = rateLimit({
   // own probes return 429, triggering App Service to mark the instance
   // unhealthy. Real clients also get 429s during health-check storms.
   skip: (req) => req.path === "/health" || req.path === "/" || req.path.startsWith("/metrics"),
+  keyGenerator: rateLimitKeyFromRequest,
 });
 
 const spamThrottle = new Map<string, number>();
