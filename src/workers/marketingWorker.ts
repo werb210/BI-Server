@@ -1,5 +1,6 @@
 import { pool } from "../db";
 import { logger } from "../platform/logger";
+import { isSendableAt, nextSendableAt, scheduleFromNow, type SendWindow } from "../services/sequenceSchedule";
 
 const TICK_MS = 60_000;
 
@@ -88,15 +89,12 @@ async function isSuppressed(contactId: string, channel: "sms" | "email", phone: 
   return (r.rowCount ?? 0) > 0;
 }
 
-function withinSendWindow(seq: Sequence): boolean {
-  const now = new Date();
-  const hour = now.getHours();
-  if (hour < seq.send_hours_local_start || hour >= seq.send_hours_local_end) return false;
-  if (seq.send_weekdays_only) {
-    const dow = now.getDay();
-    if (dow === 0 || dow === 6) return false;
-  }
-  return true;
+function sendWindow(seq: Sequence): SendWindow {
+  return {
+    startHour: Number(seq.send_hours_local_start ?? 9),
+    endHour: Number(seq.send_hours_local_end ?? 21),
+    weekdaysOnly: seq.send_weekdays_only !== false,
+  };
 }
 
 async function sendSms(toPhone: string, body: string, sender: string | null): Promise<{ ok: boolean; sid?: string; error?: string }> {
@@ -148,8 +146,13 @@ async function recordEvent(enrollmentId: string, stepId: string | null, eventTyp
 async function processOne(enr: Enrollment): Promise<void> {
   const seq = await loadSequence(enr.sequence_id);
   if (!seq || seq.status !== "active") return;
-  if (!withinSendWindow(seq)) {
-    await pool.query(`UPDATE bi_sequence_enrollments SET next_step_at = NOW() + INTERVAL '1 hour' WHERE id = $1`, [enr.id]);
+  // BI_SEQ_BUSINESS_HOURS_v1: evaluate in America/Edmonton and jump directly
+  // to the next opening rather than repeatedly claiming a closed enrollment.
+  if (!isSendableAt(new Date(), sendWindow(seq))) {
+    await pool.query(`UPDATE bi_sequence_enrollments SET next_step_at = $2 WHERE id = $1`, [
+      enr.id,
+      nextSendableAt(new Date(), sendWindow(seq)),
+    ]);
     return;
   }
 
@@ -220,12 +223,15 @@ async function advanceStep(enrollmentId: string, nextPosition: number): Promise<
     return;
   }
   const delay = nr.rows[0].delay_seconds || 0;
+  const sequence = await loadSequence(seqId);
+  if (!sequence) return;
+  const dueAt = scheduleFromNow(delay, sendWindow(sequence));
   await pool.query(
     `UPDATE bi_sequence_enrollments
         SET current_step = $2, last_step_at = NOW(),
-            next_step_at = NOW() + ($3 || ' seconds')::interval
+            next_step_at = $3
       WHERE id = $1`,
-    [enrollmentId, nextPosition, delay],
+    [enrollmentId, nextPosition, dueAt],
   );
 }
 
