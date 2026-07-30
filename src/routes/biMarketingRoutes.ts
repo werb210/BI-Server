@@ -84,9 +84,9 @@ router.post("/sequences", async (req: Request, res) => {
         return badRequest(res, `step ${i}: invalid type`);
       }
       await client.query(
-        `INSERT INTO bi_sequence_steps (sequence_id, position, type, delay_seconds, subject, body, variant, conditions)
-              VALUES ($1, $2, $3, COALESCE($4,0), $5, $6, COALESCE($7,'A'), COALESCE($8,'{}'::jsonb))`,
-        [seq.id, i, s.type, s.delay_seconds, s.subject ?? null, s.body ?? null, s.variant ?? null, JSON.stringify(s.conditions ?? {})],
+        `INSERT INTO bi_sequence_steps (sequence_id, position, type, delay_seconds, subject, body, variant, conditions, assignee_user_id)
+              VALUES ($1, $2, $3, COALESCE($4,0), $5, $6, COALESCE($7,'A'), COALESCE($8,'{}'::jsonb), $9)`,
+        [seq.id, i, s.type, s.delay_seconds, s.subject ?? null, s.body ?? null, s.variant ?? null, JSON.stringify(s.conditions ?? {}), s.assignee_user_id ?? null],
       );
     }
     await client.query("COMMIT");

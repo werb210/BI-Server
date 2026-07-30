@@ -25,6 +25,7 @@ type Step = {
   body: string | null;
   variant: string;
   conditions: Record<string, unknown>;
+  assignee_user_id: string | null;
 };
 
 type Enrollment = {
@@ -39,7 +40,9 @@ type Enrollment = {
 };
 
 const BF_SERVER_URL = process.env.BF_SERVER_URL || "https://server.boreal.financial";
-const BI_BACKEND_TOKEN = process.env.BI_BACKEND_TOKEN || "";
+// BACKEND_SERVICE_TOKEN is shared with BF-Server's service bridge. Keep the
+// legacy name as a transition fallback for existing App Service deployments.
+const BACKEND_SERVICE_TOKEN = process.env.BACKEND_SERVICE_TOKEN || process.env.BI_BACKEND_TOKEN || "";
 
 async function pickDue(limit: number): Promise<Enrollment[]> {
   const r = await pool.query<Enrollment>(
@@ -99,12 +102,12 @@ function sendWindow(seq: Sequence): SendWindow {
 
 async function sendSms(toPhone: string, body: string, sender: string | null): Promise<{ ok: boolean; sid?: string; error?: string }> {
   try {
-    const r = await fetch(`${BF_SERVER_URL}/api/sms`, {
+    const r = await fetch(`${BF_SERVER_URL}/api/service/sms`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-Silo": "BI",
-        "X-Backend-Token": BI_BACKEND_TOKEN,
+        "X-Backend-Token": BACKEND_SERVICE_TOKEN,
       },
       body: JSON.stringify({ to: toPhone, body, sender }),
     });
@@ -118,18 +121,46 @@ async function sendSms(toPhone: string, body: string, sender: string | null): Pr
 
 async function sendEmail(toEmail: string, subject: string, body: string, sender: string | null): Promise<{ ok: boolean; messageId?: string; error?: string }> {
   try {
-    const r = await fetch(`${BF_SERVER_URL}/api/o365/mail/send`, {
+    const r = await fetch(`${BF_SERVER_URL}/api/service/mail`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-Silo": "BI",
-        "X-Backend-Token": BI_BACKEND_TOKEN,
+        "X-Backend-Token": BACKEND_SERVICE_TOKEN,
       },
-      body: JSON.stringify({ to: toEmail, subject, body, sender }),
+      body: JSON.stringify({ to: toEmail, subject, html: body, text: body, sendAs: sender }),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) return { ok: false, error: `BF-Server email ${r.status}: ${JSON.stringify(j).slice(0, 200)}` };
-    return { ok: true, messageId: (j as any).message_id };
+    return { ok: true, messageId: (j as any).messageId };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "fetch failed" };
+  }
+}
+
+async function createTask(
+  assigneeUserId: string,
+  title: string,
+  description: string,
+): Promise<{ ok: boolean; taskId?: string; error?: string }> {
+  try {
+    const r = await fetch(`${BF_SERVER_URL}/api/service/tasks`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Silo": "BI",
+        "X-Backend-Token": BACKEND_SERVICE_TOKEN,
+      },
+      body: JSON.stringify({
+        assignee_user_id: assigneeUserId,
+        title,
+        notes: description,
+        type: "TODO",
+      }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: `BF-Server task ${r.status}: ${JSON.stringify(j).slice(0, 200)}` };
+    return { ok: true, taskId: String((j as any).task_id ?? (j as any).id ?? "") || undefined };
   } catch (err: any) {
     return { ok: false, error: err?.message || "fetch failed" };
   }
@@ -196,7 +227,20 @@ async function processOne(enr: Enrollment): Promise<void> {
     if (result.ok) await recordEvent(enr.id, step.id, "sent", "email", sender, { messageId: result.messageId });
     else await recordEvent(enr.id, step.id, "failed", "email", sender, { error: result.error });
   } else if (step.type === "task") {
-    await recordEvent(enr.id, step.id, "sent", null, null, { task: step.body });
+    if (!step.assignee_user_id) {
+      await recordEvent(enr.id, step.id, "failed", null, null, { reason: "no_assignee" });
+    } else {
+      const result = await createTask(
+        step.assignee_user_id,
+        step.subject?.trim() || "BI sequence task",
+        step.body ?? "",
+      );
+      if (result.ok) {
+        await recordEvent(enr.id, step.id, "sent", null, step.assignee_user_id, { task_id: result.taskId });
+      } else {
+        await recordEvent(enr.id, step.id, "failed", null, step.assignee_user_id, { error: result.error });
+      }
+    }
   } else if (step.type === "wait") {
     await recordEvent(enr.id, step.id, "sent", null, null, { wait_seconds: step.delay_seconds });
   }
