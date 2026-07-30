@@ -22,8 +22,15 @@ const queryTags = (value: unknown): string[] | undefined => {
 const templateFrom = (value: unknown): BrandedEmailTemplate & { subject: string } => {
   const body = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const text = (key: string): string => typeof body[key] === "string" ? body[key] as string : "";
-  return { subject: text("subject"), headline: text("headline"), heroUrl: text("heroUrl"),
-    body: text("body"), ctaLabel: text("ctaLabel"), ctaUrl: text("ctaUrl") };
+  return {
+    subject: text("subject"), headline: text("headline"), heroUrl: text("heroUrl"),
+    heroLink: text("heroLink"), body: text("body"), ctaLabel: text("ctaLabel"),
+    ctaUrl: text("ctaUrl"), image2Url: text("image2Url"), image2Link: text("image2Link"),
+    headline2: text("headline2"), body2: text("body2"),
+    secondHeadline: text("secondHeadline"), secondBody: text("secondBody"),
+    rightHeadline: text("rightHeadline"), rightBody: text("rightBody"),
+    rightImageUrl: text("rightImageUrl"), rightImageLink: text("rightImageLink"),
+  };
 };
 
 router.get("/email/segments", async (_req, res) => {
