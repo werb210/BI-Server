@@ -156,6 +156,9 @@ const PRODUCTION_FALLBACK_ORIGINS = [
   // BI_SERVER_BLOCK_v239_CORS_BOREAL_INSURE_v1 — public BI-Website now lives at boreal.insure.
   "https://www.boreal.insure",
   "https://boreal.insure",
+  // BI_SERVER_CORS_BI_CLIENT_v1 — BI-Client, the subcontractor insurance and
+  // bond application front end for the SLF channel.
+  "https://client.boreal.insure",
 ];
 const DEV_FALLBACK_ORIGINS = [
   "http://localhost:5173",
