@@ -838,11 +838,21 @@ router.post("/contacts/:id/enrich", async (req, res) => {
 // not exist in this silo (BI comms still piggybacks on BF-Server
 // per the user direction), so the query gracefully returns just
 // the bi_contact_activity rows when the comms tables are absent.
+// BI_SERVER_CONTACT_ACTIVITY_RECONCILE_v1
 router.get("/crm/contacts/:id/timeline", async (req, res) => {
   try {
     const id = String(req.params.id);
     const r = await pool.query(
-      `SELECT id, occurred_at, event_type, summary, metadata
+      `SELECT id,
+              contact_id,
+              occurred_at,
+              created_at,
+              event_type,
+              outcome,
+              body,
+              meta,
+              actor_id,
+              actor_name
          FROM bi_contact_activity
         WHERE contact_id = $1
         ORDER BY occurred_at DESC
@@ -987,9 +997,22 @@ router.post("/crm/contacts/bulk-update", async (req, res) => {
   return res.json({ ok: true, updated: ids.length });
 });
 
+// BI_SERVER_CONTACT_ACTIVITY_RECONCILE_v1
 router.get("/crm/contacts/:id/activity", async (req, res) => {
-  const r = await pool.query(`SELECT a.*, p.email AS actor_email FROM bi_contact_activity a LEFT JOIN bi_staff_profile p ON p.staff_user_id = a.actor_user_id WHERE a.contact_id = $1 ORDER BY occurred_at DESC`, [req.params.id]);
-  return res.json({ items: r.rows });
+  try {
+    const r = await pool.query(
+      `SELECT a.*, p.email AS actor_email
+         FROM bi_contact_activity a
+         LEFT JOIN bi_staff_profile p ON p.staff_user_id::text = a.actor_id
+        WHERE a.contact_id = $1
+        ORDER BY a.occurred_at DESC`,
+      [req.params.id],
+    );
+    return res.json({ items: r.rows });
+  } catch (err) {
+    logger.error({ err }, "bi.contacts.activity.failed");
+    return res.status(500).json({ error: { code: "internal", message: "Failed to load activity" } });
+  }
 });
 
 router.post("/crm/contacts/bulk-delete", async (req, res) => {
