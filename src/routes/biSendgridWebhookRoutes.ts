@@ -108,6 +108,11 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
     if (!email || !event) continue;
 
     // Ledger every event, so "why did this contact not receive it" is answerable.
+    // BI_SENDGRID_WEBHOOK_SUPPRESSION_FIX_v3 - the table this writes to was
+    // never created by any migration, so this insert raised undefined_table
+    // every time and the catch below discarded the error without a word. The
+    // table now exists; the catch stays (a ledger failure must never cost us a
+    // suppression) but it no longer swallows silently.
     await pool
       .query(
         `INSERT INTO bi_marketing_send_events (job_id, contact_id, email, event_type, detail)
@@ -121,19 +126,33 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
         ],
       )
       .then(() => { logged += 1; })
-      .catch(() => undefined); // a ledger failure must never lose a suppression
+      .catch((err) => {
+        console.warn(
+          "[bi_sendgrid_webhook] event ledger insert failed",
+          email,
+          event,
+          err instanceof Error ? err.message : err,
+        );
+      });
 
     if (!SUPPRESSING.has(event)) continue;
     if (!isHardBounce(ev)) continue;
 
+    // BI_SENDGRID_WEBHOOK_SUPPRESSION_FIX_v3
+    // Avoid ON CONFLICT because not every migration path creates its required
+    // unique constraint. Match the audience exclusion predicate instead.
     await pool
       .query(
         `INSERT INTO bi_suppressions (identifier, email, channel, reason)
-         VALUES ($1, $1, 'email', $2)
-         ON CONFLICT (identifier, channel) DO NOTHING`,
+         SELECT $1, $1, 'email', $2
+          WHERE NOT EXISTS (
+            SELECT 1 FROM bi_suppressions
+             WHERE lower(email) = lower($1)
+               AND channel IN ('email', 'all')
+          )`,
         [email, reasonFor(event)],
       )
-      .then(() => { suppressed += 1; })
+      .then((r) => { if ((r.rowCount ?? 0) > 0) suppressed += 1; })
       .catch((err) => {
         console.warn("[bi_sendgrid_webhook] suppression insert failed", email, err instanceof Error ? err.message : err);
       });
