@@ -26,19 +26,28 @@ router.post("/email/audience-count", async (req, res) => {
   } catch (err) { return res.status(500).json({ error: { code: "internal", message: err instanceof Error ? err.message : String(err) } }); }
 });
 
-router.post("/email/send-template", async (req, res) => {
-  const body = (req.body || {}) as Record<string, unknown>;
-  if (!sendgridConfigured()) return res.status(503).json({ error: { code: "sendgrid_not_configured" } });
-  if (typeof body.templateId !== "string") return res.status(400).json({ error: { code: "template_id_required" } });
-  const template = await pool.query("SELECT id,subject,body_html,body_text FROM bi_email_templates WHERE id=$1 AND is_active=TRUE", [body.templateId]);
-  if (!template.rowCount) return res.status(404).json({ error: { code: "template_not_found" } });
-  const hold = Math.max(0, Number(process.env.BI_SEND_HOLD_MINUTES || 2));
-  const t = template.rows[0];
-  const job = await pool.query(`INSERT INTO bi_marketing_send_jobs(template_id,subject,html,text_body,filters,scheduled_at,created_by)
-    VALUES($1,$2,$3,$4,$5::jsonb,NOW()+($6 * interval '1 minute'),$7) RETURNING *`,
-    [t.id, t.subject || "", t.body_html || "", t.body_text, JSON.stringify(filterFrom(body.filters)), hold, (req as any).user?.id || null]);
-  return res.status(202).json({ job: job.rows[0] });
-});
+// BI_SERVER_SEND_TEMPLATE_SINGLE_HANDLER_v2
+// A second POST /email/send-template handler lived here. Both this router and
+// biMarketingEmailCompatRoutes are mounted on /api/v1/bi/marketing, so the two
+// registrations collided and Express resolved it by registration order alone -
+// compat is mounted first, so this one was unreachable.
+//
+// That mattered because THIS handler never read `body.test`. The composer's
+// "Send test" button posts { test: "someone@example.com", ...template }. Compat
+// intercepts it, sends one email and returns. This one would have ignored the
+// field entirely, and since the composer sends no `filters` key,
+// filterFrom(body.filters) yielded no include/exclude tags at all - meaning the
+// full eligible audience, ~3,983 contacts, from a button labelled "Send test".
+//
+// It was also dead on its own terms: it requires body.templateId, and the only
+// caller in the estate (BF-portal BrandedEmailComposer) posts a composer
+// payload with no templateId, so reaching it would have returned 400
+// template_id_required rather than working.
+//
+// Removed rather than fixed. Two handlers for one route is the defect; leaving
+// a corrected duplicate in place would keep the estate one mount-order edit
+// away from the same blast. /email/audience-count (POST here, GET on compat),
+// /email/send-jobs and /email/send-jobs/:id/cancel are NOT duplicated and stay.
 
 router.get("/email/send-jobs", async (_req, res) => {
   const jobs = await pool.query(`SELECT j.*,
