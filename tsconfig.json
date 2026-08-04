@@ -10,6 +10,7 @@
   },
   "exclude": [
     "vitest.config.ts",
+    "vitest.unit.config.ts",
     "src/db/migrations",
     "node_modules",
     "dist",

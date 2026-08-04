@@ -950,8 +950,8 @@ async function enrichContactById(id: string): Promise<ApolloEnrichOutcome> {
 
   await pool.query(`UPDATE bi_contacts SET ${sets.join(", ")} WHERE id = $1`, params);
   await pool.query(
-    `INSERT INTO bi_contact_activity (contact_id, kind, payload)
-     VALUES ($1, 'enriched', $2::jsonb)`,
+    `INSERT INTO bi_contact_activity (id, contact_id, event_type, meta)
+     VALUES (gen_random_uuid(), $1, 'enriched', $2::jsonb)`,
     [id, JSON.stringify({ changed_fields: changedFields })],
   );
 

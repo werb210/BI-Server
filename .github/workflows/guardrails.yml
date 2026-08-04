@@ -35,3 +35,22 @@ jobs:
             exit 1
           fi
           echo "All SQL files are in src/db/migrations/. OK."
+
+      # BI_SERVER_UNIT_TESTS_IN_CI_v6
+      # Until now `npm test` was `tsc --noEmit && tsc` and vitest was never
+      # invoked by any workflow, so every test in this repo was written and
+      # merged without ever executing. These two steps are the fix.
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.11.1'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Live schema drift
+        run: npm run check:schema
+
+      - name: Unit tests
+        run: npm run test:unit
