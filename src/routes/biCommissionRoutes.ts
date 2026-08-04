@@ -31,10 +31,18 @@ router.post("/:id/premium-received", async (req, res) => {
 
   const { id } = req.params;
 
+  // BI_SERVER_LIVE_SCHEMA_COLUMNS_v5
+  // There is no `received` boolean on bi_commissions. The live table records
+  // this as status plus a premium_received_at timestamp, which is also what
+  // biReportRoutes reads when it totals payable commission - so this route
+  // 500'd, and had it succeeded it would still not have moved the number the
+  // report shows.
   await db.query(
     `UPDATE bi_commissions
-     SET received=true
-     WHERE id=$1`,
+        SET status = 'received',
+            premium_received_at = COALESCE(premium_received_at, NOW()),
+            updated_at = NOW()
+      WHERE id = $1`,
     [id]
   );
 

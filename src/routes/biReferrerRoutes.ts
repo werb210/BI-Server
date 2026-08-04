@@ -209,11 +209,13 @@ router.post("/referrer/referrals", requireReferrer, async (req: any, res) => {
       try {
         const { sendOutreachSms } = await import("../services/smsService");
         const applyUrl = `${process.env.BI_PUBLIC_URL || "https://www.boreal.insure"}/applications/new?ref=${shortCode}`;
-        const referrer = (await pool.query<{ display_name: string | null; company_name: string | null }>(
-          `SELECT display_name, company_name FROM bi_referrers WHERE id = $1 LIMIT 1`,
+        // BI_SERVER_LIVE_SCHEMA_COLUMNS_v5 - display_name does not exist on
+        // bi_referrers; the name column is full_name.
+        const referrer = (await pool.query<{ full_name: string | null; company_name: string | null }>(
+          `SELECT full_name, company_name FROM bi_referrers WHERE id = $1 LIMIT 1`,
           [req.referrerId]
         )).rows[0];
-        const fromName = referrer?.company_name || referrer?.display_name || "your referrer";
+        const fromName = referrer?.company_name || referrer?.full_name || "your referrer";
         const firstName = String(full_name).split(" ")[0] || "there";
         const body = `Hi ${firstName}, ${fromName} referred you to Boreal Risk for Personal Guarantee Insurance. Get a quote in 5 min: ${applyUrl}`;
         await sendOutreachSms(phone, body);

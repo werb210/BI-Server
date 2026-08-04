@@ -52,10 +52,26 @@ export async function handleGraphReplyWebhook(notifications: any[]) {
           `UPDATE bi_contacts SET outreach_stage = 'engaged' WHERE id = ANY($1::uuid[])`,
           [contactIds],
         );
+        // BI_SERVER_LIVE_SCHEMA_COLUMNS_v5
+        // kind and payload are 2026_05_18_bi_marketing_foundation_v108 columns.
+        // bi_contact_activity on bi-pg01 is the outreach_crm_v251 shape -
+        // actor_id, actor_name, event_type, outcome, body, meta - so this
+        // statement raised undefined_column.
+        //
+        // Unlike the other instances of this mistake, it is NOT a silent
+        // failure: it sits inside the transaction above, so it aborted the
+        // COMMIT and rolled back the enrollment moving to 'replied', the
+        // bi_sequence_events row and the outreach_stage bump. Every reply to a
+        // sequence email was thrown away and the sequence carried on emailing
+        // someone who had already answered.
         await client.query(
-          `INSERT INTO bi_contact_activity (contact_id, kind, payload)
-           SELECT unnest($1::uuid[]), 'email_replied', $2::jsonb`,
-          [contactIds, JSON.stringify({ sender: senderAddress, snippet: message.bodyPreview ?? "" })],
+          `INSERT INTO bi_contact_activity (contact_id, event_type, body, meta)
+           SELECT unnest($1::uuid[]), 'email_replied', $2, $3::jsonb`,
+          [
+            contactIds,
+            message.bodyPreview ?? null,
+            JSON.stringify({ sender: senderAddress, snippet: message.bodyPreview ?? "" }),
+          ],
         );
       }
       await client.query("COMMIT");
