@@ -45,8 +45,10 @@ export async function onApplicationApproved(applicationId: string) {
 
     // 2. Referrer — heads-up that one of their referrals closed.
     if (app.referrer_id) {
-      const referrer = (await pool.query<{ phone_e164: string | null; display_name: string | null }>(
-        `SELECT phone_e164, display_name FROM bi_referrers WHERE id = $1 LIMIT 1`,
+      // BI_SERVER_LIVE_SCHEMA_COLUMNS_v5 - display_name does not exist on
+      // bi_referrers; the name column is full_name.
+      const referrer = (await pool.query<{ phone_e164: string | null; full_name: string | null }>(
+        `SELECT phone_e164, full_name FROM bi_referrers WHERE id = $1 LIMIT 1`,
         [app.referrer_id]
       )).rows[0];
       if (referrer?.phone_e164) {
