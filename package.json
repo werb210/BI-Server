@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "test": "tsc --noEmit && tsc",
     "test:migrations": "tsx src/tests/migrations.smoke.ts",
-    "test:integration": "vitest run"
+    "test:integration": "vitest run",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
+    "check:schema": "node scripts/check-schema-drift.mjs"
   },
   "dependencies": {
     "@azure-rest/ai-document-intelligence": "^1.0.0",
