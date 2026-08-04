@@ -29,11 +29,18 @@ export function buildAudienceBreakdownSql(): string {
     FROM bi_contacts c`;
 }
 
+// BI_SERVER_MERGE_FALLBACK_v8
+// first_name and full_name defaulted to the empty string, so a contact with no
+// name rendered "Hi ," - and the BI list is 3,983 rows backfilled from Apollo,
+// where a missing name is common. BF-Server's marketing merge has always
+// defaulted to "there"; this matches it so the two silos read the same.
+// company stays empty on purpose: "Hi there" reads fine, "at there" does not.
 export function contactMergeVars(contact: Record<string, unknown>): Record<string, string> {
   const fullName = String(contact.full_name ?? "").trim();
+  const firstName = fullName.split(/\s+/)[0] || "";
   return {
-    first_name: fullName.split(/\s+/)[0] || "",
-    full_name: fullName,
+    first_name: firstName || "there",
+    full_name: fullName || "there",
     email: String(contact.email ?? ""),
     company: String(contact.company ?? ""),
   };
