@@ -40,10 +40,21 @@ jobs:
       # Until now `npm test` was `tsc --noEmit && tsc` and vitest was never
       # invoked by any workflow, so every test in this repo was written and
       # merged without ever executing. These two steps are the fix.
-      - name: Setup Node 20
+      # BI_SERVER_GUARDRAILS_NODE_v7
+      # 20.11.1 (what ci-audit.yml pins, matching the App Service runtime) is
+      # too old for the test runner: vitest 4 loads a rolldown bundle that
+      # imports `styleText` from node:util, and that export first appears in
+      # Node 20.12. On 20.11.1 vitest dies at startup with
+      # "does not provide an export named 'styleText'" before a single test
+      # loads - which is what broke this job the moment tests were wired in.
+      #
+      # Pinned to 22 here only. ci-audit.yml keeps 20.11.1 because it builds
+      # and typechecks the artifact that actually ships; nothing about running
+      # unit tests needs to match the production runtime.
+      - name: Setup Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: '20.11.1'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
