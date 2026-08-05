@@ -501,7 +501,8 @@ router.get("/templates", softFail({ items: [] })(async (req, res) => {
   if (!includeInactive) clauses.push("is_active = TRUE");
   if (String(req.query.channel || "") === "email") clauses.push("name <> 'Branded email composer'");
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const r = await pool.query(`SELECT id, name, subject, body_text, body_html, category, is_active, created_at, updated_at FROM bi_email_templates ${where} ORDER BY name ASC`);
+  // BI_SERVER_TEMPLATE_FIELDS_ROUNDTRIP_v9 - `fields` is the composer state.
+  const r = await pool.query(`SELECT id, name, subject, body_text, body_html, category, fields, is_active, created_at, updated_at FROM bi_email_templates ${where} ORDER BY name ASC`);
   const items = r.rows.map((row: Record<string, unknown>) => ({ ...row, body: row.body_text ?? null,
     html: row.body_html ?? null, landingUrl: null }));
   return res.json({ items, total: items.length });
@@ -512,12 +513,13 @@ router.post("/templates", async (req, res) => {
   const name = String(b.name ?? "").trim();
   if (!name) return res.status(400).json({ error: "name_required" });
   try {
+    const fields = b.fields && typeof b.fields === "object" ? JSON.stringify(b.fields) : null;
     const r = await pool.query(
-      `INSERT INTO bi_email_templates (name, subject, body_text, body_html, category, is_active)
-       VALUES ($1, $2, $3, $4, $5, COALESCE($6, TRUE))
-       RETURNING id, name, subject, body_text, body_html, category, is_active, created_at, updated_at`,
+      `INSERT INTO bi_email_templates (name, subject, body_text, body_html, category, fields, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, TRUE))
+       RETURNING id, name, subject, body_text, body_html, category, fields, is_active, created_at, updated_at`,
       [name, b.subject ?? null, b.body_text ?? b.body ?? null, b.body_html ?? b.html ?? null,
-        b.category ?? (b.channel ? String(b.channel) : null), b.is_active ?? null],
+        b.category ?? (b.channel ? String(b.channel) : null), fields, b.is_active ?? null],
     );
     return res.status(201).json({ ...r.rows[0], body: r.rows[0].body_text ?? null,
       html: r.rows[0].body_html ?? null, landingUrl: null });
@@ -533,17 +535,17 @@ router.patch("/templates/:id", async (req, res) => {
   const sets: string[] = [];
   const params: unknown[] = [];
   let i = 1;
-  for (const col of ["name", "subject", "body_text", "body_html", "category", "is_active"]) {
+  for (const col of ["name", "subject", "body_text", "body_html", "category", "fields", "is_active"]) {
     if (b[col] !== undefined) {
       sets.push(`${col} = $${i++}`);
-      params.push(b[col]);
+      params.push(col === "fields" && b[col] && typeof b[col] === "object" ? JSON.stringify(b[col]) : b[col]);
     }
   }
   if (!sets.length) return res.status(400).json({ error: "no_updates" });
   sets.push(`updated_at = NOW()`);
   params.push(id);
   try {
-    const r = await pool.query(`UPDATE bi_email_templates SET ${sets.join(", ")} WHERE id = $${i} RETURNING id, name, subject, body_text, body_html, category, is_active, created_at, updated_at`, params);
+    const r = await pool.query(`UPDATE bi_email_templates SET ${sets.join(", ")} WHERE id = $${i} RETURNING id, name, subject, body_text, body_html, category, fields, is_active, created_at, updated_at`, params);
     if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
     return res.json(r.rows[0]);
   } catch (e) {
