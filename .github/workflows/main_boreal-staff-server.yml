@@ -19,7 +19,7 @@ env:
   # BI_SERVER_BLOCK_v189_PROBE_FQDN_AND_NON_FATAL_v1
   AZURE_WEBAPP_NAME: BI-Server
   AZURE_WEBAPP_HOSTNAME: bi-server-cse0apamgkheb9d5.canadacentral-01.azurewebsites.net
-  NODE_VERSION: '20.x'
+  NODE_VERSION: '22.x'
 
 jobs:
   build-and-deploy:
