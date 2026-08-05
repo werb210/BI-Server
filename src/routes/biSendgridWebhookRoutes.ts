@@ -101,6 +101,7 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
 
   let suppressed = 0;
   let logged = 0;
+  let linkClicks = 0;
 
   for (const ev of events) {
     const email = String(ev?.email ?? "").trim().toLowerCase();
@@ -122,7 +123,8 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
           ev?.contact_id ?? null,
           email,
           event,
-          JSON.stringify({ sg_event_id: ev?.sg_event_id ?? null, reason: ev?.reason ?? null, type: ev?.type ?? null }).slice(0, 1000),
+          // BI_SERVER_EMAIL_LINK_CLICKS_v11 - the clicked URL was being discarded.
+          JSON.stringify({ sg_event_id: ev?.sg_event_id ?? null, reason: ev?.reason ?? null, type: ev?.type ?? null, url: typeof ev?.url === "string" && ev.url ? String(ev.url) : null }).slice(0, 1000),
         ],
       )
       .then(() => { logged += 1; })
@@ -134,6 +136,21 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
           err instanceof Error ? err.message : err,
         );
       });
+
+    // BI_SERVER_EMAIL_LINK_CLICKS_v11 - one row per clicked link, so "which
+    // link did they click" is answerable. Failure here must never cost us a
+    // suppression, so it is awaited with its own catch like the ledger above.
+    if (event === "click" && typeof ev?.url === "string" && ev.url) {
+      await pool
+        .query(
+          `INSERT INTO bi_email_link_clicks (job_id, contact_id, email, url) VALUES ($1,$2,$3,$4)`,
+          [ev?.job_id ?? null, ev?.contact_id ?? null, email, String(ev.url)],
+        )
+        .then(() => { linkClicks += 1; })
+        .catch((err) => {
+          console.warn("[bi_sendgrid_webhook] link click insert failed", email, err instanceof Error ? err.message : err);
+        });
+    }
 
     if (!SUPPRESSING.has(event)) continue;
     if (!isHardBounce(ev)) continue;
@@ -160,7 +177,7 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
 
   // Always 200 on a verified payload. A non-2xx makes SendGrid retry the whole
   // batch, and a single bad row would replay thousands of events forever.
-  res.json({ ok: true, received: events.length, suppressed, logged });
+  res.json({ ok: true, received: events.length, suppressed, logged, linkClicks });
 });
 
 export default router;

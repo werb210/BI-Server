@@ -583,6 +583,48 @@ router.patch("/templates/:id", async (req, res) => {
   }
 });
 
+// BI_SERVER_EMAIL_LINK_CLICKS_v11 - which links people actually clicked.
+// Mirrors the BF route shape so one portal panel serves both silos.
+router.get("/link-clicks", softFail({ items: [] })(async (req, res) => {
+  const days = Math.min(365, Math.max(1, Number(req.query.days) || 90));
+  const jobId = String(req.query.jobId || "").trim();
+  const params: unknown[] = [days];
+  let where = "clicked_at > NOW() - ($1 || ' days')::interval";
+  if (jobId) { params.push(jobId); where += ` AND job_id = $${params.length}`; }
+  const r = await pool.query(
+    `SELECT url,
+            count(*)::int AS clicks,
+            count(DISTINCT lower(email))::int AS contacts,
+            max(clicked_at) AS last_clicked
+       FROM bi_email_link_clicks
+      WHERE ${where}
+      GROUP BY url
+      ORDER BY clicks DESC, last_clicked DESC
+      LIMIT 200`,
+    params,
+  );
+  return res.json({ items: r.rows, days, jobId: jobId || null });
+}));
+
+// BI_SERVER_EMAIL_LINK_CLICKS_v11 - who clicked one specific link.
+router.get("/link-clicks/contacts", softFail({ items: [] })(async (req, res) => {
+  const url = String(req.query.url || "").trim();
+  if (!url) return res.json({ items: [] });
+  const days = Math.min(365, Math.max(1, Number(req.query.days) || 90));
+  const r = await pool.query(
+    `SELECT lower(email) AS email,
+            count(*)::int AS clicks,
+            max(clicked_at) AS last_clicked
+       FROM bi_email_link_clicks
+      WHERE url = $1 AND clicked_at > NOW() - ($2 || ' days')::interval
+      GROUP BY lower(email)
+      ORDER BY last_clicked DESC
+      LIMIT 500`,
+    [url, days],
+  );
+  return res.json({ items: r.rows, url, days });
+}));
+
 router.delete("/templates/:id", async (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ error: "missing_id" });
