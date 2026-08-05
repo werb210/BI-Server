@@ -2,7 +2,7 @@
 # exports `app` but never calls listen(). The container would start, run
 # the file to completion, and exit cleanly. The actual entrypoint with
 # app.listen() is dist/index.js.
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
