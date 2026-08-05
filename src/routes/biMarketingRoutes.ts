@@ -514,15 +514,45 @@ router.post("/templates", async (req, res) => {
   if (!name) return res.status(400).json({ error: "name_required" });
   try {
     const fields = b.fields && typeof b.fields === "object" ? JSON.stringify(b.fields) : null;
+    const category = b.category ?? (b.channel ? String(b.channel) : null);
+    // BF_PORTAL_TEMPLATE_SAVE_BY_NAME_v8 - the portal now keeps the library
+    // name populated while editing. Treat a POST with the same template name as
+    // a replacement so re-saving does not create duplicate library entries.
+    const existing = await pool.query(
+      `SELECT id FROM bi_email_templates
+        WHERE lower(name) = lower($1)
+          AND COALESCE(category, '') = COALESCE($2, '')
+        ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+        LIMIT 1`,
+      [name, category],
+    );
+    if (existing.rowCount) {
+      const r = await pool.query(
+        `UPDATE bi_email_templates
+            SET subject = $2,
+                body_text = $3,
+                body_html = $4,
+                category = $5,
+                fields = $6,
+                is_active = COALESCE($7, TRUE),
+                updated_at = NOW()
+          WHERE id = $1
+          RETURNING id, name, subject, body_text, body_html, category, fields, is_active, created_at, updated_at`,
+        [existing.rows[0].id, b.subject ?? null, b.body_text ?? b.body ?? null,
+          b.body_html ?? b.html ?? null, category, fields, b.is_active ?? null],
+      );
+      return res.status(200).json({ ...r.rows[0], body: r.rows[0].body_text ?? null,
+        html: r.rows[0].body_html ?? null, landingUrl: null, replaced: true });
+    }
     const r = await pool.query(
       `INSERT INTO bi_email_templates (name, subject, body_text, body_html, category, fields, is_active)
        VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, TRUE))
        RETURNING id, name, subject, body_text, body_html, category, fields, is_active, created_at, updated_at`,
       [name, b.subject ?? null, b.body_text ?? b.body ?? null, b.body_html ?? b.html ?? null,
-        b.category ?? (b.channel ? String(b.channel) : null), fields, b.is_active ?? null],
+        category, fields, b.is_active ?? null],
     );
     return res.status(201).json({ ...r.rows[0], body: r.rows[0].body_text ?? null,
-      html: r.rows[0].body_html ?? null, landingUrl: null });
+      html: r.rows[0].body_html ?? null, landingUrl: null, replaced: false });
   } catch (e) {
     return res.status(500).json({ error: "create_failed", message: e instanceof Error ? e.message : String(e) });
   }
