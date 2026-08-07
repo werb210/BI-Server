@@ -315,6 +315,13 @@ app.use("/api/v1", biCors, biJobs);
 app.use("/api/v1", biCors, requireAuth, biScoreRoutes);
 
 // Authenticated BI endpoints — every BI route lives under /api/v1/bi
+// BI_SERVER_PUBLIC_ASSET_MOUNT_ORDER_v13 - MUST stay above every "/api/v1/bi"
+// mount that carries requireAuth. Marketing email images are fetched by mail
+// clients and image proxies with no Authorization header; when this router sat
+// below the guarded mounts, requireAuth returned 401 first and every image in
+// every BI marketing email rendered broken.
+app.use("/api/v1/bi/marketing", biCors, biMarketingEmailAssetPublicRouter);
+
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biRoutes);
 // BI_SERVER_BLOCK_v262_CARRIER_PATH_E2E_FIX_v3 — Removed the duplicate
 // biPublicApplicationRoutes mount under /api/v1/bi. It was shadowing
@@ -353,7 +360,6 @@ app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
 // so the absolute URL matches the router's path.
 app.use("/api/v1/bi", requireAuth, biCrmRoutes);
 // BI_EMAIL_ASSET_UPLOAD_v1 - email clients fetch image assets without bearer authentication.
-app.use("/api/v1/bi/marketing", biCors, biMarketingEmailAssetPublicRouter);
 // BI_SERVER_BLOCK_BI_ROUND8_MARKETING_v1
 app.use("/api/v1/bi/marketing", requireAuth, biMarketingEmailAssetUploadRouter);
 app.use("/api/v1/bi/marketing", requireAuth, biMarketingRoutes);

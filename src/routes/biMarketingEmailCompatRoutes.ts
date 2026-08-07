@@ -2,7 +2,7 @@ import { Router } from "express";
 import { pool } from "../db";
 import { audienceParams, buildAudienceBreakdownSql, buildAudienceCountSql, type AudienceFilter } from "../services/biEmailAudience";
 import { renderEmailTemplate, type BrandedEmailTemplate } from "../services/emailTemplateRender";
-import { sendBiMarketingEmail, sendgridConfigured } from "../services/biSendgridService";
+import { mergeFields, sendBiMarketingEmail, sendgridConfigured } from "../services/biSendgridService";
 
 const router: Router = Router();
 const strings = (value: unknown): string[] | undefined => Array.isArray(value)
@@ -123,7 +123,21 @@ router.post("/email/send-template", async (req, res) => {
   const test = typeof body.test === "string" ? body.test.trim() : "";
   if (test) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(test)) return res.status(400).json({ error: { code: "invalid_test_address" } });
-    await sendBiMarketingEmail({ to: test, subject: template.subject, html: renderEmailTemplate(template), text: template.body || undefined });
+    // BI_SERVER_PUBLIC_ASSET_MOUNT_ORDER_v13 - resolve the test recipient
+    // against bi_contacts so the test exercises the same merge the blast will.
+    const contact = await pool.query<{ full_name: string | null }>(
+      "SELECT full_name FROM bi_contacts WHERE lower(email) = lower($1) LIMIT 1",
+      [test],
+    );
+    const firstName =
+      String(contact.rows[0]?.full_name || "").trim().split(/\s+/)[0] || "there";
+    const values = { first_name: firstName, name: firstName, email: test };
+    await sendBiMarketingEmail({
+      to: test,
+      subject: mergeFields(template.subject, values),
+      html: mergeFields(renderEmailTemplate(template), values),
+      text: template.body ? mergeFields(template.body, values) : undefined,
+    });
     return res.json({ test: true, ok: true, to: test });
   }
   const filter = filterFrom(body);

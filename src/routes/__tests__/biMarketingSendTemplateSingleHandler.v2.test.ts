@@ -12,6 +12,8 @@ vi.mock("../../db", () => ({
 
 const sendMock = vi.fn(async () => undefined);
 vi.mock("../../services/biSendgridService", () => ({
+  mergeFields: (value: string, fields: Record<string, string>) =>
+    value.replace(/{{\s*([^}\s]+)\s*}}/g, (_match, key: string) => fields[key] || ""),
   sendBiMarketingEmail: (...args: unknown[]) => sendMock(...args),
   sendgridConfigured: () => true,
 }));
@@ -56,6 +58,8 @@ describe("BI_SERVER_SEND_TEMPLATE_SINGLE_HANDLER_v2", () => {
   });
 
   it("a test send delivers one email and queues nothing", async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ full_name: "Todd Williams" }] });
+
     const res = await request(makeApp())
       .post("/api/v1/bi/marketing/email/send-template")
       .send({ ...composerPayload, test: "todd.w@boreal.financial" })
