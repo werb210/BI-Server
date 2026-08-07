@@ -40,11 +40,17 @@ const TEMPLATE_KEYS = [
 
 const templateFrom = (value: unknown): BrandedEmailTemplate & { subject: string } => {
   const body = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const out: Record<string, string> = {};
+  const text = (key: string): string => (typeof body[key] === "string" ? (body[key] as string) : "");
+  // BI_SERVER_TEMPLATE_PASSTHROUGH_TYPEFIX_v16 - subject is set explicitly so
+  // the required-property half of the return type is satisfied without a cast;
+  // every other renderable key is filled from TEMPLATE_KEYS, so adding a field
+  // to BrandedEmailTemplate is all it takes for the composer to reach it.
+  const out: BrandedEmailTemplate & { subject: string } = { subject: text("subject") };
   for (const key of TEMPLATE_KEYS) {
-    out[key] = typeof body[key] === "string" ? body[key] as string : "";
+    if (key === "subject") continue;
+    out[key] = text(key);
   }
-  return out as BrandedEmailTemplate & { subject: string };
+  return out;
 };
 
 router.get("/email/segments", async (_req, res) => {
