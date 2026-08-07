@@ -19,18 +19,32 @@ const queryTags = (value: unknown): string[] | undefined => {
   if (typeof value === "string") return value.split(",").map((tag) => tag.trim()).filter(Boolean);
   return undefined;
 };
+// BI_SERVER_TEMPLATE_FIELD_PASSTHROUGH_v15
+// This was a hardcoded allowlist that silently dropped anything not named in
+// it. cta2Label and cta2Url were missing, so the right column's button was
+// discarded on every preview and every send even though the composer posted it
+// and renderEmailTemplate asked for it. Any field the composer gains in future
+// would fail the same way, invisibly.
+//
+// Every renderable key is now derived from BrandedEmailTemplate rather than
+// retyped by hand, so the two can no longer drift apart.
+const TEMPLATE_KEYS = [
+  "subject",
+  "headline", "heroUrl", "heroLink", "body", "ctaLabel", "ctaUrl",
+  "image2Url", "image2Link",
+  "cta2Label", "cta2Url",
+  "headline2", "body2",
+  "secondHeadline", "secondBody",
+  "rightHeadline", "rightBody", "rightImageUrl", "rightImageLink",
+] as const satisfies readonly (keyof BrandedEmailTemplate)[];
+
 const templateFrom = (value: unknown): BrandedEmailTemplate & { subject: string } => {
   const body = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const text = (key: string): string => typeof body[key] === "string" ? body[key] as string : "";
-  return {
-    subject: text("subject"), headline: text("headline"), heroUrl: text("heroUrl"),
-    heroLink: text("heroLink"), body: text("body"), ctaLabel: text("ctaLabel"),
-    ctaUrl: text("ctaUrl"), image2Url: text("image2Url"), image2Link: text("image2Link"),
-    headline2: text("headline2"), body2: text("body2"),
-    secondHeadline: text("secondHeadline"), secondBody: text("secondBody"),
-    rightHeadline: text("rightHeadline"), rightBody: text("rightBody"),
-    rightImageUrl: text("rightImageUrl"), rightImageLink: text("rightImageLink"),
-  };
+  const out: Record<string, string> = {};
+  for (const key of TEMPLATE_KEYS) {
+    out[key] = typeof body[key] === "string" ? body[key] as string : "";
+  }
+  return out as BrandedEmailTemplate & { subject: string };
 };
 
 router.get("/email/segments", async (_req, res) => {
