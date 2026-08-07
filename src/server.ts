@@ -37,6 +37,7 @@ import biMarketingRoutes from "./routes/biMarketingRoutes";
 import biMarketingEmailRoutes from "./routes/biMarketingEmailRoutes";
 import { biMarketingEmailAssetPublicRouter, biMarketingEmailAssetUploadRouter } from "./routes/biMarketingEmailAssetRoutes";
 import biMarketingEmailCompatRoutes from "./routes/biMarketingEmailCompatRoutes"; // BI_EMAIL_COMPOSER_COMPAT_v1
+import biInternalBuildRoutes from "./routes/biInternalBuildRoutes"; // BI_SERVER_BUILD_TRUTH_v18
 import biSequencesRoutes from "./routes/biSequencesRoutes";
 // BI_SERVER_BLOCK_v257_STAFF_DIRECTORY_v1
 import biStaffRoutes from "./routes/biStaffRoutes";
@@ -60,6 +61,7 @@ import mayaAnalyticsRoutes from "./routes/mayaAnalytics";
 import pgiWebhookRoutes from "./routes/pgiWebhookRoutes";
 import biSendgridWebhookRoutes from "./routes/biSendgridWebhookRoutes"; // BI_SENDGRID_EVENT_WEBHOOK_v1
 import { requireAuth } from "./platform/auth";
+import { BUILD_TAG, CODE_VERSION, COMMIT_SHA } from "./platform/buildInfo"; // BI_SERVER_BUILD_TRUTH_v18
 import { env } from "./platform/env";
 import { errorHandler } from "./platform/errorHandler";
 import healthRoutes from "./platform/healthRoutes";
@@ -259,8 +261,9 @@ app.get("/", (_req, res) => {
   res.status(200).json({
     status: "ok",
     service: "bi-server",
-    build: process.env.BUILD_TAG || "unknown",
-    sha: (process.env.COMMIT_SHA || "unknown").slice(0, 8),
+    build: BUILD_TAG,
+    sha: COMMIT_SHA,
+    codeVersion: CODE_VERSION,
     uptime_s: Math.round(process.uptime()),
     ts: new Date().toISOString(),
   });
@@ -298,6 +301,10 @@ app.use("/api/v1", (req, res, next) => {
 // "/api/v1/bi" - Express matches on prefix, so the shorter path catches this
 // route too. v13 only cleared the "/api/v1/bi" mounts and the 401 survived.
 app.use("/api/v1/bi/marketing", biCors, biMarketingEmailAssetPublicRouter);
+
+// BI_SERVER_BUILD_TRUTH_v18 - public and above all matching auth middleware.
+app.use("/api/v1", biCors, biInternalBuildRoutes);
+app.use("/api/v1/bi", biCors, biInternalBuildRoutes);
 
 app.use("/api/v1", biCors, chatRoutes);
 app.use("/api/v1", biCors, mayaAnalyticsRoutes);

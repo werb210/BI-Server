@@ -1,6 +1,7 @@
 import express from "express";
 import { pool } from "../db";
 import { badRequest } from "../utils/apiResponse";
+import { BUILD_TAG, CODE_VERSION, COMMIT_SHA } from "./buildInfo"; // BI_SERVER_BUILD_TRUTH_v18
 
 const router = express.Router();
 
@@ -11,8 +12,9 @@ router.get("/", (_req, res) => {
   res.status(200).json({
     status: "ok",
     service: "bi-server",
-    build: process.env.BUILD_TAG || "unknown",
-    sha: (process.env.COMMIT_SHA || "unknown").slice(0, 8),
+    build: BUILD_TAG,
+    sha: COMMIT_SHA,
+    codeVersion: CODE_VERSION,
     uptime_s: Math.round(process.uptime()),
     ts: new Date().toISOString(),
   });
