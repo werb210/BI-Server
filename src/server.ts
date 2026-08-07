@@ -292,6 +292,13 @@ app.use("/api/v1", (req, res, next) => {
 // from the public website + the OTP-gated lender/referrer portals. Without
 // biCors the preflight returns no Access-Control-Allow-Origin and Chrome
 // blocks every call.
+// BI_SERVER_ASSET_ABOVE_ALL_AUTH_MOUNTS_v14 - marketing email images are
+// fetched by mail clients and image proxies that send no Authorization header.
+// This MUST stay above every mount carrying requireAuth on BOTH "/api/v1" and
+// "/api/v1/bi" - Express matches on prefix, so the shorter path catches this
+// route too. v13 only cleared the "/api/v1/bi" mounts and the 401 survived.
+app.use("/api/v1/bi/marketing", biCors, biMarketingEmailAssetPublicRouter);
+
 app.use("/api/v1", biCors, chatRoutes);
 app.use("/api/v1", biCors, mayaAnalyticsRoutes);
 app.use("/api/v1", biCors, intakeRoutes);
@@ -315,13 +322,6 @@ app.use("/api/v1", biCors, biJobs);
 app.use("/api/v1", biCors, requireAuth, biScoreRoutes);
 
 // Authenticated BI endpoints — every BI route lives under /api/v1/bi
-// BI_SERVER_PUBLIC_ASSET_MOUNT_ORDER_v13 - MUST stay above every "/api/v1/bi"
-// mount that carries requireAuth. Marketing email images are fetched by mail
-// clients and image proxies with no Authorization header; when this router sat
-// below the guarded mounts, requireAuth returned 401 first and every image in
-// every BI marketing email rendered broken.
-app.use("/api/v1/bi/marketing", biCors, biMarketingEmailAssetPublicRouter);
-
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biRoutes);
 // BI_SERVER_BLOCK_v262_CARRIER_PATH_E2E_FIX_v3 — Removed the duplicate
 // biPublicApplicationRoutes mount under /api/v1/bi. It was shadowing
