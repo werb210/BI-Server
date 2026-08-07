@@ -19,7 +19,14 @@ biMarketingEmailAssetUploadRouter.post("/email/assets/upload", upload.single("fi
     [req.file.originalname, req.file.mimetype, req.file.buffer, (req as any).user?.id || null],
   );
   const id = result.rows[0].id;
-  const base = process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
+  // BI_SERVER_PUBLIC_ASSET_MOUNT_ORDER_v13 - the App Service setting is named
+  // BI_PUBLIC_BASE_URL. This read PUBLIC_BASE_URL, which is not set, so every
+  // upload took the fallback and baked the request-time host into a URL stored
+  // permanently on the template.
+  const base =
+    process.env.BI_PUBLIC_BASE_URL ||
+    process.env.PUBLIC_BASE_URL ||
+    `${req.protocol}://${req.get("host")}`;
   return res.status(201).json({ id, url: `${base}/api/v1/bi/marketing/email/assets/${id}` });
 });
 
