@@ -28,7 +28,8 @@ const queryTags = (value: unknown): string[] | undefined => {
 //
 // Every renderable key is now derived from BrandedEmailTemplate rather than
 // retyped by hand, so the two can no longer drift apart.
-const TEMPLATE_KEYS = [
+// BI_SERVER_BUILD_TRUTH_v18 - exported for the deployed renderer self-probe.
+export const TEMPLATE_KEYS = [
   "subject",
   "headline", "heroUrl", "heroLink", "body", "ctaLabel", "ctaUrl",
   "image2Url", "image2Link",
@@ -38,7 +39,7 @@ const TEMPLATE_KEYS = [
   "rightHeadline", "rightBody", "rightImageUrl", "rightImageLink",
 ] as const satisfies readonly (keyof BrandedEmailTemplate)[];
 
-const templateFrom = (value: unknown): BrandedEmailTemplate & { subject: string } => {
+export const templateFrom = (value: unknown): BrandedEmailTemplate & { subject: string } => {
   const body = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const text = (key: string): string => (typeof body[key] === "string" ? (body[key] as string) : "");
   // BI_SERVER_TEMPLATE_PASSTHROUGH_TYPEFIX_v16 - subject is set explicitly so
