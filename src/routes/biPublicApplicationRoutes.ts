@@ -11,6 +11,9 @@ import { PARTNER_ALLOWED_MIME } from "../lib/validation/pgiFields";
 import { getStorage } from "../lib/storage";
 // BI_SERVER_BLOCK_v273_PUBLIC_UPLOAD_OCR_v1
 import { runOcrForDocument } from "../services/ocrRunner";
+import { checkRegion, isSupportedCountry, isValidPostalCode } from "../services/regions"; // BI_SERVER_US_APPLICATIONS_v21
+
+const SUPPORTED_COUNTRIES = ["CA", "US"] as const; // BI_SERVER_US_APPLICATIONS_v21
 
 const router = Router();
 const EBITDA_MIN = 50_000;
@@ -130,7 +133,31 @@ router.post("/applications/score", async (req, res) => {
     return res.status(400).json({ error: "validation_failed", issues: shapeIssues });
   }
 
-  if (b.country !== "CA") return res.status(400).json({ error: "country_unsupported", supported: ["CA"] });
+  // BI_SERVER_US_APPLICATIONS_v21 - the carrier now writes United States
+  // business. This stays a gate rather than being deleted: an unknown country
+  // is still refused, and the region is validated against the country it claims
+  // so "ON" cannot pass as a US state.
+  if (!isSupportedCountry(b.country)) {
+    return res.status(400).json({ error: "country_unsupported", supported: SUPPORTED_COUNTRIES });
+  }
+  {
+    const region = (b.business_address && typeof b.business_address === "object"
+      ? (b.business_address as any).province
+      : undefined) ?? (b as any).q_business_province;
+    if (region !== undefined && region !== null && String(region).trim() !== "") {
+      const check = checkRegion(b.country, region);
+      if (!check.ok) return res.status(400).json({ error: check.error, message: check.message });
+    }
+    const postal = (b.business_address && typeof b.business_address === "object"
+      ? (b.business_address as any).postal_code
+      : undefined);
+    if (postal !== undefined && postal !== null && String(postal).trim() !== "" && !isValidPostalCode(b.country, postal)) {
+      return res.status(400).json({
+        error: "postal_code_invalid",
+        message: b.country === "US" ? "A valid ZIP code is required." : "A valid postal code is required.",
+      });
+    }
+  }
   if (Number(b.loan_amount) > LOAN_MAX) return res.status(400).json({ error: "loan_amount_exceeds_max", max: LOAN_MAX });
   if (Number(b.pgi_limit) > Number(b.loan_amount)) return res.status(400).json({ error: "pgi_limit_exceeds_loan" });
   if (Number(b.pgi_limit) > Number(b.loan_amount) * 0.80) return res.status(400).json({ error: "pgi_limit_exceeds_80pct" });
