@@ -3,6 +3,7 @@ import { pool } from "../db";
 import { audienceParams, buildAudienceBreakdownSql, buildAudienceCountSql, type AudienceFilter } from "../services/biEmailAudience";
 import { renderEmailTemplate, type BrandedEmailTemplate } from "../services/emailTemplateRender";
 import { mergeFields, sendBiMarketingEmail, sendgridConfigured } from "../services/biSendgridService";
+import { resolveScheduledAt, SendScheduleError } from "../services/sendSchedule";
 
 const router: Router = Router();
 const strings = (value: unknown): string[] | undefined => Array.isArray(value)
@@ -165,13 +166,28 @@ router.post("/email/send-template", async (req, res) => {
   const count = await pool.query(buildAudienceCountSql(), audienceParams(filter));
   const total = Number(count.rows[0]?.count || 0);
   const hold = Math.max(0, Number(process.env.BI_SEND_HOLD_MINUTES || 2));
+  let schedule;
+  try {
+    schedule = resolveScheduledAt(body.sendAt, hold);
+  } catch (error) {
+    if (error instanceof SendScheduleError) {
+      return res.status(400).json({ error: error.code, message: error.message });
+    }
+    throw error;
+  }
   const job = await pool.query(`INSERT INTO bi_marketing_send_jobs(subject,html,text_body,filters,scheduled_at,created_by,total)
-    VALUES($1,$2,$3,$4::jsonb,NOW()+($5 * interval '1 minute'),$6,$7) RETURNING *`, [
+    VALUES($1,$2,$3,$4::jsonb,$5::timestamptz,$6,$7) RETURNING *`, [
     template.subject, renderEmailTemplate(template), template.body || null,
-    JSON.stringify(filter), hold, (req as any).user?.id || null, total,
+    JSON.stringify(filter), schedule.at.toISOString(), (req as any).user?.id || null, total,
   ]);
   const row = job.rows[0];
-  return res.status(202).json({ queued: true, jobId: row.id, total, notBefore: row.scheduled_at });
+  return res.status(202).json({
+    queued: true,
+    jobId: row.id,
+    total,
+    notBefore: row.scheduled_at,
+    scheduled: schedule.scheduled,
+  });
 });
 
 router.get("/send-jobs/:id", async (req, res) => {
