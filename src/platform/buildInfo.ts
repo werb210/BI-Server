@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const CODE_VERSION = "v18_BUILD_TRUTH";
+export const CODE_VERSION = "v19_ASSET_CORP";
 
 function parseBuildMeta(raw: string): Record<string, string> {
   const out: Record<string, string> = {};

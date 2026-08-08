@@ -15,7 +15,7 @@ describe("BUILD_META runtime metadata", () => {
   it("provides safe fallback values", () => {
     expect(typeof BUILD_TAG).toBe("string");
     expect(typeof COMMIT_SHA).toBe("string");
-    expect(CODE_VERSION).toBe("v18_BUILD_TRUTH");
+    expect(CODE_VERSION).toBe("v19_ASSET_CORP");
   });
 
   it("ships BUILD_META in the deploy package", () => {
