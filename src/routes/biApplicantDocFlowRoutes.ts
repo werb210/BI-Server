@@ -1,21 +1,8 @@
 // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
-import { Router, type Request, type Response, type NextFunction } from "express";
-import jwt from "jsonwebtoken";
+import { Router } from "express";
 import { pool } from "../db";
-import { env } from "../platform/env";
+import { authApplicant, type ApplicantReq } from "./applicantAuth";
 const router = Router();
-interface ApplicantReq extends Request { applicantPhone?: string; }
-function authApplicant(req: ApplicantReq, res: Response, next: NextFunction) {
-  const auth = req.header("authorization") || "";
-  const m = /^Bearer\s+(.+)$/i.exec(auth.trim());
-  if (!m) return res.status(401).json({ error: "missing_bearer" });
-  try {
-    const payload = jwt.verify(m[1], env.JWT_SECRET || "dev-missing-jwt-secret") as any;
-    if (payload?.kind !== "applicant" || !payload?.phone) return res.status(401).json({ error: "wrong_kind" });
-    req.applicantPhone = String(payload.phone);
-    return next();
-  } catch { return res.status(401).json({ error: "invalid_token" }); }
-}
 router.post("/applicants/applications/:publicId/defer-docs", authApplicant, async (req: ApplicantReq, res) => {
   const r = await pool.query(`SELECT id, applicant_phone_e164, guarantor_phone, status, docs_deferred_at FROM bi_applications WHERE public_id = $1 LIMIT 1`, [req.params.publicId]);
   const app = r.rows[0];
