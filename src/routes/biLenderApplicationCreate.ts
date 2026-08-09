@@ -72,8 +72,11 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
 
   // BI_SERVER_BLOCK_v350_LENDER_PURBECK_GUARDS_v1
   // Quebec block (defense in depth on top of UI dropdown).
+  // BI_SERVER_US_SWEEP_v23 - Quebec is a Canadian province, so scope the rule
+  // to CA rather than blocking a hypothetical US "QC" value.
   const province = String(b.business?.province || "").toUpperCase();
-  if (province === "QC") {
+  const businessCountry = String(b.business?.country || "CA").toUpperCase();
+  if (businessCountry === "CA" && province === "QC") {
     return res.status(400).json({ error: "quebec_blocked", message: "PGI does not currently write business in Quebec." });
   }
 
@@ -96,7 +99,7 @@ router.post("/api/v1/lender/applications", async (req: Request, res: Response, n
   if (!ELIGIBLE_LOAN_TYPES.includes(loanType)) {
     return res.status(400).json({
       error: "loan_type_ineligible",
-      message: `Loan type '${loanType}' is not eligible for Canadian PGI coverage. Eligible types are: ${ELIGIBLE_LOAN_TYPES.join(", ")}.`,
+      message: `Loan type '${loanType}' is not eligible for PGI coverage. Eligible types are: ${ELIGIBLE_LOAN_TYPES.join(", ")}.`,
     });
   }
   const applicationCode = genCode();

@@ -81,7 +81,10 @@ describe("v355 — OpenAPI v2 carrier alignment", () => {
   });
 
   it("Eligibility rules described in info.description", () => {
-    expect(src).toMatch(/Canada only/);
+    // BI_SERVER_US_SWEEP_v23 - the carrier now writes United States business, so
+    // "Canada only" is no longer true and the spec must not tell lenders it is.
+    expect(src).not.toMatch(/Canada only/);
+    expect(src).toMatch(/Canada and United States/);
     expect(src).toMatch(/Quebec excluded/);
     expect(src).toMatch(/50,000/);
     expect(src).toMatch(/1,000,000/);

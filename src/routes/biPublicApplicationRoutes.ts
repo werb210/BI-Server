@@ -604,7 +604,7 @@ router.post("/applications/:publicId/submit", async (req, res) => {
   if (app.q_ca_loan_type && !allowedLoanTypes.includes(app.q_ca_loan_type)) {
     return res.status(400).json({
       error: "loan_type_ineligible",
-      message: `Loan type '${app.q_ca_loan_type}' is not eligible for Canadian PGI coverage. Eligible types are: ${allowedLoanTypes.join(", ")}.`,
+      message: `Loan type '${app.q_ca_loan_type}' is not eligible for PGI coverage. Eligible types are: ${allowedLoanTypes.join(", ")}.`,
     });
   }
 

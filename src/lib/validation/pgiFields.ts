@@ -2,7 +2,7 @@
 // Aligned with PGI Partner API Schema Hardening changelog 2026-05-25.
 // Documented at https://docs.pgicover.com/api/
 //
-// New schema (Canadian submissions only — US flow unchanged):
+// New schema (applies to Canadian and United States submissions):
 //   - ALL data under form_data; NO top-level fields.
 //   - q-prefixed required field names.
 //   - 11 declaration sections; adverse answers require matching _reason.
