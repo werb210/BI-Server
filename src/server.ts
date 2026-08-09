@@ -162,6 +162,16 @@ const PRODUCTION_FALLBACK_ORIGINS = [
   // BI_SERVER_CORS_BI_CLIENT_v1 — BI-Client, the subcontractor insurance and
   // bond application front end for the SLF channel.
   "https://client.boreal.insure",
+  // BI_SERVER_CORS_CAPACITOR_v20 — BI-Client also ships as iOS and Android
+  // native apps. A Capacitor WebView does NOT send the custom domain as its
+  // Origin: iOS sends capacitor://localhost and Android sends
+  // https://localhost. Without these two the first native build fails every
+  // call including OTP, and it reads as "the server is down" rather than CORS.
+  // https://localhost is the Android WebView origin only — it is not a dev
+  // origin and is safe in production, because nothing but the packaged app
+  // can present it.
+  "capacitor://localhost",
+  "https://localhost",
 ];
 const DEV_FALLBACK_ORIGINS = [
   "http://localhost:5173",
