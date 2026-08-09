@@ -36,6 +36,7 @@ import biCompaniesFromBfRoutes from "./routes/biCompaniesFromBfRoutes"; // BI_SE
 import biMarketingRoutes from "./routes/biMarketingRoutes";
 import biMarketingEmailRoutes from "./routes/biMarketingEmailRoutes";
 import { biMarketingEmailAssetPublicRouter, biMarketingEmailAssetUploadRouter } from "./routes/biMarketingEmailAssetRoutes";
+import biPublicBrandRoutes from "./routes/biPublicBrandRoutes"; // BI_SERVER_EMAIL_LOGO_v24
 import biMarketingEmailCompatRoutes from "./routes/biMarketingEmailCompatRoutes"; // BI_EMAIL_COMPOSER_COMPAT_v1
 import biInternalBuildRoutes from "./routes/biInternalBuildRoutes"; // BI_SERVER_BUILD_TRUTH_v18
 import biSequencesRoutes from "./routes/biSequencesRoutes";
@@ -301,6 +302,10 @@ app.use("/api/v1", (req, res, next) => {
 // "/api/v1/bi" - Express matches on prefix, so the shorter path catches this
 // route too. v13 only cleared the "/api/v1/bi" mounts and the 401 survived.
 app.use("/api/v1/bi/marketing", biCors, biMarketingEmailAssetPublicRouter);
+
+// BI_SERVER_EMAIL_LOGO_v24 - public brand asset; keep above every matching
+// requireAuth mount so mail clients and image proxies can fetch it unauthenticated.
+app.use("/api/v1/bi", biCors, biPublicBrandRoutes);
 
 // BI_SERVER_BUILD_TRUTH_v18 - public and above all matching auth middleware.
 app.use("/api/v1", biCors, biInternalBuildRoutes);

@@ -4,7 +4,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "build": "tsc",
+    "build": "tsc && mkdir -p dist/assets && cp src/boreal_risk_management_email_logo_1200x300.png dist/assets/",
     "start": "BUILD_TAG=${BUILD_TAG:-v61} node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "tsc --noEmit && tsc",

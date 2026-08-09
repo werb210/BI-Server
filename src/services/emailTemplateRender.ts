@@ -69,7 +69,9 @@ export function renderEmailTemplate(template: BrandedEmailTemplate): string {
 <td class="email-column" width="264" valign="top" style="width:264px;">${column(secondHeadline, secondBody, secondImageUrl, secondImageLink, template.cta2Label || "", template.cta2Url || "")}</td>
 </tr></table></td></tr>` : "";
   const responsiveStyle = hasSecondColumn ? `<style>@media only screen and (max-width:620px){.email-column{display:block!important;width:100%!important;max-width:544px!important;}.email-gutter{display:block!important;width:100%!important;height:20px!important;}}</style>` : "";
-  const logo = (process.env.PUBLIC_SERVER_URL || "https://server.boreal.financial") + "/api/public/email/logo.png";
+  // BI_SERVER_EMAIL_LOGO_v24 - keep BI email branding within this service.
+  const logoBase = process.env.BI_PUBLIC_BASE_URL || process.env.PUBLIC_SERVER_URL || "";
+  const logo = `${logoBase.replace(/\/+$/, "")}/api/v1/bi/public/email/logo.png`;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${responsiveStyle}</head>
 <body style="margin:0;padding:0;background:#f4f5f7;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;"><tr><td align="center" style="padding:24px 12px;">
