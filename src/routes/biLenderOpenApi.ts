@@ -1,7 +1,8 @@
 // BI_SERVER_BLOCK_v355_LENDER_OPENAPI_V2_v1
 // OpenAPI 3.1 spec for the Boreal Risk Lender Direct API — v2 carrier-aligned.
 // Source of truth: Craig's PGI/Purbeck changelog 2026-05-25 (14 form_data
-// fields, 11 declarations, 5+2 documents, $50K-$1M, 80% PGI cap, CA-only ex-QC).
+// fields, 11 declarations, 5+2 documents, $50K-$1M, 80% PGI cap).
+// BI_SERVER_US_SWEEP_v23 - CA and US; Quebec still excluded for CA.
 import { Router } from "express";
 
 const router = Router();
@@ -15,10 +16,10 @@ const SPEC = {
       "Submit Personal Guarantee Insurance (PGI) applications programmatically.\n\n" +
       "**JSON over HTTPS. Bearer-key auth.** CORE Score returned synchronously on submit.\n\n" +
       "### Eligibility (carrier rules)\n" +
-      "- **Canada only** — `business.country = \"CA\"`. US not yet supported.\n" +
-      "- **Quebec excluded** — `business.province` must NOT be `QC`.\n" +
-      "- **Loan amount** — between **$50,000 CAD** and **$1,000,000 CAD**.\n" +
-      "- **PGI limit** — at most **80% of loan amount**, never above **$1,000,000 CAD**.\n" +
+      "- **Canada and United States** — `business.country` is `\"CA\"` or `\"US\"`.\n" +
+      "- **Quebec excluded** — for `CA`, `business.province` must NOT be `QC`.\n" +
+      "- **Loan amount** — between **$50,000** and **$1,000,000**, in the currency of the country of business.\n" +
+      "- **PGI limit** — at most **80% of loan amount**, never above **$1,000,000**.\n" +
       "- **Loan type** — one of `Commercial Mortgage` or `Other Secured Loan`. Others are rejected.\n" +
       "- **Government ID type** — one of `Passport`, `National ID`, `Driving Licence`, `Other`.\n\n" +
       "### What's required\n" +
@@ -75,8 +76,8 @@ const SPEC = {
         type: "object",
         required: ["amount", "pgi_limit", "q_ca_loan_type"],
         properties: {
-          amount:           { type: "number", minimum: 50000, maximum: 1000000, description: "CAD. Carrier q41_loan_amount.", example: 500000 },
-          pgi_limit:        { type: "number", minimum: 1, maximum: 1000000, description: "CAD. Must be ≤ 80% of `amount`. Carrier q42_pgi_limit.", example: 400000 },
+          amount:           { type: "number", minimum: 50000, maximum: 1000000, description: "In the currency of the country of business. Carrier q41_loan_amount.", example: 500000 },
+          pgi_limit:        { type: "number", minimum: 1, maximum: 1000000, description: "In the currency of the country of business. Must be ≤ 80% of `amount`. Carrier q42_pgi_limit.", example: 400000 },
           q_ca_loan_type:   { type: "string", enum: ["Commercial Mortgage", "Other Secured Loan"], description: "Only these two loan types are carrier-eligible." },
           use_of_proceeds:  { type: "string", enum: ["working_capital", "acquisition", "expansion", "equipment", "real_estate", "refinance"] },
           loan_funding_date: { type: "string", format: "date", example: "2026-06-15" },
@@ -90,7 +91,7 @@ const SPEC = {
         type: "object",
         description: "Optional. Used for our internal CORE Score (not carrier-required).",
         properties: {
-          revenue_last_year:    { type: "number", description: "Annual revenue, CAD.", example: 4000000 },
+          revenue_last_year:    { type: "number", description: "Annual revenue, in the currency of the country of business.", example: 4000000 },
           ebitda_last_year:     { type: "number", example: 670000 },
           total_debt:           { type: "number", example: 800000 },
           monthly_debt_service: { type: "number", example: 5600 },
