@@ -78,6 +78,8 @@ import biLenderOpenApi from "./routes/biLenderOpenApi"; // BI_SERVER_BLOCK_69_LE
 import biApplicantOtpRoutes from "./routes/biApplicantOtpRoutes";
 // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
 import biApplicantDocFlowRoutes from "./routes/biApplicantDocFlowRoutes";
+// BI_CLIENT_CONTRACT_ROUTES_v21
+import biApplicantContractRoutes from "./routes/biApplicantContractRoutes";
 import biSmsInboundRoutes from "./routes/biSmsInboundRoutes";
 import biCarrierHealthRoutes from "./routes/biCarrierHealthRoutes";
 import { startCarrierHealthJob, getCarrierHealth } from "./services/carrierHealthService";
@@ -692,6 +694,7 @@ app.use(biLenderApplicationDetail);
 // prefix every call 404s. Adding biCors so cross-origin preflight from
 // www.boreal.insure passes (this endpoint is public-facing).
 app.use("/api/v1", biCors, biApplicantDocFlowRoutes); // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
+app.use("/api/v1", biCors, biApplicantContractRoutes); // BI_CLIENT_CONTRACT_ROUTES_v21
 app.use(biSmsInboundRoutes);    // BI_SERVER_BLOCK_v234_OPS_HARDENING_v1
 // BI_SERVER_BLOCK_BI_CARRIER_HEALTH_MOUNT_FIX_v1 -- router declares
 // "/bi/carrier-health" internally; mount must add the /api/v1 prefix or
