@@ -64,7 +64,7 @@ async function outstandingQuestions(applicationId: string, country: "CA" | "US")
 
 async function summaryFor(app: any) {
   const country = normCountry(app.country);
-  const [coverages, docs, answered, outstanding] = await Promise.all([
+  const [coverages, docs, answered, outstanding, referrals] = await Promise.all([
     pool.query(
       `SELECT p.code, p.display_name, ap.source
          FROM bi_application_products ap JOIN bi_products p ON p.id = ap.product_id
@@ -83,6 +83,15 @@ async function summaryFor(app: any) {
       [app.id],
     ),
     outstandingQuestions(app.id, country),
+    pool.query(
+      `SELECT g.coverage_code, COALESCE(l.display_name, g.coverage_code) AS display_name,
+              g.requested_limit, g.status
+         FROM bi_coverage_gaps g
+         LEFT JOIN bi_coverage_labels l ON l.coverage_code = g.coverage_code
+        WHERE g.application_id = $1
+        ORDER BY g.coverage_code ASC`,
+      [app.id],
+    ),
   ]);
   const d = app.data || {};
   return {
@@ -96,7 +105,8 @@ async function summaryFor(app: any) {
     documents: docs.rows,
     answered: Number(answered.rows[0]?.n ?? 0),
     outstanding,
-    canSubmit: coverages.rows.length > 0 && outstanding.length === 0,
+    referrals: referrals.rows,
+    canSubmit: (coverages.rows.length > 0 || referrals.rows.length > 0) && outstanding.length === 0,
   };
 }
 
@@ -111,7 +121,7 @@ router.post("/applicants/applications/:id/submit", authApplicant, async (req: Ap
   if (error) return res.status(error === "not_found" ? 404 : 403).json({ error });
 
   const summary = await summaryFor(app);
-  if (summary.coverages.length === 0) {
+  if (summary.coverages.length === 0 && summary.referrals.length === 0) {
     return res.status(400).json({ error: "no_coverage_selected", ...summary });
   }
   if (summary.outstanding.length > 0) {
@@ -135,7 +145,7 @@ router.post("/applicants/applications/:id/submit", authApplicant, async (req: Ap
     await pool.query(
       `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
        VALUES($1,'applicant','application_submitted',$2)`,
-      [app.id, `Applicant submitted ${summary.coverages.length} coverage line(s) for review`],
+      [app.id, `Applicant submitted ${summary.coverages.length} coverage line(s) and ${summary.referrals.length} referral(s) for review`],
     ).catch(() => {});
   }
 

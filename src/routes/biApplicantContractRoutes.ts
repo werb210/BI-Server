@@ -27,11 +27,12 @@ type ReqRow = {
   confirmed_by_client: boolean | null;
 };
 
-function shape(row: ReqRow, names: Map<string, string>) {
+function shape(row: ReqRow, names: Map<string, string>, sellable: Set<string>) {
   return {
     id: row.id,
     coverageCode: row.coverage_code,
     displayName: names.get(row.coverage_code) ?? row.coverage_code.toUpperCase(),
+    available: sellable.has(row.coverage_code),
     extractedLimit: row.extracted_limit === null ? null : Number(row.extracted_limit),
     limitBasis: row.limit_basis,
     clauseText: row.clause_text,
@@ -41,11 +42,26 @@ function shape(row: ReqRow, names: Map<string, string>) {
 }
 
 async function displayNames(country: string): Promise<Map<string, string>> {
-  const result = await pool.query<{ code: string; display_name: string }>(
-    `SELECT code, display_name FROM bi_products WHERE country = $1 AND active = TRUE`,
+  const [labels, products] = await Promise.all([
+    pool.query<{ coverage_code: string; display_name: string }>(
+      `SELECT coverage_code, display_name FROM bi_coverage_labels`,
+    ),
+    pool.query<{ code: string; display_name: string }>(
+      `SELECT code, display_name FROM bi_products WHERE country = $1 AND active = TRUE`,
+      [country],
+    ),
+  ]);
+  const names = new Map(labels.rows.map((row) => [row.coverage_code, row.display_name]));
+  for (const row of products.rows) names.set(row.code, row.display_name);
+  return names;
+}
+
+async function sellableCodes(country: string): Promise<Set<string>> {
+  const result = await pool.query<{ code: string }>(
+    `SELECT code FROM bi_products WHERE country = $1 AND active = TRUE`,
     [country],
   );
-  return new Map(result.rows.map((row) => [row.code, row.display_name]));
+  return new Set(result.rows.map((row) => row.code));
 }
 
 async function ownedApplication(publicIdOrId: string, phone: string) {
@@ -143,9 +159,9 @@ router.post("/applicants/contract/upload", authApplicant, upload.single("file"),
        FROM bi_contract_requirements WHERE application_id = $1 ORDER BY confidence DESC, coverage_code ASC`,
     [appId],
   );
-  const names = await displayNames(appCountry);
+  const [names, sellable] = await Promise.all([displayNames(appCountry), sellableCodes(appCountry)]);
   res.json({ applicationId: publicId, documentId, ocrStatus: ocr.status,
-    requirements: rows.rows.map((row) => shape(row, names)) });
+    requirements: rows.rows.map((row) => shape(row, names, sellable)) });
 });
 
 router.get("/applicants/applications/:id/requirements", authApplicant, async (req: ApplicantReq, res) => {
@@ -156,8 +172,9 @@ router.get("/applicants/applications/:id/requirements", authApplicant, async (re
        FROM bi_contract_requirements WHERE application_id = $1 ORDER BY confidence DESC, coverage_code ASC`,
     [app.id],
   );
-  const names = await displayNames(normCountry(app.country));
-  res.json({ requirements: rows.rows.map((row) => shape(row, names)) });
+  const country = normCountry(app.country);
+  const [names, sellable] = await Promise.all([displayNames(country), sellableCodes(country)]);
+  res.json({ requirements: rows.rows.map((row) => shape(row, names, sellable)) });
 });
 
 router.post("/applicants/applications/:id/requirements/:reqId/confirm", authApplicant, async (req: ApplicantReq, res) => {
@@ -172,15 +189,55 @@ router.post("/applicants/applications/:id/requirements/:reqId/confirm", authAppl
   if (!updated.rows[0]) return res.status(404).json({ error: "requirement_not_found" });
 
   const code = updated.rows[0].coverage_code;
+  const country = normCountry(app.country);
+  const available = (await sellableCodes(country)).has(code);
+
+  if (confirmed && !available) {
+    const requirement = await pool.query<{
+      extracted_limit: string | null;
+      limit_basis: string | null;
+      clause_text: string;
+    }>(
+      `SELECT extracted_limit, limit_basis, clause_text FROM bi_contract_requirements
+        WHERE id = $1 AND application_id = $2`,
+      [req.params.reqId, app.id],
+    );
+    const detail = requirement.rows[0];
+    await pool.query(
+      `INSERT INTO bi_coverage_gaps
+         (application_id, coverage_code, country, requested_limit, limit_basis, clause_text, source, status)
+       VALUES ($1,$2,$3,$4,$5,$6,'contract','open')
+       ON CONFLICT (application_id, coverage_code) DO UPDATE
+         SET requested_limit = EXCLUDED.requested_limit,
+             limit_basis = EXCLUDED.limit_basis,
+             clause_text = EXCLUDED.clause_text,
+             status = 'open',
+             updated_at = NOW()`,
+      [app.id, code, country, detail?.extracted_limit ?? null, detail?.limit_basis ?? null, detail?.clause_text ?? null],
+    );
+    await pool.query(
+      `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
+       VALUES($1,'applicant','coverage_referral_needed',$2)`,
+      [app.id, `${code} required by contract but not placeable in ${country} - referral needed`],
+    ).catch(() => {});
+    res.json({ ok: true, available: false, referred: true });
+    return;
+  }
+
   if (confirmed) {
     await pool.query(
       `INSERT INTO bi_application_products (application_id, product_id, source)
        SELECT $1, p.id, 'contract' FROM bi_products p
         WHERE p.code = $2 AND p.country = $3 AND p.active = TRUE
        ON CONFLICT (application_id, product_id) DO NOTHING`,
-      [app.id, code, normCountry(app.country)],
+      [app.id, code, country],
     );
   } else {
+    await pool.query(
+      `DELETE FROM bi_coverage_gaps
+        WHERE application_id = $1 AND coverage_code = $2 AND source = 'contract'`,
+      [app.id, code],
+    );
     await pool.query(
       `DELETE FROM bi_application_products ap USING bi_products p
         WHERE ap.product_id = p.id AND ap.application_id = $1
@@ -188,7 +245,7 @@ router.post("/applicants/applications/:id/requirements/:reqId/confirm", authAppl
       [app.id, code],
     );
   }
-  res.json({ ok: true });
+  res.json({ ok: true, available, referred: false });
 });
 
 export default router;
