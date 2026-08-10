@@ -78,6 +78,8 @@ import biLenderOpenApi from "./routes/biLenderOpenApi"; // BI_SERVER_BLOCK_69_LE
 import biApplicantOtpRoutes from "./routes/biApplicantOtpRoutes";
 // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
 import biApplicantDocFlowRoutes from "./routes/biApplicantDocFlowRoutes";
+// BI_CLIENT_SUBMIT_v25
+import biApplicantSubmitRoutes from "./routes/biApplicantSubmitRoutes";
 // BI_QUESTION_BANK_v24
 import biApplicantQuestionRoutes from "./routes/biApplicantQuestionRoutes";
 // BI_CLIENT_SELECTION_v23
@@ -700,6 +702,7 @@ app.use(biLenderApplicationDetail);
 // prefix every call 404s. Adding biCors so cross-origin preflight from
 // www.boreal.insure passes (this endpoint is public-facing).
 app.use("/api/v1", biCors, biApplicantDocFlowRoutes); // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
+app.use("/api/v1", biCors, biApplicantSubmitRoutes); // BI_CLIENT_SUBMIT_v25
 app.use("/api/v1", biCors, biApplicantQuestionRoutes); // BI_QUESTION_BANK_v24
 app.use("/api/v1", biCors, biApplicantSelectionRoutes); // BI_CLIENT_SELECTION_v23
 app.use("/api/v1", biCors, biApplicantProfileRoutes); // BI_CLIENT_PROFILE_v22
