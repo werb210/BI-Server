@@ -41,12 +41,16 @@ type QRow = {
   input_type: string; group_key: string; adverse_answer: string | null;
   required: boolean; depends_on_key: string | null; depends_on_value: string | null;
   sort_order: number; asked_by: string[]; value: string | null; reason: string | null;
+  // BI_PGI_FIELDS_v27 - input metadata for the non-yes/no fields.
+  options: string[] | null; min_value: string | null; max_value: string | null;
+  placeholder: string | null;
 };
 
 async function questionsFor(applicationId: string, country: "CA" | "US") {
   const result = await pool.query<QRow>(
     `SELECT q.question_key, q.prompt, q.help_text, q.input_type, q.group_key,
             q.adverse_answer, q.required, q.depends_on_key, q.depends_on_value,
+            q.options, q.min_value, q.max_value, q.placeholder,
             MIN(cq.sort_order) AS sort_order,
             ARRAY_AGG(DISTINCT p.display_name) AS asked_by,
             MAX(a.value) AS value, MAX(a.reason) AS reason
@@ -58,7 +62,8 @@ async function questionsFor(applicationId: string, country: "CA" | "US") {
          ON a.application_id = ap.application_id AND a.question_key = q.question_key
       WHERE ap.application_id = $1
       GROUP BY q.question_key, q.prompt, q.help_text, q.input_type, q.group_key,
-               q.adverse_answer, q.required, q.depends_on_key, q.depends_on_value
+               q.adverse_answer, q.required, q.depends_on_key, q.depends_on_value,
+               q.options, q.min_value, q.max_value, q.placeholder
       ORDER BY MIN(cq.sort_order) ASC, q.question_key ASC`,
     [applicationId, country],
   );
@@ -68,6 +73,10 @@ async function questionsFor(applicationId: string, country: "CA" | "US") {
     required: row.required, dependsOnKey: row.depends_on_key,
     dependsOnValue: row.depends_on_value, sortOrder: Number(row.sort_order),
     askedBy: row.asked_by ?? [], value: row.value, reason: row.reason,
+    options: row.options ?? null,
+    minValue: row.min_value === null ? null : Number(row.min_value),
+    maxValue: row.max_value === null ? null : Number(row.max_value),
+    placeholder: row.placeholder ?? null,
   }));
 }
 
