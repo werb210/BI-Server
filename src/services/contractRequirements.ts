@@ -52,6 +52,11 @@ const OBLIGATION = [
   /must\s+(?:carry|maintain|provide|obtain)/i,
   /covenants\s+that\s+it\s+shall/i,
   /shall\s+be\s+(?:provided|maintained|in\s+force)/i,
+  // BI_BOND_OBLIGATION_v30 - "A Performance Bond in accordance with CCDC 221 is
+  // required." Bare "is required" is how insurance schedules phrase most bonding
+  // demands, and v29 dropped it, so every bond stated without a dollar figure
+  // vanished from the read.
+  /\b(?:is|are)\s+required\b/i,
 ];
 
 export function splitClauses(text: string): string[] {

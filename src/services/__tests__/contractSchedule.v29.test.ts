@@ -28,6 +28,36 @@ describe("one clause can demand more than one coverage", () => {
     expect(codes).toContain("auto_liability");
     expect(codes).toContain("workers_comp");
   });
+  it("keeps a bond stated without a dollar figure", () => {
+    // BI_BOND_OBLIGATION_v30
+    const codes = extractRequirements(
+      "A Performance Bond in accordance with CCDC 221 is required.",
+    ).map((r) => r.coverageCode);
+    expect(codes).toContain("surety_performance");
+  });
+
+  it("scores a stated limit above a bare demand", () => {
+    // BI_BOND_OBLIGATION_v30 - both must survive the requirement filter for
+    // this comparison to mean anything.
+    const named = extractRequirements("CGL of $5,000,000 per occurrence.")[0];
+    const bare = extractRequirements(
+      "Commercial general liability insurance is required.",
+    )[0];
+    expect(named).toBeDefined();
+    expect(bare).toBeDefined();
+    expect(named.confidence).toBeGreaterThan(bare.confidence);
+  });
+
+  it("still reads nothing out of the agreement's own prose", () => {
+    // BI_BOND_OBLIGATION_v30 - the looser obligation pattern must not reopen
+    // the cross-reference and carve-out false positives v29 closed.
+    expect(extractRequirements(CROSS_REFERENCE)).toHaveLength(0);
+    expect(extractRequirements(CARVE_OUT)).toHaveLength(0);
+    expect(
+      extractRequirements("The parties agree to the scope of work."),
+    ).toHaveLength(0);
+  });
+
   it("reads both bonds from a single sentence", () => {
     const codes = extractRequirements("The Subcontractor shall provide a performance bond and a labour and material payment bond.").map((requirement) => requirement.coverageCode);
     expect(codes).toContain("surety_performance");
