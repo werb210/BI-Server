@@ -4,7 +4,7 @@ import { Router } from "express";
 import multer from "multer";
 import { pool } from "../db";
 import { getStorage } from "../lib/storage";
-import { extractRequirements } from "../services/contractRequirements";
+import { analyzeContract } from "../services/contractRequirements"; // BI_CONTRACT_SCHEDULE_AWARE_v29
 import { extractText } from "../services/ocrService";
 import { authApplicant, type ApplicantReq } from "./applicantAuth";
 
@@ -137,7 +137,19 @@ router.post("/applicants/contract/upload", authApplicant, upload.single("file"),
   );
   const documentId = document.rows[0].id;
   const ocr = await extractText({ buffer: file.buffer, mimeType: file.mimetype, filename: file.originalname });
-  const found = ocr.status === "complete" && ocr.extractedText ? extractRequirements(ocr.extractedText) : [];
+  // BI_CONTRACT_SCHEDULE_AWARE_v29 - the agreement defers its coverage list to
+  // Schedule I, a separate PDF. Record which demanded schedules are absent so
+  // the applicant can be asked for them instead of being shown a short list.
+  const analysis = ocr.status === "complete" && ocr.extractedText
+    ? analyzeContract(ocr.extractedText)
+    : { requirements: [], missingSchedules: [], documentKind: "requirements" as const };
+  const found = analysis.requirements;
+  await pool.query(
+    `UPDATE bi_applications
+        SET data = COALESCE(data, '{}'::jsonb) || $2::jsonb, updated_at = NOW()
+      WHERE id = $1`,
+    [appId, JSON.stringify({ missing_schedules: analysis.missingSchedules })],
+  ).catch(() => {});
 
   for (const requirement of found) {
     await pool.query(
@@ -151,7 +163,7 @@ router.post("/applicants/contract/upload", authApplicant, upload.single("file"),
   await pool.query(
     `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
      VALUES($1,'applicant','document_uploaded',$2)`,
-    [appId, `Subcontract uploaded: ${file.originalname} (${found.length} coverage requirements read)`],
+    [appId, `Subcontract uploaded: ${file.originalname} (${found.length} coverage requirements read${analysis.missingSchedules.length ? `; ${analysis.missingSchedules.map((schedule) => schedule.ref).join(", ")} not included` : ""})`],
   ).catch(() => {});
 
   const rows = await pool.query<ReqRow>(
@@ -161,6 +173,8 @@ router.post("/applicants/contract/upload", authApplicant, upload.single("file"),
   );
   const [names, sellable] = await Promise.all([displayNames(appCountry), sellableCodes(appCountry)]);
   res.json({ applicationId: publicId, documentId, ocrStatus: ocr.status,
+    documentKind: analysis.documentKind, // BI_CONTRACT_SCHEDULE_AWARE_v29
+    missingSchedules: analysis.missingSchedules,
     requirements: rows.rows.map((row) => shape(row, names, sellable)) });
 });
 
@@ -174,7 +188,20 @@ router.get("/applicants/applications/:id/requirements", authApplicant, async (re
   );
   const country = normCountry(app.country);
   const [names, sellable] = await Promise.all([displayNames(country), sellableCodes(country)]);
-  res.json({ requirements: rows.rows.map((row) => shape(row, names, sellable)) });
+  // BI_CONTRACT_SCHEDULE_AWARE_v29
+  const stored = await pool.query<{ missing_schedules: unknown }>(
+    `SELECT COALESCE(data->'missing_schedules', '[]'::jsonb) AS missing_schedules
+       FROM bi_applications WHERE id = $1`,
+    [app.id],
+  ).catch(() => ({ rows: [] as any[] }));
+  const missingSchedules = Array.isArray(stored.rows[0]?.missing_schedules)
+    ? (stored.rows[0]!.missing_schedules as { ref: string; title: string }[])
+    : [];
+  res.json({
+    missingSchedules,
+    documentKind: missingSchedules.length > 0 ? "agreement_only" : "requirements",
+    requirements: rows.rows.map((row) => shape(row, names, sellable)),
+  });
 });
 
 router.post("/applicants/applications/:id/requirements/:reqId/confirm", authApplicant, async (req: ApplicantReq, res) => {
