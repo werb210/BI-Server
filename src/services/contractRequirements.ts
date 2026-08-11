@@ -1,5 +1,6 @@
-// BI_CLIENT_FOUNDATION_v1 - deterministic extraction of insurance requirements
-// from a subcontract. Every result is a candidate for client confirmation.
+// BI_CONTRACT_SCHEDULE_AWARE_v29 - deterministic extraction of insurance
+// requirements from a subcontract. Every result is a candidate for client
+// confirmation.
 
 export type ExtractedRequirement = {
   coverageCode: string;
@@ -9,9 +10,16 @@ export type ExtractedRequirement = {
   confidence: number;
 };
 
+export type MissingSchedule = { ref: string; title: string };
+
+export type ContractAnalysis = {
+  requirements: ExtractedRequirement[];
+  missingSchedules: MissingSchedule[];
+  documentKind: "requirements" | "agreement_only";
+};
+
 type Rule = { code: string; patterns: RegExp[]; weight: number };
 
-// Ordered most specific first so named coverages and bonds win.
 const RULES: Rule[] = [
   { code: "cpl", patterns: [/contractor'?s?\s+pollution/i, /\bCPL\b/, /pollution\s+liability/i], weight: 0.9 },
   { code: "surety_performance", patterns: [/performance\s+bond/i, /CCDC\s*221/i, /A312/i], weight: 0.95 },
@@ -24,6 +32,26 @@ const RULES: Rule[] = [
   { code: "cyber", patterns: [/cyber\s+liability/i, /\bcyber\b/i], weight: 0.8 },
   { code: "do", patterns: [/directors?\s+and\s+officers?/i, /\bD&O\b/i], weight: 0.85 },
   { code: "builders_risk", patterns: [/builder'?s?\s+risk/i, /course\s+of\s+construction/i, /\bCOC\b/], weight: 0.9 },
+  { code: "workers_comp", patterns: [/worker'?s?'?\s+compensation/i, /\bWSIB\b/i, /\bWCB\b/i], weight: 0.85 },
+  { code: "auto_liability", patterns: [/automobile\s+liability/i, /non-?owned\s+auto/i, /vehicle\s+liability/i], weight: 0.85 },
+];
+
+const NOT_A_REQUIREMENT = [
+  /other\s+than\s+with\s+respect\s+to/i,
+  /referred\s+to\s+in\s+Schedule/i,
+  /waive\s+subrogation/i,
+  /if\s+that\s+is\s+required\s+under/i,
+  /shall\s+be\s+named\s+as\s+additional\s+insured/i,
+  /has\s+the\s+meaning\s+given/i,
+  /means\s+any\s+and\s+all/i,
+];
+
+const OBLIGATION = [
+  /shall\s+(?:procure|maintain|obtain|carry|provide|effect|purchase|furnish)/i,
+  /(?:is|are)\s+required\s+to\s+(?:carry|maintain|provide|obtain)/i,
+  /must\s+(?:carry|maintain|provide|obtain)/i,
+  /covenants\s+that\s+it\s+shall/i,
+  /shall\s+be\s+(?:provided|maintained|in\s+force)/i,
 ];
 
 export function splitClauses(text: string): string[] {
@@ -33,7 +61,6 @@ export function splitClauses(text: string): string[] {
     .filter((clause) => clause.length > 12);
 }
 
-// Return the largest amount because understating a required limit is dangerous.
 export function parseLimit(clause: string): number | null {
   const found: number[] = [];
   for (const match of clause.matchAll(/\$?\s?([\d][\d,]*(?:\.\d+)?)\s*(million|mil\b|m\b)/gi)) {
@@ -55,13 +82,30 @@ export function parseBasis(clause: string): string | null {
   return null;
 }
 
+export function isRequirementClause(clause: string, hasLimit: boolean): boolean {
+  if (NOT_A_REQUIREMENT.some((pattern) => pattern.test(clause))) return false;
+  return hasLimit || OBLIGATION.some((pattern) => pattern.test(clause));
+}
+
+export function findReferencedSchedules(text: string): MissingSchedule[] {
+  const seen = new Map<string, MissingSchedule>();
+  for (const match of String(text || "").matchAll(/Schedule\s+([A-Z])\s*[:-]\s*([A-Za-z][A-Za-z ,&'/-]{2,60})/g)) {
+    const ref = `Schedule ${match[1]}`;
+    const title = String(match[2]).replace(/\s+/g, " ").trim();
+    if (!/insurance|surety|bond/i.test(title)) continue;
+    if (!seen.has(ref)) seen.set(ref, { ref, title });
+  }
+  return [...seen.values()];
+}
+
 export function extractRequirements(text: string): ExtractedRequirement[] {
   const best = new Map<string, ExtractedRequirement>();
   for (const clause of splitClauses(text)) {
+    const limit = parseLimit(clause);
+    if (!isRequirementClause(clause, limit !== null)) continue;
     for (const rule of RULES) {
       if (!rule.patterns.some((pattern) => pattern.test(clause))) continue;
-      const limit = parseLimit(clause);
-      const confidence = Math.min(0.99, limit !== null ? rule.weight : rule.weight - 0.25);
+      const confidence = Math.min(0.99, limit !== null ? rule.weight : rule.weight - 0.2);
       const found = {
         coverageCode: rule.code,
         extractedLimit: limit,
@@ -71,8 +115,19 @@ export function extractRequirements(text: string): ExtractedRequirement[] {
       };
       const existing = best.get(rule.code);
       if (!existing || found.confidence > existing.confidence) best.set(rule.code, found);
-      break;
     }
   }
   return [...best.values()].sort((a, b) => b.confidence - a.confidence);
+}
+
+export function analyzeContract(text: string): ContractAnalysis {
+  const requirements = extractRequirements(text);
+  const referenced = findReferencedSchedules(text);
+  const hasAnyLimit = requirements.some((requirement) => requirement.extractedLimit !== null);
+  const missingSchedules = hasAnyLimit ? [] : referenced;
+  return {
+    requirements,
+    missingSchedules,
+    documentKind: missingSchedules.length > 0 ? "agreement_only" : "requirements",
+  };
 }

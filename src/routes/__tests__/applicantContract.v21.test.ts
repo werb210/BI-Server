@@ -24,7 +24,7 @@ describe("the orphaned extractor is finally wired", () => {
   it("upload runs OCR then extraction", () => {
     expect(routes).toContain('from "../services/ocrService"');
     expect(routes).toContain('from "../services/contractRequirements"');
-    expect(routes).toContain("extractRequirements(ocr.extractedText)");
+expect(routes).toContain("analyzeContract(ocr.extractedText)");
   });
   it("a failed OCR still stores the contract rather than failing the upload", () => {
     expect(routes).toContain('ocr.status === "complete"');
