@@ -18,12 +18,26 @@ function normCountry(raw: unknown): "CA" | "US" {
 
 const str = (value: unknown, max: number) => String(value ?? "").trim().slice(0, max);
 
+async function resolveIndustry(raw: unknown): Promise<{ code: string; naics: string; wantsContract: boolean }> {
+  const requested = String(raw ?? "").trim().toLowerCase();
+  const result = await pool.query<{ code: string; naics_code: string; wants_contract: boolean }>(
+    `SELECT code, naics_code, wants_contract FROM bi_industries
+      WHERE active = TRUE AND code = $1 LIMIT 1`,
+    [requested],
+  ).catch(() => ({ rows: [] as any[] }));
+  const row = result.rows[0];
+  if (row) return { code: row.code, naics: row.naics_code, wantsContract: row.wants_contract };
+  return { code: "other", naics: "561990", wantsContract: false };
+}
+
 router.post("/applicants/profile", authApplicant, async (req: ApplicantReq, res) => {
   const phone = String(req.applicantPhone);
   const businessName = str(req.body?.businessName, 200);
   const applicantName = str(req.body?.applicantName, 200);
   const email = str(req.body?.email, 200);
   const country = normCountry(req.body?.country);
+  const industry = await resolveIndustry(req.body?.industry);
+  const source = str(req.body?.src, 60).toLowerCase();
 
   if (!businessName || !applicantName) return res.status(400).json({ error: "missing_name" });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -51,7 +65,8 @@ router.post("/applicants/profile", authApplicant, async (req: ApplicantReq, res)
               data = COALESCE(data,'{}'::jsonb) || $3::jsonb,
               updated_at = NOW()
         WHERE id = $1`,
-      [appId, country, JSON.stringify({ businessName, applicantName, email })],
+      [appId, country, JSON.stringify({ businessName, applicantName, email,
+        industry: industry.code, naics_code: industry.naics, ...(source ? { source } : {}) })],
     );
   } else {
     appId = randomUUID();
@@ -61,7 +76,8 @@ router.post("/applicants/profile", authApplicant, async (req: ApplicantReq, res)
          (id, public_id, status, source, created_by_actor, country,
           applicant_phone_e164, data, created_at, updated_at)
        VALUES ($1,$2,'created','public','applicant',$3,$4,$5::jsonb,NOW(),NOW())`,
-      [appId, publicId, country, phone, JSON.stringify({ businessName, applicantName, email })],
+      [appId, publicId, country, phone, JSON.stringify({ businessName, applicantName, email,
+        industry: industry.code, naics_code: industry.naics, ...(source ? { source } : {}) })],
     );
   }
 
@@ -80,7 +96,7 @@ router.post("/applicants/profile", authApplicant, async (req: ApplicantReq, res)
     [appId, `Step 1 completed for ${businessName}`],
   ).catch(() => {});
 
-  res.json({ applicationId: publicId, phone });
+  res.json({ applicationId: publicId, phone, industry: industry.code, wantsContract: industry.wantsContract });
 });
 
 export default router;

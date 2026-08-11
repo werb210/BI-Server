@@ -77,8 +77,33 @@ async function ownedApplication(publicIdOrId: string, phone: string) {
   return { app, error: null };
 }
 
+router.get("/applicants/industries", authApplicant, async (_req: ApplicantReq, res) => {
+  const result = await pool.query(
+    `SELECT code, display_name, wants_contract FROM bi_industries
+      WHERE active = TRUE ORDER BY sort_order ASC, display_name ASC`,
+  );
+  res.json({ industries: result.rows });
+});
+
 router.get("/applicants/products", authApplicant, async (req: ApplicantReq, res) => {
   const country = normCountry(req.query.country);
+  const industry = String(req.query.industry ?? "construction").trim().toLowerCase() || "construction";
+  if (industry !== "construction") {
+    const generic = await pool.query(
+      `SELECT ic.coverage_code AS code,
+              COALESCE(l.display_name, ic.coverage_code) AS display_name, ic.sort_order
+         FROM bi_industry_coverages ic
+         LEFT JOIN bi_coverage_labels l ON l.coverage_code = ic.coverage_code
+        WHERE ic.industry_code = $1
+        ORDER BY ic.sort_order ASC, display_name ASC`,
+      [industry],
+    );
+    return res.json({ country, industry, kind: "categories", products: generic.rows.map((row: any) => ({
+      code: row.code, display_name: row.display_name, carrier: null,
+      coverage_category: row.code, tier: null, instant_bind: false,
+      description: "", sort_order: row.sort_order,
+    })) });
+  }
   const result = await pool.query(
     `SELECT code, display_name, carrier, coverage_category, tier, instant_bind,
             description, sort_order
@@ -87,7 +112,7 @@ router.get("/applicants/products", authApplicant, async (req: ApplicantReq, res)
       ORDER BY sort_order ASC, display_name ASC`,
     [country],
   );
-  res.json({ country, products: result.rows });
+  res.json({ country, industry, kind: "products", products: result.rows });
 });
 
 router.post("/applicants/contract/upload", authApplicant, upload.single("file"), async (req: ApplicantReq, res) => {
