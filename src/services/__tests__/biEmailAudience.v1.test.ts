@@ -12,8 +12,11 @@ describe("BI bulk marketing audience", () => {
     it(`${name} excludes suppressions`, () => expect(sql).toContain("s.channel IN ('email', 'all')"));
     it(`${name} matches suppression email case-insensitively`, () => expect(sql).toContain("lower(s.email) = lower(c.email)"));
     it(`${name} requires a plausible email`, () => expect(sql).toContain("position('@' in c.email) > 1"));
-    it(`${name} applies include tags`, () => expect(sql).toContain("COALESCE(c.tags, '{}') && $1"));
-    it(`${name} applies exclude tags`, () => expect(sql).toContain("NOT (COALESCE(c.tags, '{}') && $2)"));
+    it(`${name} applies include tags without regard to case`, () => expect(sql).toContain("lower(trim(t)) = ANY($1)"));
+    it(`${name} applies exclude tags without regard to case`, () => {
+      expect(sql).toContain("NOT EXISTS (");
+      expect(sql).toContain("lower(trim(t)) = ANY($2)");
+    });
   }
   it("selects BI contact names", () => expect(buildAudienceSelectSql()).toContain("c.full_name"));
   it("does not invent a silo field", () => expect(buildAudienceSelectSql()).not.toContain("silo"));
