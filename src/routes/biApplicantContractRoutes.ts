@@ -188,7 +188,7 @@ router.post("/applicants/contract/upload", authApplicant, upload.single("file"),
   await pool.query(
     `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
      VALUES($1,'applicant','document_uploaded',$2)`,
-    [appId, `Subcontract uploaded: ${file.originalname} (${found.length} coverage requirements read${analysis.missingSchedules.length ? `; ${analysis.missingSchedules.map((schedule) => schedule.ref).join(", ")} not included` : ""})`],
+    [appId, `Subcontract uploaded: ${file.originalname} (${found.length} coverage requirements read)`],
   ).catch(() => {});
 
   const rows = await pool.query<ReqRow>(
