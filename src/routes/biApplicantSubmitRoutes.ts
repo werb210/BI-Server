@@ -5,6 +5,7 @@
 import { Router } from "express";
 import { pool } from "../db";
 import { authApplicant, type ApplicantReq } from "./applicantAuth";
+import { projectAnswersToData } from "../services/applicationPayload";
 
 const router = Router();
 
@@ -119,6 +120,19 @@ router.get("/applicants/applications/:id/summary", authApplicant, async (req: Ap
 router.post("/applicants/applications/:id/submit", authApplicant, async (req: ApplicantReq, res) => {
   const { app, error } = await ownedApplication(req.params.id, String(req.applicantPhone));
   if (error) return res.status(error === "not_found" ? 404 : 403).json({ error });
+
+  const answered = await pool.query<{ question_key: string; value: string | null }>(
+    `SELECT question_key, value FROM bi_application_answers WHERE application_id = $1`,
+    [app.id],
+  );
+  const projected = projectAnswersToData(answered.rows);
+  if (Object.keys(projected).length) {
+    await pool.query(
+      `UPDATE bi_applications SET data = COALESCE(data,'{}'::jsonb) || $2::jsonb, updated_at = NOW()
+        WHERE id = $1`,
+      [app.id, JSON.stringify(projected)],
+    );
+  }
 
   const summary = await summaryFor(app);
   if (summary.coverages.length === 0 && summary.referrals.length === 0) {
