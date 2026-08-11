@@ -21,42 +21,24 @@ export type ContractAnalysis = {
 type Rule = { code: string; patterns: RegExp[]; weight: number };
 
 const RULES: Rule[] = [
-  { code: "cpl", patterns: [/contractor'?s?\s+pollution/i, /\bCPL\b/, /pollution\s+liability/i], weight: 0.9 },
+  { code: "cpl", patterns: [/contractor[’']?s?\s+pollution/i, /\bCPL\b/, /pollution\s+liability/i], weight: 0.9 },
   { code: "surety_performance", patterns: [/performance\s+bond/i, /CCDC\s*221/i, /A312/i], weight: 0.95 },
   { code: "surety_payment", patterns: [/labou?r\s+and\s+material\s+payment\s+bond/i, /payment\s+bond/i, /CCDC\s*222/i], weight: 0.95 },
   { code: "surety_bid", patterns: [/bid\s+bond/i, /CCDC\s*220/i, /A310/i], weight: 0.95 },
   { code: "surety_maintenance", patterns: [/maintenance\s+bond/i, /warranty\s+bond/i], weight: 0.9 },
   { code: "cgl", patterns: [/commercial\s+general\s+liability/i, /\bCGL\b/, /general\s+liability/i], weight: 0.95 },
-  { code: "contractor_equipment", patterns: [/contractor'?s?\s+equipment/i, /tools?\s+and\s+equipment/i, /equipment\s+floater/i], weight: 0.85 },
+  { code: "contractor_equipment", patterns: [/contractor[’']?s?\s+equipment/i, /tools?\s+and\s+equipment/i, /equipment\s+floater/i], weight: 0.85 },
   { code: "eo", patterns: [/errors\s+and\s+omissions/i, /\bE&O\b/i, /professional\s+liability/i, /professional\s+indemnity/i], weight: 0.9 },
   { code: "cyber", patterns: [/cyber\s+liability/i, /\bcyber\b/i], weight: 0.8 },
   { code: "do", patterns: [/directors?\s+and\s+officers?/i, /\bD&O\b/i], weight: 0.85 },
-  { code: "builders_risk", patterns: [/builder'?s?\s+risk/i, /course\s+of\s+construction/i, /\bCOC\b/], weight: 0.9 },
-  { code: "workers_comp", patterns: [/worker'?s?'?\s+compensation/i, /\bWSIB\b/i, /\bWCB\b/i], weight: 0.85 },
+  { code: "builders_risk", patterns: [/builder[’']?s?\s+risk/i, /course\s+of\s+construction/i, /\bCOC\b/], weight: 0.9 },
+  { code: "workers_comp", patterns: [/worker[’']?s?[’']?\s+compensation/i, /\bWSIB\b/i, /\bWCB\b/i], weight: 0.85 },
   { code: "auto_liability", patterns: [/automobile\s+liability/i, /non-?owned\s+auto/i, /vehicle\s+liability/i], weight: 0.85 },
 ];
 
 const NOT_A_REQUIREMENT = [
-  /other\s+than\s+with\s+respect\s+to/i,
-  /referred\s+to\s+in\s+Schedule/i,
-  /waive\s+subrogation/i,
-  /if\s+that\s+is\s+required\s+under/i,
-  /shall\s+be\s+named\s+as\s+additional\s+insured/i,
   /has\s+the\s+meaning\s+given/i,
   /means\s+any\s+and\s+all/i,
-];
-
-const OBLIGATION = [
-  /shall\s+(?:procure|maintain|obtain|carry|provide|effect|purchase|furnish)/i,
-  /(?:is|are)\s+required\s+to\s+(?:carry|maintain|provide|obtain)/i,
-  /must\s+(?:carry|maintain|provide|obtain)/i,
-  /covenants\s+that\s+it\s+shall/i,
-  /shall\s+be\s+(?:provided|maintained|in\s+force)/i,
-  // BI_BOND_OBLIGATION_v30 - "A Performance Bond in accordance with CCDC 221 is
-  // required." Bare "is required" is how insurance schedules phrase most bonding
-  // demands, and v29 dropped it, so every bond stated without a dollar figure
-  // vanished from the read.
-  /\b(?:is|are)\s+required\b/i,
 ];
 
 export function splitClauses(text: string): string[] {
@@ -87,9 +69,9 @@ export function parseBasis(clause: string): string | null {
   return null;
 }
 
-export function isRequirementClause(clause: string, hasLimit: boolean): boolean {
-  if (NOT_A_REQUIREMENT.some((pattern) => pattern.test(clause))) return false;
-  return hasLimit || OBLIGATION.some((pattern) => pattern.test(clause));
+// BI_CONTRACT_ONLY_v32
+export function isRequirementClause(clause: string, _hasLimit: boolean): boolean {
+  return !NOT_A_REQUIREMENT.some((pattern) => pattern.test(clause));
 }
 
 export function findReferencedSchedules(text: string): MissingSchedule[] {
@@ -125,14 +107,13 @@ export function extractRequirements(text: string): ExtractedRequirement[] {
   return [...best.values()].sort((a, b) => b.confidence - a.confidence);
 }
 
+// BI_CONTRACT_ONLY_v32 - the subcontract is the only document the applicant is
+// asked for. missingSchedules stays in the type so callers keep compiling, but
+// is always empty: a second-document demand is not this flow's job.
 export function analyzeContract(text: string): ContractAnalysis {
-  const requirements = extractRequirements(text);
-  const referenced = findReferencedSchedules(text);
-  const hasAnyLimit = requirements.some((requirement) => requirement.extractedLimit !== null);
-  const missingSchedules = hasAnyLimit ? [] : referenced;
   return {
-    requirements,
-    missingSchedules,
-    documentKind: missingSchedules.length > 0 ? "agreement_only" : "requirements",
+    requirements: extractRequirements(text),
+    missingSchedules: [],
+    documentKind: "requirements",
   };
 }

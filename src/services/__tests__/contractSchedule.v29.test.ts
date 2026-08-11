@@ -7,80 +7,63 @@ const CARVE_OUT = "Other than with respect to the automobile liability, workers'
 const DOCUMENT_LIST = "Schedule G: Quality Requirements\nSchedule H: LEED\nSchedule I: Insurance\nSchedule J: Schedule";
 const REAL_REQUIREMENT = "Subcontractor shall procure and maintain Commercial General Liability insurance with a limit of not less than $5,000,000 per occurrence.";
 
-describe("a cross-reference is not a requirement", () => {
-  it("ignores a clause that only points at the schedule", () => expect(extractRequirements(CROSS_REFERENCE)).toHaveLength(0));
-  it("ignores a subrogation carve-out that merely names coverages", () => expect(extractRequirements(CARVE_OUT)).toHaveLength(0));
-  it("keeps a clause that actually imposes the coverage", () => {
-    const found = extractRequirements(REAL_REQUIREMENT);
-    expect(found.map((requirement) => requirement.coverageCode)).toContain("cgl");
-    expect(found[0].extractedLimit).toBe(5_000_000);
-    expect(found[0].limitBasis).toBe("per occurrence");
+describe("a named coverage is a candidate the applicant confirms", () => {
+  it("keeps a coverage the contract only cross-references", () => {
+    // BI_CONTRACT_ONLY_v32 - previously discarded, which left the page empty.
+    expect(extractRequirements(CROSS_REFERENCE).map((r) => r.coverageCode)).toContain("cgl");
   });
-  it("treats a stated limit as evidence of a requirement on its own", () => {
-    expect(isRequirementClause("CGL of $5,000,000 per occurrence", true)).toBe(true);
-    expect(isRequirementClause("general liability referred to in Schedule I", false)).toBe(false);
+
+  it("reads every coverage named in a carve-out sentence", () => {
+    const codes = extractRequirements(CARVE_OUT).map((r) => r.coverageCode);
+    expect(codes).toContain("auto_liability");
+    expect(codes).toContain("workers_comp");
+    expect(codes).toContain("eo");
+  });
+
+  it("still ignores the definitions section", () => {
+    expect(extractRequirements('"Claim" means any and all actions for general liability.')).toHaveLength(0);
+    expect(extractRequirements('"Delay" has the meaning given in Section 29.5.')).toHaveLength(0);
+  });
+
+  it("scores a stated limit above a bare mention", () => {
+    const named = extractRequirements(REAL_REQUIREMENT)[0];
+    const bare = extractRequirements("Commercial general liability insurance is required.")[0];
+    expect(named.extractedLimit).toBe(5_000_000);
+    expect(named.confidence).toBeGreaterThan(bare.confidence);
   });
 });
 
-describe("one clause can demand more than one coverage", () => {
-  it("no longer stops at the first rule that matches", () => {
-    const codes = extractRequirements("Subcontractor shall maintain automobile liability and workers' compensation coverage of $2,000,000 inclusive.").map((requirement) => requirement.coverageCode);
-    expect(codes).toContain("auto_liability");
-    expect(codes).toContain("workers_comp");
+describe("curly apostrophes are not invisible", () => {
+  it("reads the punctuation a real PDF actually contains", () => {
+    // Every one of these used a straight quote and could never have matched.
+    expect(extractRequirements("Subcontractor shall maintain workers’ compensation coverage.")
+      .map((r) => r.coverageCode)).toContain("workers_comp");
+    expect(extractRequirements("Contractor’s Pollution Liability is required.")
+      .map((r) => r.coverageCode)).toContain("cpl");
+    expect(extractRequirements("Builder’s Risk is required.")
+      .map((r) => r.coverageCode)).toContain("builders_risk");
+    expect(extractRequirements("Contractor’s Equipment coverage is required.")
+      .map((r) => r.coverageCode)).toContain("contractor_equipment");
   });
-  it("keeps a bond stated without a dollar figure", () => {
-    // BI_BOND_OBLIGATION_v30
-    const codes = extractRequirements(
-      "A Performance Bond in accordance with CCDC 221 is required.",
-    ).map((r) => r.coverageCode);
-    expect(codes).toContain("surety_performance");
+});
+
+describe("the subcontract is the only document we ask for", () => {
+  it("never reports a missing schedule", () => {
+    const analysis = analyzeContract(`${CROSS_REFERENCE}\n${CARVE_OUT}\n${DOCUMENT_LIST}`);
+    expect(analysis.missingSchedules).toEqual([]);
+    expect(analysis.documentKind).toBe("requirements");
   });
 
-  it("scores a stated limit above a bare demand", () => {
-    // BI_BOND_OBLIGATION_v30 - both must survive the requirement filter for
-    // this comparison to mean anything.
-    const named = extractRequirements("CGL of $5,000,000 per occurrence.")[0];
-    const bare = extractRequirements(
-      "Commercial general liability insurance is required.",
-    )[0];
-    expect(named).toBeDefined();
-    expect(bare).toBeDefined();
-    expect(named.confidence).toBeGreaterThan(bare.confidence);
-  });
-
-  it("still reads nothing out of the agreement's own prose", () => {
-    // BI_BOND_OBLIGATION_v30 - the looser obligation pattern must not reopen
-    // the cross-reference and carve-out false positives v29 closed.
-    expect(extractRequirements(CROSS_REFERENCE)).toHaveLength(0);
-    expect(extractRequirements(CARVE_OUT)).toHaveLength(0);
-    expect(
-      extractRequirements("The parties agree to the scope of work."),
-    ).toHaveLength(0);
+  it("returns what it read instead of an empty list and a demand", () => {
+    const analysis = analyzeContract(`${CROSS_REFERENCE}\n${CARVE_OUT}`);
+    expect(analysis.requirements.length).toBeGreaterThan(0);
   });
 
   it("reads both bonds from a single sentence", () => {
-    const codes = extractRequirements("The Subcontractor shall provide a performance bond and a labour and material payment bond.").map((requirement) => requirement.coverageCode);
+    const codes = extractRequirements(
+      "The Subcontractor shall provide a performance bond and a labour and material payment bond.",
+    ).map((r) => r.coverageCode);
     expect(codes).toContain("surety_performance");
     expect(codes).toContain("surety_payment");
-  });
-});
-
-describe("a contract that defers its coverage list says so", () => {
-  it("names the insurance schedule the contract relies on", () => {
-    expect(findReferencedSchedules(DOCUMENT_LIST)).toEqual([{ ref: "Schedule I", title: "Insurance" }]);
-  });
-  it("ignores schedules that carry no coverage terms", () => {
-    expect(findReferencedSchedules("Schedule A: Scope of Work\nSchedule B: Payment Terms")).toHaveLength(0);
-  });
-  it("reports the agreement alone as incomplete rather than as a clean read", () => {
-    const analysis = analyzeContract(`${CROSS_REFERENCE}\n${CARVE_OUT}\n${DOCUMENT_LIST}`);
-    expect(analysis.documentKind).toBe("agreement_only");
-    expect(analysis.missingSchedules).toEqual([{ ref: "Schedule I", title: "Insurance" }]);
-    expect(analysis.requirements).toHaveLength(0);
-  });
-  it("asks for nothing once real limits are present", () => {
-    const analysis = analyzeContract(`${DOCUMENT_LIST}\n${REAL_REQUIREMENT}`);
-    expect(analysis.documentKind).toBe("requirements");
-    expect(analysis.missingSchedules).toHaveLength(0);
   });
 });
