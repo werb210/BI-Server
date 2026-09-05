@@ -300,4 +300,18 @@ router.post("/applicants/applications/:id/requirements/:reqId/confirm", authAppl
   res.json({ ok: true, available, referred: false });
 });
 
+// BI_CLIENT_ACCOUNT_DELETE_v1 - store-required in-app account deletion. Deletes
+// the applicant's OWN application(s); child rows cascade, while commission/ledger
+// records survive with their application link nulled (see the delete-unblock
+// migration). Ownership is the applicant's verified phone.
+router.post("/applicants/account/delete", authApplicant, async (req: ApplicantReq, res) => {
+  const phone = String(req.applicantPhone || "").trim();
+  if (!phone) { res.status(401).json({ error: "unauthorized" }); return; }
+  const { rowCount } = await pool.query(
+    `DELETE FROM bi_applications WHERE applicant_phone_e164 = $1 OR guarantor_phone = $1`,
+    [phone],
+  );
+  res.json({ ok: true, deleted: rowCount ?? 0 });
+});
+
 export default router;
