@@ -1,5 +1,7 @@
 import twilio from "twilio";
 import { env } from "../platform/env";
+// BI_SERVER_BLOCK_v262_SMS_DELIVERABILITY_v1
+import { isUndeliverableNumber, isSendableBody } from "../lib/smsDeliverability";
 
 const hasTwilio = Boolean(
   env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_FROM
@@ -18,6 +20,9 @@ const TEMPLATES = {
 
 export async function sendDocumentRejectedSms(to: string, args: RejectArgs) {
   const body = TEMPLATES.document_rejected(args);
+  // Reject locally rather than pay Twilio to reject it for us.
+  if (isUndeliverableNumber(to)) throw new Error("undeliverable_number");
+  if (!isSendableBody(body)) throw new Error("empty_sms_body");
   if (!smsClient) {
     console.log(`[sms mock] to=${to} body="${body}"`);
     return { sid: "mock", mock: true };
@@ -30,6 +35,8 @@ export async function sendDocumentRejectedSms(to: string, args: RejectArgs) {
 // { sid, mock } on success; throws on Twilio error so the caller
 // can record the failure to the activity timeline.
 export async function sendOutreachSms(to: string, body: string): Promise<{ sid: string; mock?: boolean }> {
+  if (isUndeliverableNumber(to)) throw new Error("undeliverable_number");
+  if (!isSendableBody(body)) throw new Error("empty_sms_body");
   if (!smsClient) {
     console.log(`[sms mock] outreach to=${to} body="${body}"`);
     return { sid: "mock", mock: true };
