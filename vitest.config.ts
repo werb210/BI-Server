@@ -37,7 +37,6 @@ export default defineConfig({
       "src/__tests__/legacySunsetAndStubGuard.v362.test.ts",
       "src/__tests__/integration/carrier.contract.integration.test.ts",
       "src/db/migrations/__tests__/v384.catalog.align.test.ts",
-      "src/lib/validation/__tests__/pgiFields.test.ts",
     ],
   },
 });

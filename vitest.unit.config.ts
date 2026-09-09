@@ -41,7 +41,6 @@ export default defineConfig({
       "src/__tests__/legacySunsetAndStubGuard.v362.test.ts",
       "src/__tests__/integration/carrier.contract.integration.test.ts",
       "src/db/migrations/__tests__/v384.catalog.align.test.ts",
-      "src/lib/validation/__tests__/pgiFields.test.ts",
       // Need a real database - they call pool.connect() rather than a mock.
       "src/routes/__tests__/biCrmCompanies.v256.test.ts",
       "src/routes/__tests__/biDocumentsFromBf.v249.test.ts",
