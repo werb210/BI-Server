@@ -38,6 +38,10 @@ describe("BI_SERVER_BLOCK_v254 — GET /crm/contacts list", () => {
   beforeEach(() => queryMock.mockReset());
 
   it("returns rows with the enhanced shape (company_name joined)", async () => {
+    // BI_UNQUARANTINE_v254_v1
+    // v411 added a COUNT(*) after the rows query so the portal can paginate.
+    // This test stubbed one query; the second resolved undefined, the handler
+    // threw on cr.rows[0], and the route answered 500. Stub both.
     queryMock.mockResolvedValueOnce({
       rows: [
         {
@@ -55,6 +59,7 @@ describe("BI_SERVER_BLOCK_v254 — GET /crm/contacts list", () => {
         },
       ],
     });
+    queryMock.mockResolvedValueOnce({ rows: [{ total: 1 }] });
     const r = await request(makeApp())
       .get("/api/v1/bi/crm/crm/contacts")
       .set("Authorization", `Bearer ${staffToken()}`);
@@ -63,6 +68,11 @@ describe("BI_SERVER_BLOCK_v254 — GET /crm/contacts list", () => {
     expect(Array.isArray(body)).toBe(true);
     expect(body[0].company_name).toBe("Acme Inc");
     expect(body[0].outreach_status).toBe("engaged");
+    // The pagination envelope is part of the contract now - assert it, so a
+    // future change to it fails here instead of silently in the portal.
+    expect(r.body.total).toBe(1);
+    expect(queryMock).toHaveBeenCalledTimes(2);
+    expect(String(queryMock.mock.calls[1][0])).toContain("COUNT(*)");
   });
 
   it("appends ILIKE filter when q is provided", async () => {
