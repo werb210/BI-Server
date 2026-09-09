@@ -26,6 +26,15 @@ vi.mock("../../services/smsService", () => ({
   sendOutreachSms: (...args: unknown[]) => sendSmsMock(...args),
 }));
 
+// BI_UNQUARANTINE_v255_v1
+// v820b runs suppressContacts() before the DELETE so a removed contact cannot
+// be re-marketed. It issues its own queries and consumed the one stubbed
+// result, leaving the DELETE with undefined. Stub the helper; its own
+// behaviour is covered by the suppression tests.
+vi.mock("../../services/biCrmSuppression", () => ({
+  suppressContacts: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { requireAuth } from "../../platform/auth";
 import biCrmRoutes from "../biCrmRoutes";
 
