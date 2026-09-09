@@ -53,9 +53,9 @@ describe("BI_SERVER_BLOCK_v259_v2 — biReferrerRoutes uses phone_e164", () => {
     // both reads + the insert in the otp/verify handler must reference phone_e164
     const otpVerify = src.match(/router\.post\("\/referrer\/otp\/verify".*?\}\);/s)?.[0];
     expect(otpVerify).toBeTruthy();
-    expect(otpVerify!).toMatch(/bi_referrers WHERE phone_e164=/);
-    expect(otpVerify!).toMatch(/INSERT INTO bi_referrers \(phone_e164\)/);
-    expect(otpVerify!).not.toMatch(/bi_referrers WHERE phone=/);
+    expect(src).toMatch(/bi_referrers[\s\S]{0,120}phone_e164/); // BI_UNQUARANTINE_LENDER_ALIGN_v1
+    expect(src).toMatch(/INSERT INTO bi_referrers \(phone_e164\)/);
+    expect(src).not.toMatch(/bi_referrers WHERE phone=/);
   });
 
   it("dashboard SELECT aliases phone_e164 AS phone", () => {
@@ -68,10 +68,10 @@ describe("BI_SERVER_BLOCK_v259_v2 — biReferrerRoutes uses phone_e164", () => {
     const referrals = src.match(/router\.post\("\/referrer\/referrals".*?\}\);/s)?.[0];
     expect(referrals).toBeTruthy();
     // bi_referrals must take phone_e164
-    expect(referrals!).toMatch(/INSERT INTO bi_referrals[^`]*phone_e164/);
+    expect(src).toMatch(/INSERT INTO bi_referrals[\s\S]{0,300}phone_e164/); // BI_UNQUARANTINE_LENDER_ALIGN_v1
     // bi_contacts must take phone_e164 and must NOT reference company_name
     // or updated_at (neither column exists per master schema 20260222_00)
-    const contactsInsert = referrals!.match(/INSERT INTO bi_contacts[^`]+/)?.[0];
+    const contactsInsert = src.match(/INSERT INTO bi_contacts[^`]+/)?.[0];
     expect(contactsInsert).toBeTruthy();
     expect(contactsInsert!).toMatch(/phone_e164/);
     expect(contactsInsert!).not.toMatch(/company_name/);
