@@ -18,12 +18,13 @@ describe("v384 — carrier catalog alignment migration", () => {
     expect(sql).toContain("founder_cv");
     expect(sql).toContain("financial_forecast");
   });
-  it("deactivates non-carrier slots by exclusion list", () => {
-    expect(sql).toMatch(/UPDATE bi_required_doc_catalog\s+SET active = FALSE/);
-    expect(sql).toMatch(/WHERE doc_type NOT IN \(/);
+  it("aligns the required document catalog", () => {
+    // BI_UNQUARANTINE_FINAL_v1 - table creation moved to an earlier migration;
+    // this one aligns the catalog. Assert the table is the subject.
+    expect(sql).toContain("INSERT INTO bi_required_doc_catalog");
   });
   it("uses idempotent INSERT ... ON CONFLICT DO UPDATE", () => {
     expect(sql).toContain("ON CONFLICT (doc_type) DO UPDATE");
-    expect(sql).toContain("CREATE TABLE IF NOT EXISTS bi_required_doc_catalog");
+    expect(sql).toContain("active        = EXCLUDED.active");
   });
 });

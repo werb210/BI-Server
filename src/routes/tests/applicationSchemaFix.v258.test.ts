@@ -9,7 +9,10 @@ vi.mock("../../db", () => ({ pool: { query: (...args: unknown[]) => queryMock(..
 const SECRET = "test-shared-secret-min-10";
 vi.mock("../../platform/env", () => ({ env: { JWT_SECRET: "test-shared-secret-min-10", DATABASE_URL: "postgres://test" } }));
 vi.mock("../../platform/logger", () => ({ logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } }));
-vi.mock("../../services/otpService", () => ({ sendOtp: vi.fn(), verifyOtp: vi.fn(async () => true) }));
+vi.mock("../../services/otpService", () => ({
+  sendOtpSafe: vi.fn(),
+  verifyOtpSafe: vi.fn(async () => ({ ok: true, approved: true })),
+}));
 
 import { requireAuth } from "../../platform/auth";
 import biLenderApiRoutes from "../biLenderApiRoutes";
@@ -37,30 +40,35 @@ describe("v258 GET mine", () => {
   });
 });
 
-describe("v258 lender create", () => {
+describe("v258 lender create sunset", () => {
   beforeEach(() => queryMock.mockReset());
-  it("creates company when missing", async () => {
+  it("rejects the legacy application shape without writing to the database", async () => {
     queryMock.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ id: "co-new" }] }).mockResolvedValue({ rows: [{ id: "app-1", application_code: "BI-A1" }] });
     const r = await request(makeApp()).post("/api/v1/lender/lender/applications").set("Authorization", `Bearer ${lenderToken()}`).send({ company_name: "Acme Inc", contact_name: "Jane Doe", contact_email: "jane@acme.test", contact_phone: "+14165551234" });
-    expect([200, 201]).toContain(r.status);
-    const insertCall = queryMock.mock.calls.find((c) => String(c[0]).match(/INSERT INTO bi_applications/i));
-    expect(String(insertCall![0])).toMatch(/company_id/);
-    expect(String(insertCall![0])).not.toMatch(/company_name/);
-    expect(insertCall![1]).toContain("co-new");
+    // BI_UNQUARANTINE_FINAL_v1 - this endpoint was sunset. The legacy shape
+    // cannot satisfy the v2 validator's 11 declarations, so it returns 410
+    // Gone with a migration path rather than 400ing every request.
+    expect(r.status).toBe(410);
+    expect(r.body).toMatchObject({ error: "legacy_shape_removed" });
+    expect(queryMock).not.toHaveBeenCalled();
   });
-  it("reuses existing", async () => {
+  it("rejects the legacy shape before looking up an existing company", async () => {
     queryMock.mockResolvedValueOnce({ rows: [{ id: "co-existing" }] }).mockResolvedValue({ rows: [{ id: "app-1", application_code: "BI-A1" }] });
-    await request(makeApp()).post("/api/v1/lender/lender/applications").set("Authorization", `Bearer ${lenderToken()}`).send({ company_name: "ACME INC", contact_name: "Jane", contact_email: "j@a.com", contact_phone: "+14165551234" });
-    expect(queryMock.mock.calls.find((c) => String(c[0]).match(/INSERT INTO bi_companies/i))).toBeUndefined();
+    const r = await request(makeApp()).post("/api/v1/lender/lender/applications").set("Authorization", `Bearer ${lenderToken()}`).send({ company_name: "ACME INC", contact_name: "Jane", contact_email: "j@a.com", contact_phone: "+14165551234" });
+    expect(r.status).toBe(410);
+    expect(queryMock).not.toHaveBeenCalled();
   });
 });
 
 describe("v258 referrer verify", () => {
   beforeEach(() => queryMock.mockReset());
   it("uses phone_e164", async () => {
-    queryMock.mockResolvedValueOnce({ rows: [] });
+    queryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: "ref-1", intake_complete: false }] });
     await request(makeApp()).post("/api/v1/referrer/referrer/otp/verify").send({ phone: "+14165551234", code: "123456" });
-    const selectCall = queryMock.mock.calls.find((c) => String(c[0]).match(/bi_referrer_codes/i));
+    const selectCall = queryMock.mock.calls.find((c) => String(c[0]).match(/SELECT \* FROM bi_referrers/i));
     expect(String(selectCall![0])).toMatch(/phone_e164\s*=/);
     expect(String(selectCall![0])).not.toMatch(/\bphone\s*=\s*\$/);
   });
