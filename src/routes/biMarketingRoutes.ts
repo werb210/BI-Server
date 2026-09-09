@@ -231,7 +231,41 @@ router.post("/sequences/:id/enroll", async (req, res) => {
       [req.params.id, ids, dueAt],
     );
     const inserted = result.rowCount ?? 0;
-    return res.json({ inserted, skipped: ids.length - inserted, requested: ids.length, next_step_at: dueAt });
+
+    // BI_SEQ_ENROLL_SKIP_REASONS_v1
+    // The INSERT above drops rows on four conditions and the caller only saw a
+    // count. Adding a named contact who fails one looked exactly like success:
+    // no enrollment, no email, no error. Say which and why.
+    let skips: Array<{ contact_id: string; reason: string }> = [];
+    if (ids.length - inserted > 0) {
+      const diag = await pool.query<{ id: string; reason: string }>(
+        `SELECT req.id::text AS id,
+                CASE
+                  WHEN c.id IS NULL THEN 'not_found'
+                  WHEN c.email IS NULL OR position('@' in c.email) < 2 THEN 'no_email'
+                  WHEN c.marketing_consent_basis IS NULL THEN 'no_consent_basis'
+                  WHEN c.marketing_consent_expires_at IS NOT NULL
+                       AND c.marketing_consent_expires_at <= NOW() THEN 'consent_expired'
+                  WHEN EXISTS (SELECT 1 FROM bi_suppressions s
+                                WHERE lower(s.email) = lower(c.email)
+                                  AND s.channel IN ('email','all')) THEN 'suppressed'
+                  ELSE 'already_enrolled'
+                END AS reason
+           FROM unnest($2::uuid[]) AS req(id)
+           LEFT JOIN bi_contacts c ON c.id = req.id
+          WHERE NOT EXISTS (
+            SELECT 1 FROM bi_sequence_enrollments e
+             WHERE e.sequence_id = $1 AND e.contact_id = req.id
+               AND e.created_at >= NOW() - interval '1 minute')`,
+        [req.params.id, ids],
+      );
+      skips = diag.rows.map((r) => ({ contact_id: r.id, reason: r.reason }));
+      if (skips.length > 0) {
+        logger.warn({ sequenceId: req.params.id, skips }, "bi.marketing.sequences.enroll.skipped");
+      }
+    }
+
+    return res.json({ inserted, skipped: ids.length - inserted, requested: ids.length, next_step_at: dueAt, skips });
   } catch (err) {
     logger.error({ err }, "bi.marketing.sequences.enroll.failed");
     return res.status(500).json({ error: { code: "internal" } });
