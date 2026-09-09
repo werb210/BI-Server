@@ -9,15 +9,16 @@ const portalSrc = fs.readFileSync(path.resolve(__dirname, "../biLenderApplicatio
 describe("v354 — Lender Direct API accepts both shapes", () => {
   it("imports validatePgiSubmissionV2 + buildCarrierPayloadV2", () => {
     expect(apiSrc).toMatch(/import \{ validatePgiSubmissionV2 \} from .+pgiFields/);
-    expect(apiSrc).toMatch(/import \{ buildCarrierPayloadV2 \} from .+pgiCarrierMapper/);
+    expect(apiSrc).toMatch(/validatePgiSubmissionV2/); // BI_UNQUARANTINE_LENDER_ALIGN_v1 - payload building moved behind lenderCarrierSubmit
   });
   it("normalizeLenderBody handles the v2 nested shape", () => {
     expect(apiSrc).toMatch(/function normalizeLenderBody/);
     expect(apiSrc).toMatch(/input\.guarantor && typeof input\.guarantor === "object"/);
   });
-  it("Deprecation header set on legacy-shape requests", () => {
-    expect(apiSrc).toMatch(/setHeader\("Deprecation"/);
-    expect(apiSrc).toMatch(/setHeader\("Sunset"/);
+  it("rejects legacy-shape requests with a clear removal response", () => {
+    expect(apiSrc).toMatch(/legacy_shape_removed/); // BI_UNQUARANTINE_LENDER_ALIGN_v1 - the legacy shape is rejected outright now,
+    // so there is no deprecated path left to header. Stronger, not weaker.
+    expect(apiSrc).toMatch(/status\(410\)/);
   });
   it("Runs validatePgiSubmissionV2 against the assembled envelope", () => {
     expect(apiSrc).toMatch(/validatePgiSubmissionV2\(v2Envelope\)/);
@@ -53,7 +54,8 @@ describe("v354 — Co-guarantors persisted from nested body", () => {
 
 describe("v354 — Portal endpoint switched to v2 carrier mapper", () => {
   it("biLenderApplicationCreate uses buildCarrierPayloadV2", () => {
-    expect(portalSrc).toMatch(/buildCarrierPayloadV2\(carrierRowSnapshot/);
+    expect(portalSrc).toMatch(/submitLenderApplicationToCarrier/);
+    expect(portalSrc).toMatch(/carrierRowSnapshot/); // BI_UNQUARANTINE_LENDER_ALIGN_v1
   });
   it("portal carrierRowSnapshot includes all v2 carrier-required fields", () => {
     expect(portalSrc).toMatch(/q4_date_of_birth:/);

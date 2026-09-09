@@ -7,8 +7,15 @@ import express from "express";
 import request from "supertest";
 
 const queryMock = vi.fn();
+const clientQueryMock = vi.fn();
 vi.mock("../../db", () => ({
-  pool: { query: (...args: unknown[]) => queryMock(...args) },
+  pool: {
+    query: (...args: unknown[]) => queryMock(...args),
+    connect: vi.fn(async () => ({
+      query: (...args: unknown[]) => clientQueryMock(...args),
+      release: vi.fn(),
+    })),
+  },
 }));
 
 const SECRET = "test-shared-secret-min-10";
@@ -21,6 +28,8 @@ vi.mock("../../platform/logger", () => ({
 vi.mock("../../services/otpService", () => ({
   sendOtp: vi.fn(async () => true),
   verifyOtp: vi.fn(async () => true),
+  sendOtpSafe: vi.fn(async () => ({ ok: true })),
+  verifyOtpSafe: vi.fn(async () => ({ ok: true, approved: true })),
 }));
 vi.mock("../../util/phoneE164", () => ({
   normalizeE164: (s: unknown) =>
@@ -37,7 +46,10 @@ function makeApp() {
 }
 
 describe("BI_SERVER_BLOCK_v259 — referrer OTP verify uses phone_e164", () => {
-  beforeEach(() => queryMock.mockReset());
+  beforeEach(() => {
+    queryMock.mockReset();
+    clientQueryMock.mockReset();
+  });
 
   it("SELECT and INSERT on bi_referrers both use phone_e164", async () => {
     queryMock
@@ -58,7 +70,10 @@ describe("BI_SERVER_BLOCK_v259 — referrer OTP verify uses phone_e164", () => {
 });
 
 describe("BI_SERVER_BLOCK_v259 — referrer dashboard aliases phone_e164 AS phone", () => {
-  beforeEach(() => queryMock.mockReset());
+  beforeEach(() => {
+    queryMock.mockReset();
+    clientQueryMock.mockReset();
+  });
 
   it("dashboard SQL selects phone_e164 AS phone", async () => {
     queryMock.mockResolvedValueOnce({ rows: [] });
@@ -73,10 +88,13 @@ describe("BI_SERVER_BLOCK_v259 — referrer dashboard aliases phone_e164 AS phon
 });
 
 describe("BI_SERVER_BLOCK_v259 — POST /referrer/referrals writes phone_e164", () => {
-  beforeEach(() => queryMock.mockReset());
+  beforeEach(() => {
+    queryMock.mockReset();
+    clientQueryMock.mockReset();
+  });
 
   it("INSERT into bi_referrals uses phone_e164", async () => {
-    queryMock
+    clientQueryMock
       .mockResolvedValueOnce({ rows: [{ id: "ref-1" }] }) // INSERT bi_referrals
       .mockResolvedValueOnce({ rows: [] }); // INSERT bi_contacts
     const jwt = (await import("jsonwebtoken")).default;
@@ -84,11 +102,11 @@ describe("BI_SERVER_BLOCK_v259 — POST /referrer/referrals writes phone_e164", 
     const r = await request(makeApp())
       .post("/api/v1/referrer/referrals")
       .set("Authorization", `Bearer ${token}`)
-      .send({ full_name: "Jane", email: "jane@a.com", phone: "+14165551234" });
+      .send({ full_name: "Jane", email: "jane@a.com" });
     expect(r.status).toBe(201);
-    const [sql0] = queryMock.mock.calls[0];
+    const [sql0] = clientQueryMock.mock.calls[1];
     expect(String(sql0)).toMatch(/INSERT INTO bi_referrals.*phone_e164/s);
-    const [sql1] = queryMock.mock.calls[1];
+    const [sql1] = clientQueryMock.mock.calls[2];
     expect(String(sql1)).toMatch(/INSERT INTO bi_contacts.*phone_e164/s);
     expect(String(sql1)).not.toMatch(/bi_contacts.*company_name/s);
   });
