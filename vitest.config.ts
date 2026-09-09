@@ -25,13 +25,10 @@ export default defineConfig({
       // Burn this list down to zero.
       "src/routes/__tests__/biApollo.v253.test.ts",
       "src/routes/__tests__/biPublicApplicationRoutes.unit.test.ts",
-      "src/routes/__tests__/carrierPathE2E.v261.test.ts",
-      "src/routes/__tests__/carrierPathE2E.v262.test.ts",
       "src/routes/__tests__/lenderApiCarrierAlignment.v354.test.ts",
       "src/routes/__tests__/realSubmissionFix.v259.test.ts",
       "src/routes/__tests__/secondAcceptAndTextBundle.v373.test.ts",
       "src/routes/tests/applicationSchemaFix.v258.test.ts",
-      "src/routes/tests/carrierPathE2E.v260.test.ts",
       "src/routes/tests/realSubmissionFix.v259.test.ts",
       "src/__tests__/integration/carrier.contract.integration.test.ts",
       "src/db/migrations/__tests__/v384.catalog.align.test.ts",

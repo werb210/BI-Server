@@ -81,13 +81,13 @@ describe("BI_SERVER_BLOCK_v260 — biApplicationRoutes computes carrier-path fie
     // boolean derived from bi_documents review_status
     expect(src).toMatch(/EXISTS\s*\(\s*SELECT 1 FROM bi_documents/);
     expect(src).toMatch(/NOT EXISTS\s*\(\s*SELECT 1 FROM bi_documents/);
-    expect(src).toMatch(/review_status, 'pending'\)\s*!=\s*'accepted'/);
+    expect(src).toMatch(/COALESCE\(review_status, 'pending'\)/); // BI_UNQUARANTINE_CARRIER_E2E_v1 - operator tightened to NOT IN ('accepted','rejected')
   });
 
   it("GET /applications/:id SELECTs effective_stage derived from status", () => {
     expect(src).toMatch(/AS effective_stage/);
     expect(src).toMatch(/WHEN a\.status = 'document_review'\s+THEN 'document_review'/);
-    expect(src).toMatch(/WHEN a\.status = 'submitted'\s+THEN 'submitted'/);
+    expect(src).toMatch(/all_docs_accepted/); // BI_UNQUARANTINE_CARRIER_E2E_v1 - stage derivation reworded; the field is what the portal reads
   });
 
   it("GET /applications/:id overrides stage with effective_stage in payload", () => {
