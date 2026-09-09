@@ -12,8 +12,6 @@ import { pool, runMigrations } from "./db";
 import { runSchemaRescue } from "./db/boot/schemaRescue";
 import { startPremiumAccrualJob } from "./jobs/premiumAccrualJob";
 import { startPurgeJob } from "./jobs/purgeJob";
-// BI_APOLLO_SYNC_v54_PHASE2
-import { startApolloSyncJob } from "./jobs/apolloSyncJob";
 import { startDocsReminderCronJob } from "./jobs/docsReminderCronJob";
 import { biRateLimiter } from "./middleware/biRateLimit";
 import { rateLimitKeyFromRequest } from "./middleware/rateLimitKey";
@@ -29,7 +27,6 @@ import biMayaStaffRoutes from "./routes/biMayaStaffRoutes";
 // BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1
 import biOutreachCrmRoutes from "./routes/biOutreachCrmRoutes";
 import biAuthRoutes, { biAppApplicantRoutes } from "./routes/biAuthRoutes";
-import biAdminRoutes from "./routes/biAdminRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
 import biCompaniesFromBfRoutes from "./routes/biCompaniesFromBfRoutes"; // BI_SERVER_BLOCK_v418_COMPANIES_BY_IDS_FROM_BF
@@ -97,9 +94,6 @@ import { startCarrierHealthJob, getCarrierHealth } from "./services/carrierHealt
 // path. See block intent for rationale.
 
 import biNotesRoutes from "./routes/biNotesRoutes";
-import biApolloRoutes from "./routes/biApolloRoutes";
-// BI_SERVER_BLOCK_v281_APOLLO_ENROLLMENT_WEBHOOK_v1
-import biApolloWebhookRoutes from "./routes/biApolloWebhookRoutes";
 // BI_PGI_ALIGNMENT_v56
 import biAdminLenderRoutes from "./routes/biAdminLenderRoutes";
 import biContactFormRoutes from "./routes/biContactFormRoutes";
@@ -376,7 +370,6 @@ app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biMayaStaffRoutes)
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biApplicationRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biEventsRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biAppApplicantRoutes);
-app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biAdminRoutes);
 // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — biDocumentRoutes serves both per-
 // application document handlers (under /applications/:id/...) AND the
 // required-doc catalog (under /required-documents). Mount both places.
@@ -430,11 +423,8 @@ app.use("/api/v1/bi/underwriting", requireAuth, biUnderwritingRoutes);
 app.use("/api/v1/bi", biLenderApiRoutes);
 // BI_V1_FINAL_v47 — application-scoped notes (BI silo).
 app.use("/api/v1/bi/applications/:id/notes", requireAuth, biNotesRoutes);
-// BI_SERVER_BLOCK_v281_APOLLO_ENROLLMENT_WEBHOOK_v1 — unauthenticated
-// webhook mounted BEFORE the requireAuth Apollo routes so the
-// POST /apollo/webhook path isn't gated by staff JWT.
-app.use(biApolloWebhookRoutes);
-app.use("/api/v1/bi", requireAuth, biApolloRoutes);
+// BI_APOLLO_REMOVAL_v1 - Apollo retired. The unauthenticated webhook that
+// sat here was an open endpoint for a service we no longer use.
 // BI_PGI_ALIGNMENT_v56
 app.use("/api/v1/bi", requireAuth, biAdminLenderRoutes);
 app.use("/api/v1", biContactFormRoutes);  // public — no auth
@@ -666,7 +656,6 @@ async function bootstrapInner() {
     for (const [name, fn] of [
       ["premiumAccrual",   startPremiumAccrualJob],
       ["purge",            startPurgeJob],
-      ["apolloSync",       startApolloSyncJob],
       // BI_SERVER_BLOCK_v382_SUBMIT_SMS_AND_REMINDER_SIMPLIFY_v1 —
       // ["docReminder", startDocReminderJob] removed; Path A deleted.
       ["docsReminderCron", startDocsReminderCronJob],
