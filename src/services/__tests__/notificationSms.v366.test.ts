@@ -34,7 +34,14 @@ describe("v366 — Submit confirmation SMS", () => {
     expect(publicSrc).toMatch(/sendOutreachSms/);
   });
   it("fires only when applicant_phone_e164 present", () => {
-    expect(publicSrc).toMatch(/if \(app\.applicant_phone_e164\) \{[\s\S]*sendOutreachSms\(app\.applicant_phone_e164,/);
+    // BI_UNQUARANTINE_SOURCE_REGEX_v1
+    // v382 widened this guard. applicant_phone_e164 is NULL for virtually
+    // every public applicant - the website form collects guarantor_phone - so
+    // the old condition meant the confirmation SMS reached almost nobody.
+    // Assert the behaviour (a phone is resolved, then sent to) rather than the
+    // exact expression, which is what made this brittle in the first place.
+    expect(publicSrc).toMatch(/app\.applicant_phone_e164\s*\|\|\s*app\.guarantor_phone/);
+    expect(publicSrc).toMatch(/if \(submitSmsTo\) \{[\s\S]*sendOutreachSms\(submitSmsTo,/);
   });
   it("includes the docs upload link", () => {
     expect(publicSrc).toMatch(/applications\/\$\{app\.public_id\}\/documents/);

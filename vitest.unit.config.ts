@@ -37,8 +37,6 @@ export default defineConfig({
       "src/routes/tests/applicationSchemaFix.v258.test.ts",
       "src/routes/tests/carrierPathE2E.v260.test.ts",
       "src/routes/tests/realSubmissionFix.v259.test.ts",
-      "src/services/__tests__/notificationSms.v366.test.ts",
-      "src/__tests__/legacySunsetAndStubGuard.v362.test.ts",
       "src/__tests__/integration/carrier.contract.integration.test.ts",
       "src/db/migrations/__tests__/v384.catalog.align.test.ts",
       // Need a real database - they call pool.connect() rather than a mock.

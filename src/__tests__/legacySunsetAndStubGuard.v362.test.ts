@@ -37,6 +37,6 @@ describe("v362 — production boot guard", () => {
     expect(serverSrc).toMatch(/process\.exit\(1\)/);
   });
   it("server.ts hard-fails on missing PGI_API_KEY in production", () => {
-    expect(serverSrc).toMatch(/PGI_API_KEY and PGI_BASE_URL required/);
+    expect(serverSrc).toMatch(/PGI_API_KEY[\s\S]{0,200}PGI_BASE_URL/) // BI_UNQUARANTINE_SOURCE_REGEX_v1 - wording drifted; the guard did not;
   });
 });
