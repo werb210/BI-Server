@@ -23,11 +23,12 @@ export default defineConfig({
       // QUARANTINE — pre-existing failures; re-enable each as it is converted
       // to the real-DB harness (mock-SQL) or its stale source assertion fixed.
       // Burn this list down to zero.
+      // BI_UNQUARANTINE_FINAL_v1 — NOT stale. POST /apollo/enrich/:id no longer
+      // 404s on a missing contact; it returns 200 { ok: true, mock: true }.
+      // That is a product decision (Apollo is unlicensed), not test drift, so
+      // the assertion stays failing until someone decides which is correct.
       "src/routes/__tests__/biApollo.v253.test.ts",
-      "src/routes/__tests__/biPublicApplicationRoutes.unit.test.ts",
-      "src/routes/tests/applicationSchemaFix.v258.test.ts",
       "src/__tests__/integration/carrier.contract.integration.test.ts",
-      "src/db/migrations/__tests__/v384.catalog.align.test.ts",
     ],
   },
 });
