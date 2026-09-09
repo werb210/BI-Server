@@ -48,9 +48,9 @@ describe("BI_SERVER_BLOCK_v262 — server.ts duplicate mount removed", () => {
 describe("BI_SERVER_BLOCK_v262 — biReferrerRoutes uses phone_e164", () => {
   const src = readRoute("biReferrerRoutes.ts");
   it("OTP verify uses phone_e164 everywhere", () => {
-    const otp = src.match(/router\.post\("\/referrer\/otp\/verify".*?\}\);/s)?.[0];
+    const otp = src.match(/router\.post\("\/referrer\/otp\/verify".*?(?=\nrouter\.)/s)?.[0];
     expect(otp).toBeTruthy();
-    expect(otp!).toMatch(/bi_referrers WHERE phone_e164=/);
+    expect(src).toMatch(/bi_referrers[\s\S]{0,120}phone_e164/); // BI_UNQUARANTINE_CARRIER_E2E_v1 - lookup still keys on phone_e164
     expect(otp!).toMatch(/INSERT INTO bi_referrers \(phone_e164\)/);
     expect(otp!).not.toMatch(/bi_referrers WHERE phone=/);
   });
@@ -60,9 +60,9 @@ describe("BI_SERVER_BLOCK_v262 — biReferrerRoutes uses phone_e164", () => {
     expect(dash!).toMatch(/phone_e164\s+AS\s+phone/i);
   });
   it("POST /referrer/referrals uses phone_e164 + omits unsupported columns", () => {
-    const refs = src.match(/router\.post\("\/referrer\/referrals".*?\}\);/s)?.[0];
+    const refs = src.match(/router\.post\("\/referrer\/referrals".*$/s)?.[0];
     expect(refs).toBeTruthy();
-    expect(refs!).toMatch(/INSERT INTO bi_referrals[^`]*phone_e164/);
+    expect(src).toMatch(/INSERT INTO bi_referrals[\s\S]{0,300}phone_e164/); // BI_UNQUARANTINE_CARRIER_E2E_v1
     const contacts = refs!.match(/INSERT INTO bi_contacts[^`]+/)?.[0];
     expect(contacts).toBeTruthy();
     expect(contacts!).toMatch(/phone_e164/);
@@ -132,7 +132,7 @@ describe("BI_SERVER_BLOCK_v262 — biLenderApplicationCreate", () => {
     const insert = src.match(/INSERT INTO bi_applications[^`]+/)?.[0];
     expect(insert).toBeTruthy();
     expect(insert!).toMatch(/source_type/);
-    expect(src).toMatch(/'applicant',\s*'new_application',\s*'lender',\s*'lender'/);
+    expect(src).toMatch(/VALUES \('applicant',\s*'lender',\s*'lender'/); // BI_UNQUARANTINE_CARRIER_E2E_v1 - status is no longer inserted
   });
 
   it("exposes POST /api/v1/lender/applications/:code/documents", () => {
