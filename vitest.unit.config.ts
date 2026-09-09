@@ -29,7 +29,6 @@ export default defineConfig({
       "src/tests/pgiRoutes.test.ts",
       "src/routes/__tests__/biApollo.v253.test.ts",
       "src/routes/__tests__/biCrmContactsEditDeleteSms.v255.test.ts",
-      "src/routes/__tests__/biCrmContactsEnhanced.v254.test.ts",
       "src/routes/__tests__/biPublicApplicationRoutes.unit.test.ts",
       "src/routes/__tests__/carrierPathE2E.v261.test.ts",
       "src/routes/__tests__/carrierPathE2E.v262.test.ts",
