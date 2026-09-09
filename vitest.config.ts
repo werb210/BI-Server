@@ -24,7 +24,6 @@ export default defineConfig({
       // to the real-DB harness (mock-SQL) or its stale source assertion fixed.
       // Burn this list down to zero.
       "src/routes/__tests__/biApollo.v253.test.ts",
-      "src/routes/__tests__/biCrmContactsEditDeleteSms.v255.test.ts",
       "src/routes/__tests__/biPublicApplicationRoutes.unit.test.ts",
       "src/routes/__tests__/carrierPathE2E.v261.test.ts",
       "src/routes/__tests__/carrierPathE2E.v262.test.ts",
