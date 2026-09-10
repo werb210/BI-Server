@@ -3,6 +3,7 @@ import { Router } from "express";
 import { logger } from "../platform/logger";
 import { Pool } from "pg";
 import { env } from "../platform/env";
+import { requireAuth } from "../platform/auth";
 
 import { badRequest, ok } from "../utils/apiResponse";
 import { hasCapability } from "../platform/capabilities";
@@ -10,6 +11,14 @@ import { suppressContacts, suppressCompanies } from "../services/biCrmSuppressio
 
 const router = Router();
 const pool = new Pool({ connectionString: env.DATABASE_URL });
+
+function requireStaffOrAdmin(req: any, res: any, next: any) {
+  const role = String((req.user as { role?: string } | undefined)?.role ?? "").toLowerCase();
+  if (role !== "admin" && role !== "staff") {
+    return res.status(403).json({ status: "error", error: "STAFF_OR_ADMIN_ONLY" });
+  }
+  next();
+}
 
 /* =========================
    CONTACTS
@@ -343,8 +352,10 @@ router.delete("/crm/contacts/:id", async (req, res) => {
     if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
     return res.json({ ok: true });
   } catch (err: any) {
-    logger.error({ err, id }, "bi_crm_contact_delete_failed");
-    return res.status(500).json({ error: "delete_failed" });
+    // BI_CRM_DELETE_FIX_v1 - a bare delete_failed hid a foreign-key violation
+    // for months. Return the Postgres code so the blocking table is nameable.
+    logger.error({ err, id, code: err?.code, constraint: err?.constraint }, "bi_crm_contact_delete_failed");
+    return res.status(500).json({ error: "delete_failed", detail: err?.code ?? null, constraint: err?.constraint ?? null });
   }
 });
 
@@ -352,6 +363,38 @@ router.delete("/crm/contacts/:id", async (req, res) => {
 // POST /crm/contacts/:id/sms — staff sends a free-text SMS to a
 // contact. Logs an 'sms' activity row regardless of outcome.
 // Reuses sendOutreachSms from v252.
+// BI_CRM_DELETE_FIX_v1
+// The portal has shipped a company delete button and a bulk-delete button since
+// v251; neither endpoint existed, so both silently 404'd.
+router.delete("/crm/companies/:id", requireAuth, requireStaffOrAdmin, async (req, res) => {
+  const id = typeof req.params.id === "string" ? req.params.id : "";
+  if (!id) return res.status(400).json({ error: "id_required" });
+  try {
+    // Contacts outlive their company: detach rather than delete people.
+    await pool.query(`UPDATE bi_contacts SET company_id = NULL WHERE company_id = $1`, [id]);
+    const r = await pool.query(`DELETE FROM bi_companies WHERE id = $1 RETURNING id`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
+    return res.json({ ok: true });
+  } catch (err: any) {
+    logger.error({ err, id }, "bi_crm_company_delete_failed");
+    return res.status(500).json({ error: "delete_failed", detail: err?.code ?? null });
+  }
+});
+
+router.post("/crm/companies/bulk-delete", requireAuth, requireStaffOrAdmin, async (req, res) => {
+  const raw = (req.body as any)?.ids;
+  const ids = Array.isArray(raw) ? raw.filter((x) => typeof x === "string" && x.length > 0) : [];
+  if (ids.length === 0) return res.status(400).json({ error: "ids_required" });
+  try {
+    await pool.query(`UPDATE bi_contacts SET company_id = NULL WHERE company_id = ANY($1::uuid[])`, [ids]);
+    const r = await pool.query(`DELETE FROM bi_companies WHERE id = ANY($1::uuid[]) RETURNING id`, [ids]);
+    return res.json({ ok: true, deleted: r.rowCount ?? 0, requested: ids.length });
+  } catch (err: any) {
+    logger.error({ err, count: ids.length }, "bi_crm_company_bulk_delete_failed");
+    return res.status(500).json({ error: "delete_failed", detail: err?.code ?? null });
+  }
+});
+
 router.post("/crm/contacts/:id/sms", async (req, res) => {
   const id = typeof req.params.id === "string" ? req.params.id : "";
   if (!id) return res.status(400).json({ error: "id_required" });
