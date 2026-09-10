@@ -57,6 +57,8 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
   const bfDocumentId = s(b.bf_document_id);
   const bfApplicationId = s(b.bf_application_id);
   const bfDocumentTypeRaw = s(b.document_type) ?? "other";
+  // BI_SERVER_PGI_MIRROR_VOCAB_v1 - preserve BF upload category separately.
+  const bfCategoryRaw = s(b.bf_document_type) ?? bfDocumentTypeRaw;
   const originalFilename = s(b.file_name) ?? "document";
   const mimeType = s(b.mime_type) ?? "application/octet-stream";
   const bytes = typeof b.file_size === "number" && Number.isFinite(b.file_size) ? b.file_size : null;
@@ -68,7 +70,6 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
   // for downstream filters. The original BF string is preserved in the
   // document_type_legacy TEXT mirror column.
   const BF_TO_BI_DOC_TYPE: Record<string, string> = {
-    loan_agreement: "loan_agreement_signed",
     loan_agreement_signed: "loan_agreement_signed",
     personal_guarantee: "personal_guarantee_copy",
     personal_guarantee_copy: "personal_guarantee_copy",
@@ -91,6 +92,14 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
     corporate_registration_docs: "corporate_registration_docs",
     articles_of_incorporation: "corporate_registration_docs",
     enforcement_notice: "enforcement_notice",
+    // BI_SERVER_PGI_MIRROR_VOCAB_v1 - active catalog vocabulary.
+    loan_agreement: "loan_agreement",
+    profit_loss: "profit_loss",
+    balance_sheet: "balance_sheet",
+    ar_aging: "ar_aging",
+    ap_aging: "ap_aging",
+    founder_cv: "founder_cv",
+    financial_forecast: "financial_forecast",
   };
   const docTypeEnum = BF_TO_BI_DOC_TYPE[bfDocumentTypeRaw.toLowerCase()] ?? "enforcement_notice";
 
@@ -152,7 +161,7 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
       [
         id, biApplicationId, docTypeEnum, originalFilename, mimeType, bytes,
         blobUrl,
-        docTypeText, bfDocumentTypeRaw,
+        docTypeText, bfCategoryRaw,
         bfDocumentId, bfApplicationId,
       ],
     );
