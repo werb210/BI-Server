@@ -162,6 +162,19 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
     return res.status(500).json({ ok: false, error: "insert_failed", detail: e?.message });
   }
 
+  // BI_PGI_COMPLETION_ON_ARRIVAL_v1
+  // A mirrored document can be the last outstanding requirement - usually
+  // the signed term sheet. Nothing evaluated that, so public PGI files never
+  // left Documents. Lender files already auto-forward at submit time, so this
+  // only advances source_type='public' to staff review; it never submits to
+  // the carrier on its own.
+  try {
+    const { evaluatePgiCompletion } = await import("../services/pgiCompletion.js");
+    await evaluatePgiCompletion(biApplicationId);
+  } catch (err: any) {
+    logger.error({ err, applicationId: biApplicationId }, "bi.documents.from_bf.completion_check_failed");
+  }
+
   return res.json({
     ok: true,
     bi_document_id: mirroredId,
