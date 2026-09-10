@@ -14,7 +14,30 @@ import path from "node:path";
 import type { Pool } from "pg";
 import { logger } from "../platform/logger";
 
-const MIGRATIONS_DIR = path.resolve(process.cwd(), "src/db/migrations");
+// BI_SERVER_MIGRATIONS_DIR_v1
+// This was a module-level constant resolved against process.cwd() as
+// "src/db/migrations". The deploy package staged by
+// .github/workflows/main_boreal-staff-server.yml contains only dist/,
+// node_modules/, package.json, server.js and web.config - there is no src/ at
+// runtime, so readdirSync threw ENOENT, the caller logged "migrations dir not
+// found, skipping", and all 135 .sql migrations were silently skipped in
+// production. BLOCK 99 added the copy into dist/db/migrations but left this
+// pointing at the source tree, so the files shipped somewhere nothing read.
+//
+// Resolved lazily, cwd-relative source path FIRST so local, CI and test runs
+// behave exactly as before, then the dist location for the deployed artifact.
+function resolveMigrationsDir(): string {
+  const candidates = [path.resolve(process.cwd(), "src/db/migrations"), path.resolve(process.cwd(), "dist/db/migrations")];
+  if (__dirname.split(path.sep).includes("dist")) candidates.push(path.resolve(__dirname, "../db/migrations"));
+  for (const candidate of candidates) {
+    try {
+      if (readdirSync(candidate).some((f) => f.endsWith(".sql"))) return candidate;
+    } catch {
+      // not this one; try the next
+    }
+  }
+  return candidates[0];
+}
 
 const ENSURE_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS bi_migrations_applied (
@@ -47,6 +70,7 @@ function extractAddValueStatements_v66(sql: string): string[] {
 }
 
 export async function runMigrations(pool: Pool): Promise<{ applied: string[]; skipped: string[] }> {
+  const MIGRATIONS_DIR = resolveMigrationsDir();
   const applied: string[] = [];
   const skipped: string[] = [];
 

@@ -31,6 +31,8 @@ export async function evaluatePgiCompletion(applicationId: string): Promise<Comp
       `SELECT c.doc_type
          FROM bi_required_doc_catalog c
         WHERE c.active = TRUE
+          -- BI_PGI_REQUIRED_FLAG_v1 - optional catalog rows do not gate completion.
+          AND COALESCE(c.required, TRUE) = TRUE
           AND NOT EXISTS (
             SELECT 1 FROM bi_documents d
              WHERE d.application_id::text = $1
