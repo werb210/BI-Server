@@ -225,7 +225,7 @@ router.post("/sequences/:id/enroll", async (req, res) => {
           AND (c.marketing_consent_expires_at IS NULL OR c.marketing_consent_expires_at > NOW())
           AND NOT EXISTS (
             SELECT 1 FROM bi_suppressions s
-             WHERE lower(s.email) = lower(c.email) AND s.channel IN ('email', 'all')
+             WHERE lower(s.identifier) = lower(c.email) AND s.channel IN ('email', 'all')
           )
        ON CONFLICT (sequence_id, contact_id) DO NOTHING`,
       [req.params.id, ids, dueAt],
@@ -238,16 +238,24 @@ router.post("/sequences/:id/enroll", async (req, res) => {
     // no enrollment, no email, no error. Say which and why.
     let skips: Array<{ contact_id: string; reason: string }> = [];
     if (ids.length - inserted > 0) {
-      const diag = await pool.query<{ id: string; reason: string }>(
-        `SELECT req.id::text AS id,
+      // BI_SEQ_ENROLL_SKIP_REASONS_v2 - the enrollment already succeeded or
+      // was skipped by the time we get here. Explaining why must not be able
+      // to turn that into a 500, which is exactly what v1 did.
+      try {
+        const diag = await pool.query<{ id: string; reason: string }>(
+          `SELECT req.id::text AS id,
                 CASE
                   WHEN c.id IS NULL THEN 'not_found'
                   WHEN c.email IS NULL OR position('@' in c.email) < 2 THEN 'no_email'
                   WHEN c.marketing_consent_basis IS NULL THEN 'no_consent_basis'
                   WHEN c.marketing_consent_expires_at IS NOT NULL
                        AND c.marketing_consent_expires_at <= NOW() THEN 'consent_expired'
+                  -- BI_SEQ_ENROLL_SKIP_REASONS_v2 - v1 joined on s.email, which
+                  -- does not exist; bi_suppressions stores identifier. That
+                  -- threw and took the whole enroll down with it. This mirrors
+                  -- the predicate the INSERT above actually uses.
                   WHEN EXISTS (SELECT 1 FROM bi_suppressions s
-                                WHERE lower(s.email) = lower(c.email)
+                                WHERE lower(s.identifier) = lower(c.email)
                                   AND s.channel IN ('email','all')) THEN 'suppressed'
                   ELSE 'already_enrolled'
                 END AS reason
@@ -257,11 +265,14 @@ router.post("/sequences/:id/enroll", async (req, res) => {
             SELECT 1 FROM bi_sequence_enrollments e
              WHERE e.sequence_id = $1 AND e.contact_id = req.id
                AND e.created_at >= NOW() - interval '1 minute')`,
-        [req.params.id, ids],
-      );
-      skips = diag.rows.map((r) => ({ contact_id: r.id, reason: r.reason }));
-      if (skips.length > 0) {
-        logger.warn({ sequenceId: req.params.id, skips }, "bi.marketing.sequences.enroll.skipped");
+          [req.params.id, ids],
+        );
+        skips = diag.rows.map((r) => ({ contact_id: r.id, reason: r.reason }));
+        if (skips.length > 0) {
+          logger.warn({ sequenceId: req.params.id, skips }, "bi.marketing.sequences.enroll.skipped");
+        }
+      } catch (err: any) {
+        logger.error({ err, sequenceId: req.params.id }, "bi.marketing.sequences.enroll.diagnostic_failed");
       }
     }
 
