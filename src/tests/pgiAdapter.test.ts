@@ -1,4 +1,8 @@
-import test from "node:test";
+// BI_PGI_ADAPTER_TEST_LIVE_v1
+// pgiAdapter is the live path to the carrier - biPgiSubmissionService and
+// lenderCarrierSubmit both call it - and this file was written for
+// node:test, which no CI job runs. Converted so it executes.
+import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { buildPGIPayload, submitToPGI } from "../services/pgiAdapter";
