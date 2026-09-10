@@ -647,6 +647,34 @@ async function bootstrapInner() {
       )
     `),
       pool.query("ALTER TABLE pgi_applications ADD COLUMN IF NOT EXISTS data JSONB"),
+      // BI_CRM_DELETE_BOOT_DDL_v1
+      // bi_marketing_send_recipients.contact_id was created with no ON DELETE
+      // rule, so it defaults to NO ACTION and blocks deleting any contact who
+      // has ever been in a marketing send. Every other FK to bi_contacts
+      // cascades. Applied here rather than as a migration because
+      // runMigrations reads src/db/migrations by relative path and the build
+      // does not copy that directory into dist.
+      pool.query(`
+        DO $$
+        DECLARE fk TEXT;
+        BEGIN
+          SELECT con.conname INTO fk
+            FROM pg_constraint con
+            JOIN pg_class rel  ON rel.oid  = con.conrelid
+            JOIN pg_class frel ON frel.oid = con.confrelid
+           WHERE rel.relname  = 'bi_marketing_send_recipients'
+             AND frel.relname = 'bi_contacts'
+             AND con.contype  = 'f'
+             AND con.confdeltype <> 'c'
+           LIMIT 1;
+          IF fk IS NOT NULL THEN
+            EXECUTE format('ALTER TABLE bi_marketing_send_recipients DROP CONSTRAINT %I', fk);
+            ALTER TABLE bi_marketing_send_recipients
+              ADD CONSTRAINT bi_marketing_send_recipients_contact_id_fkey
+              FOREIGN KEY (contact_id) REFERENCES bi_contacts(id) ON DELETE CASCADE;
+          END IF;
+        END $$;
+      `),
     ]);
 
     // v340: isolate each job so one failure doesn't poison its siblings,
