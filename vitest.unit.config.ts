@@ -25,8 +25,6 @@ export default defineConfig({
     exclude: [
       ...configDefaults.exclude,
       // Mirrors the exclusion list in vitest.config.ts.
-      "src/tests/pgiAdapter.test.ts",
-      "src/tests/pgiRoutes.test.ts",
       "src/__tests__/integration/carrier.contract.integration.test.ts",
       // Need a real database - they call pool.connect() rather than a mock.
       "src/routes/__tests__/biCrmCompanies.v256.test.ts",

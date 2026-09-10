@@ -18,8 +18,6 @@ export default defineConfig({
     exclude: [
       ...configDefaults.exclude,
       // node:test runner files (not vitest)
-      "src/tests/pgiAdapter.test.ts",
-      "src/tests/pgiRoutes.test.ts",
       // QUARANTINE — pre-existing failures; re-enable each as it is converted
       // to the real-DB harness (mock-SQL) or its stale source assertion fixed.
       // Burn this list down to zero.
