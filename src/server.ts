@@ -83,6 +83,8 @@ import biApplicantQuestionRoutes from "./routes/biApplicantQuestionRoutes";
 import biApplicantSelectionRoutes from "./routes/biApplicantSelectionRoutes";
 // BI_CLIENT_PROFILE_v22
 import biApplicantProfileRoutes from "./routes/biApplicantProfileRoutes";
+// BI_SERVER_PUSH_TOKENS_v159
+import biClientPushRoutes from "./routes/biClientPushRoutes";
 // BI_CLIENT_CONTRACT_ROUTES_v21
 import biApplicantContractRoutes from "./routes/biApplicantContractRoutes";
 import biSmsInboundRoutes from "./routes/biSmsInboundRoutes";
@@ -723,6 +725,7 @@ app.use("/api/v1", biCors, biApplicantSubmitRoutes); // BI_CLIENT_SUBMIT_v25
 app.use("/api/v1", biCors, biApplicantQuestionRoutes); // BI_QUESTION_BANK_v24
 app.use("/api/v1", biCors, biApplicantSelectionRoutes); // BI_CLIENT_SELECTION_v23
 app.use("/api/v1", biCors, biApplicantProfileRoutes); // BI_CLIENT_PROFILE_v22
+app.use("/api/v1", biCors, biClientPushRoutes); // BI_SERVER_PUSH_TOKENS_v159
 app.use("/api/v1", biCors, biApplicantContractRoutes); // BI_CLIENT_CONTRACT_ROUTES_v21
 app.use(biSmsInboundRoutes);    // BI_SERVER_BLOCK_v234_OPS_HARDENING_v1
 // BI_SERVER_BLOCK_BI_CARRIER_HEALTH_MOUNT_FIX_v1 -- router declares
