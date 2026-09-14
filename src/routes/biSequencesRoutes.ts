@@ -1,3 +1,6 @@
+// BI_ENROLL_LIVE_COLUMNS_v175 - resume/stop wrote next_send_at, but
+// marketingWorker.ts selects on next_step_at. A resumed enrollment was
+// therefore never picked up and never sent. Write both.
 // BI_SERVER_SEQUENCES_LIVE_SCHEMA_v4
 //
 // The sequence step routes use the schema verified on bi-pg01 on 2026-08-03.
@@ -109,11 +112,11 @@ router.post("/sequences/enrollments/:id/pause", async (req, res) => {
   res.json({ ok: true });
 });
 router.post("/sequences/enrollments/:id/resume", async (req, res) => {
-  await pool.query(`UPDATE bi_sequence_enrollments SET status='active', next_send_at=COALESCE(next_send_at,NOW()) WHERE id=$1`, [req.params.id]);
+  await pool.query(`UPDATE bi_sequence_enrollments SET status='active', next_step_at=COALESCE(next_step_at,NOW()), next_send_at=COALESCE(next_send_at,NOW()) WHERE id=$1`, [req.params.id]);
   res.json({ ok: true });
 });
 router.post("/sequences/enrollments/:id/stop", async (req, res) => {
-  await pool.query(`UPDATE bi_sequence_enrollments SET status='stopped', next_send_at=NULL WHERE id=$1`, [req.params.id]);
+  await pool.query(`UPDATE bi_sequence_enrollments SET status='stopped', next_step_at=NULL, next_send_at=NULL WHERE id=$1`, [req.params.id]);
   res.json({ ok: true });
 });
 

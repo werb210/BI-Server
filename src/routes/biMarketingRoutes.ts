@@ -271,7 +271,11 @@ router.post("/sequences/:id/enroll", async (req, res) => {
                -- (the v281 definition with created_at therefore never applied).
                -- Postgres threw 42703 on every enroll, the diagnostic was lost,
                -- and the response said only "1 skipped" with no reason.
-               AND e.enrolled_at >= NOW() - interval '1 minute')`,
+               -- BI_ENROLL_LIVE_COLUMNS_v175 - v171 replaced a column that
+               -- does not exist (created_at) with another that does not
+               -- exist (enrolled_at). live-schema.json shows the live
+               -- table is the v280 shape; the timestamp is started_at.
+               AND e.started_at >= NOW() - interval '1 minute')`,
           [req.params.id, ids],
         );
         skips = diag.rows.map((r) => ({ contact_id: r.id, reason: r.reason }));
