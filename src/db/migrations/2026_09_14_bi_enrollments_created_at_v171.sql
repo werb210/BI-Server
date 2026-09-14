@@ -1,20 +1,29 @@
--- BI_SEQ_ENROLL_DIAG_COLUMN_v171
--- bi_sequence_enrollments is created by two migrations, both with
--- CREATE TABLE IF NOT EXISTS:
---   2026_05_18_bi_sequences_v110.sql  -> enrolled_at, no created_at  (ran first)
---   2026_05_17_bi_marketing_tables... -> created_at                  (never applied)
--- The live table therefore has no created_at, and the enroll diagnostic that
--- reads e.created_at threw 42703 on every call. The query is fixed to use
--- enrolled_at; this adds the column too so the two definitions stop disagreeing
--- and any other code expecting created_at does not hit the same wall.
---
--- Backfilled from enrolled_at, which is the same moment for existing rows.
-ALTER TABLE bi_sequence_enrollments
-  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
+-- BI_ENROLL_LIVE_COLUMNS_v175 (supersedes the v171 body; v171 never applied)
+-- bi_sequence_enrollments is created by THREE migrations, all CREATE TABLE
+-- IF NOT EXISTS, and they disagree. live-schema.json (read from bi-pg01)
+-- shows the live table is the v280 shape: started_at, no enrolled_at, no
+-- created_at. The v171 backfill read enrolled_at, threw 42703, rolled back,
+-- and re-threw on every boot. Resolve the source column at runtime instead
+-- of guessing which twin won.
+ALTER TABLE bi_sequence_enrollments ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
 
-UPDATE bi_sequence_enrollments
-   SET created_at = COALESCE(created_at, enrolled_at, NOW())
- WHERE created_at IS NULL;
+DO $$
+DECLARE src text;
+BEGIN
+  SELECT column_name INTO src
+    FROM information_schema.columns
+   WHERE table_schema = 'public'
+     AND table_name  = 'bi_sequence_enrollments'
+     AND column_name IN ('started_at', 'enrolled_at')
+   ORDER BY CASE column_name WHEN 'started_at' THEN 1 ELSE 2 END
+   LIMIT 1;
+  IF src IS NOT NULL THEN
+    EXECUTE format(
+      'UPDATE bi_sequence_enrollments SET created_at = COALESCE(created_at, %I, NOW()) WHERE created_at IS NULL',
+      src);
+  ELSE
+    UPDATE bi_sequence_enrollments SET created_at = NOW() WHERE created_at IS NULL;
+  END IF;
+END $$;
 
-ALTER TABLE bi_sequence_enrollments
-  ALTER COLUMN created_at SET DEFAULT NOW();
+ALTER TABLE bi_sequence_enrollments ALTER COLUMN created_at SET DEFAULT NOW();
