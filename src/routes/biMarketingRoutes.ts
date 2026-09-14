@@ -264,7 +264,14 @@ router.post("/sequences/:id/enroll", async (req, res) => {
           WHERE NOT EXISTS (
             SELECT 1 FROM bi_sequence_enrollments e
              WHERE e.sequence_id = $1 AND e.contact_id = req.id
-               AND e.created_at >= NOW() - interval '1 minute')`,
+               -- BI_SEQ_ENROLL_DIAG_COLUMN_v171 - this read e.created_at, which
+               -- does not exist on the live table. bi_sequence_enrollments is
+               -- created by two migrations, both CREATE TABLE IF NOT EXISTS;
+               -- the v110 one ran first and defines enrolled_at, not created_at
+               -- (the v281 definition with created_at therefore never applied).
+               -- Postgres threw 42703 on every enroll, the diagnostic was lost,
+               -- and the response said only "1 skipped" with no reason.
+               AND e.enrolled_at >= NOW() - interval '1 minute')`,
           [req.params.id, ids],
         );
         skips = diag.rows.map((r) => ({ contact_id: r.id, reason: r.reason }));
