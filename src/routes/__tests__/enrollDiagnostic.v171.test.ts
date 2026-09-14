@@ -20,8 +20,22 @@ describe("BI_SEQ_ENROLL_DIAG_COLUMN_v171", () => {
     expect(sql).not.toMatch(/\be\.created_at\b/);
   });
 
-  it("reads enrolled_at, which the live table does have", () => {
-    expect(route).toContain("e.enrolled_at >= NOW() - interval '1 minute'");
+  // BI_ENROLL_LIVE_COLUMNS_v175 - this asserted the route reads enrolled_at.
+  // It does not, and must not: live-schema.json shows the live table is the
+  // v280 shape, whose timestamp is started_at. v171 swapped one nonexistent
+  // column (created_at) for another (enrolled_at) and left this test pinning
+  // the wrong one. Assert the column the live table actually has, and that
+  // neither dead name survives outside the explanatory comments.
+  it("reads started_at, which is the column the live table has", () => {
+    expect(route).toContain("e.started_at >= NOW() - interval '1 minute'");
+  });
+
+  it("reads neither dead column name in the diagnostic SQL", () => {
+    const diagStart = route.indexOf("bi.marketing.sequences.enroll.skipped");
+    const diag = route.slice(Math.max(0, diagStart - 2500), diagStart);
+    const sql = diag.replace(/--[^\n]*/g, "");
+    expect(sql).not.toMatch(/\be\.created_at\b/);
+    expect(sql).not.toMatch(/\be\.enrolled_at\b/);
   });
 
   it("explains which of the two table definitions actually applied", () => {
@@ -35,8 +49,21 @@ describe("BI_SEQ_ENROLL_DIAG_COLUMN_v171", () => {
     expect(migration.toUpperCase()).not.toContain("TRUNCATE");
   });
 
-  it("backfills from enrolled_at so existing rows are not null", () => {
-    expect(migration).toContain("COALESCE(created_at, enrolled_at, NOW())");
+  // BI_ENROLL_LIVE_COLUMNS_v175 - the migration no longer names a source
+  // column at author time. Hardcoding enrolled_at is what made it throw 42703
+  // and roll back on every boot, so created_at was never actually added.
+  // It now resolves the source from information_schema and backfills from
+  // whichever of the two twins the live table has.
+  it("resolves the backfill source at runtime instead of hardcoding one", () => {
+    expect(migration).toContain("information_schema.columns");
+    expect(migration).toContain("'started_at', 'enrolled_at'");
+    expect(migration).toContain("EXECUTE format(");
+    expect(migration).not.toContain("COALESCE(created_at, enrolled_at, NOW())");
+  });
+
+  it("leaves created_at non-null once the migration has run", () => {
+    expect(migration).toContain("WHERE created_at IS NULL");
+    expect(migration).toContain("ALTER COLUMN created_at SET DEFAULT NOW()");
   });
 
   it("still reports the other skip reasons the enroll can produce", () => {
