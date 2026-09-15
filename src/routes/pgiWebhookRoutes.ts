@@ -64,8 +64,18 @@ router.post("/api/v1/webhooks/pgi", express.raw({ type: "application/json" }), a
     void prev;
   } else if (evt.event === "application.declined") {
     await pool.query(`UPDATE bi_applications SET status='declined', score_reason=$1, updated_at=NOW() WHERE pgi_application_id=$2`, [evt.reason ?? "PGI declined", evt.application_id]);
+    // BI_SERVER_PUSH_DISPATCH_v240
+    void import("../services/push/biPushSender").then((m) => m.notifyBiApplicant({
+      pgiApplicationId: String(evt.application_id ?? ""), kind: "APPLICATION_UPDATE",
+      title: "Application update", body: "There is an update on your application. Open Boreal Risk for details.",
+    }));
   } else if (evt.event === "application.information_required") {
     await pool.query(`UPDATE bi_applications SET status='information_required', updated_at=NOW() WHERE pgi_application_id=$1`, [evt.application_id]);
+    // BI_SERVER_PUSH_DISPATCH_v240
+    void import("../services/push/biPushSender").then((m) => m.notifyBiApplicant({
+      pgiApplicationId: String(evt.application_id ?? ""), kind: "DOCUMENT_REQUEST",
+      title: "More information needed", body: "The carrier needs more information to continue your application.",
+    }));
   } else if (evt.event === "application.approved") {
     // BI_SERVER_BLOCK_v173_PGI_WEBHOOK_BOUND_HANDLER_v1
     // Carrier approved the application but the policy is not yet bound.
@@ -75,6 +85,11 @@ router.post("/api/v1/webhooks/pgi", express.raw({ type: "application/json" }), a
       `UPDATE bi_applications SET status='approved', updated_at=NOW() WHERE pgi_application_id=$1`,
       [evt.application_id]
     );
+    // BI_SERVER_PUSH_DISPATCH_v240
+    void import("../services/push/biPushSender").then((m) => m.notifyBiApplicant({
+      pgiApplicationId: String(evt.application_id ?? ""), kind: "APPLICATION_UPDATE",
+      title: "Your application was approved", body: "Open Boreal Risk to see the next steps.",
+    }));
   } else if (evt.event === "policy.bound" || evt.event === "policy.issued") {
     // BI_SERVER_BLOCK_v173_PGI_WEBHOOK_BOUND_HANDLER_v1
     // Carrier bound the policy — actual approval signal per v62 spec.

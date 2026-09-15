@@ -372,6 +372,15 @@ router.post("/:id/reject", requireAuth, requireStaffOrAdmin, async (req, res) =>
     ]
   );
 
+  // BI_SERVER_PUSH_DISPATCH_v240 - actionable push alongside the SMS.
+  void import("../services/push/biPushSender").then((m) => m.notifyBiApplicant({
+    applicationId: doc.application_id,
+    kind: "DOCUMENT_REQUEST",
+    title: "Document needed",
+    body: `Please upload a new ${String(doc.doc_type ?? "document").replace(/_/g, " ")}. ${reason.trim()}`.trim(),
+    dedupeKey: String(id),
+  }));
+
   if (doc.contact_phone) {
     const portalBase = process.env.APPLICANT_PORTAL_URL || "https://borealinsurance.ca";
     const link = `${portalBase}/application/documents?app=${doc.application_id}`;

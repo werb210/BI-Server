@@ -337,6 +337,15 @@ async function rejectDocumentLogic(req: Request, res: Response, idParam: string,
       [appId, userId, `Document rejected: ${doc.doc_type}`, JSON.stringify({ docId, reason })],
     );
 
+    // BI_SERVER_PUSH_DISPATCH_v240
+    void import("../services/push/biPushSender").then((m) => m.notifyBiApplicant({
+      applicationId: appId,
+      kind: "DOCUMENT_REQUEST",
+      title: "Document needed",
+      body: `Please upload a new ${String(doc.doc_type ?? "document").replace(/_/g, " ")}.`,
+      dedupeKey: String(docId),
+    }));
+
     res.json({ success: true });
   } catch (err) {
     logger.error({ err, appId, docId }, "bi.applications.documents.reject.failed");
