@@ -9,6 +9,22 @@ import { projectAnswersToData } from "../services/applicationPayload";
 
 const router = Router();
 
+// BI_APPLICANT_ACTION_CENTER_v199
+// GET /action-center/:applicationId - one outstanding-work list for the applicant
+// home screen. Uses the same public_id lookup and guard as the other applicant
+// routes on this router.
+router.get("/action-center/:applicationId", authApplicant, async (req: ApplicantReq, res) => {
+  const publicId = String(req.params.applicationId ?? "").trim();
+  if (!publicId) return res.status(400).json({ error: "application_id_required" });
+
+  const { app, error } = await ownedApplication(publicId, String(req.applicantPhone));
+  if (error) return res.status(error === "not_found" ? 404 : 403).json({ error });
+
+  const { buildBiActionCenter } = await import("../services/biApplicantActions");
+  const data = await buildBiActionCenter(String(app.id));
+  return res.json({ applicationId: app.public_id, ...data });
+});
+
 const COUNTRIES = new Set(["CA", "US"]);
 function normCountry(raw: unknown): "CA" | "US" {
   const v = String(raw ?? "").trim().toUpperCase();
