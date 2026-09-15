@@ -29,6 +29,7 @@ import biOutreachCrmRoutes from "./routes/biOutreachCrmRoutes";
 import biAuthRoutes, { biAppApplicantRoutes } from "./routes/biAuthRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
+import biContactAnalyticsRoutes from "./routes/biContactAnalyticsRoutes"; // BI_SERVER_CONTACT_ANALYTICS_v271
 import biCompaniesFromBfRoutes from "./routes/biCompaniesFromBfRoutes"; // BI_SERVER_BLOCK_v418_COMPANIES_BY_IDS_FROM_BF
 import biMarketingRoutes from "./routes/biMarketingRoutes";
 import biMarketingEmailRoutes from "./routes/biMarketingEmailRoutes";
@@ -386,6 +387,7 @@ app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
 // BF-portal calls /api/v1/bi/crm/contacts and friends; mount at /api/v1/bi
 // so the absolute URL matches the router's path.
 app.use("/api/v1/bi", requireAuth, biCrmRoutes);
+app.use("/api/v1/bi", requireAuth, biContactAnalyticsRoutes); // BI_SERVER_CONTACT_ANALYTICS_v271
 // BI_EMAIL_ASSET_UPLOAD_v1 - email clients fetch image assets without bearer authentication.
 // BI_SERVER_BLOCK_BI_ROUND8_MARKETING_v1
 app.use("/api/v1/bi/marketing", requireAuth, biMarketingEmailAssetUploadRouter);
