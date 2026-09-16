@@ -44,4 +44,25 @@ router.get("/applicants/me/pending-application", authApplicant, async (req: Appl
     phone: req.applicantPhone,
   });
 });
+// BI_SERVER_APPLICANT_PROGRESS_v279 - where the applicant's latest application stands.
+router.get("/applicants/me/progress", authApplicant, async (req: ApplicantReq, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT public_id, stage::text AS stage, status, updated_at
+         FROM bi_applications
+        WHERE (applicant_phone_e164 = $1 OR guarantor_phone = $1)
+          AND created_at >= NOW() - INTERVAL '365 days'
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [req.applicantPhone],
+    );
+    if (!r.rows[0]) return res.json({ progress: null });
+    const { buildApplicantProgress } = await import("../services/biApplicantProgress");
+    return res.json({ progress: buildApplicantProgress(r.rows[0]) });
+  } catch (err) {
+    console.error("[applicant-progress] failed", err instanceof Error ? err.message : err);
+    return res.status(500).json({ error: "progress_failed" });
+  }
+});
+
 export default router;
