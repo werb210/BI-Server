@@ -49,3 +49,10 @@ describe("applicant Face ID sign-in", () => {
     expect(readFileSync("src/server.ts", "utf-8")).toContain('app.use("/api/v1", biCors, biApplicantDeviceSignInRoutes);');
   });
 });
+
+// BI_SERVER_DEVICE_SIGN_IN_KEYGEN_v305
+describe("device sign-in rate limit", () => {
+  it("keys by client address with the Azure ip:port handled", () => {
+    expect(readFileSync("src/routes/biApplicantDeviceSignInRoutes.ts", "utf-8")).toContain("keyGenerator: rateLimitKeyFromRequest");
+  });
+});

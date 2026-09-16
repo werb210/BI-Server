@@ -1,6 +1,7 @@
 // BI_SERVER_APPLICANT_FACE_ID_v300
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
+import { rateLimitKeyFromRequest } from "../middleware/rateLimitKey"; // BI_SERVER_DEVICE_SIGN_IN_KEYGEN_v305
 import { pool } from "../db";
 import { env } from "../platform/env";
 import { authApplicant, type ApplicantReq } from "./applicantAuth";
@@ -8,7 +9,7 @@ import { enrollApplicantDevice, revokeApplicantDevices, signInApplicantDevice } 
 
 const router = Router();
 const q = (sql: string, params: unknown[]) => pool.query(sql, params as any[]);
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: "rate_limited" }, validate: { xForwardedForHeader: false, trustProxy: false } });
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: "rate_limited" }, keyGenerator: rateLimitKeyFromRequest, validate: { xForwardedForHeader: false, trustProxy: false } });
 
 router.post("/applicants/device-sign-in/enroll", authApplicant, async (req: ApplicantReq, res) => {
   try {
