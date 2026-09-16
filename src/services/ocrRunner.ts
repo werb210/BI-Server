@@ -6,6 +6,7 @@
 // rejections, errors are persisted onto the row's ocr_error column.
 import { pool } from "../db";
 import { extractText } from "./ocrService";
+import { classifyBiDocument } from "./biDocumentClassifier"; // BI_SERVER_DOC_CLASSIFICATION_v276
 
 export async function runOcrForDocument(
   docId: string,
@@ -27,6 +28,15 @@ export async function runOcrForDocument(
        WHERE id=$1`,
       [docId, result.status, result.extractedText, result.error ?? null]
     );
+    // BI_SERVER_DOC_CLASSIFICATION_v276 - record what the text looks like (advisory).
+    if (result.extractedText) {
+      const slot = await pool.query(`SELECT COALESCE(doc_slot, doc_type::text) AS slot FROM bi_documents WHERE id=$1`, [docId]);
+      const c = classifyBiDocument(result.extractedText, slot.rows[0]?.slot ?? null);
+      await pool.query(
+        `UPDATE bi_documents SET detected_type=$2, detected_confidence=$3, detected_mismatch=$4 WHERE id=$1`,
+        [docId, c.detectedType, c.confidence, c.mismatch],
+      );
+    }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     await pool.query(
