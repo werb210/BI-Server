@@ -2,6 +2,7 @@ import { Router } from "express";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { pool } from "../db";
+import { passesScoreGate, withDateOnlyFields } from "../services/biPublicFormGates"; // BI_SERVER_BF_REFERRAL_FORM_v283
 import { env } from "../platform/env";
 import { pgiScore } from "../services/pgiAdapter";
 import { generatePublicId } from "../util/publicId";
@@ -307,13 +308,13 @@ router.post("/applications/score", async (req, res) => {
 router.get("/applications/:publicId", async (req, res) => {
   const r = await pool.query(`SELECT * FROM bi_applications WHERE public_id=$1`, [req.params.publicId]);
   if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
-  return res.json({ application: r.rows[0] });
+  return res.json({ application: withDateOnlyFields(r.rows[0]) }); // v283
 });
 
 router.patch("/applications/:publicId", async (req, res) => {
-  const r = await pool.query(`SELECT id, score_decision FROM bi_applications WHERE public_id=$1`, [req.params.publicId]);
+  const r = await pool.query(`SELECT id, score_decision, source FROM bi_applications WHERE public_id=$1`, [req.params.publicId]);
   if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
-  if (r.rows[0].score_decision !== "approve") return res.status(403).json({ error: "score_not_approved" });
+  if (!passesScoreGate(r.rows[0])) return res.status(403).json({ error: "score_not_approved" }); // v283
 
   const b = req.body ?? {};
   // BI_SERVER_BLOCK_v360_REFERRER_ATTRIBUTION_v1
@@ -528,7 +529,7 @@ router.post("/applications/:publicId/submit", async (req, res) => {
   const r = await pool.query(`SELECT * FROM bi_applications WHERE public_id=$1`, [req.params.publicId]);
   const app = r.rows[0];
   if (!app) return res.status(404).json({ error: "not_found" });
-  if (app.score_decision !== "approve") return res.status(403).json({ error: "score_not_approved" });
+  if (!passesScoreGate(app)) return res.status(403).json({ error: "score_not_approved" }); // v283
   if (app.score_stale) return res.status(409).json({ error: "score_stale", remediation: "re_run_score" });
 
   // BI_SERVER_BLOCK_v184_PUBLIC_STATUS_GUARDS_v1
@@ -659,11 +660,11 @@ const publicDocUpload_v66 = multer({
 
 router.post("/applications/:publicId/documents", publicDocUpload_v66.array("files"), async (req, res) => {
   const r = await pool.query(
-    `SELECT id, score_decision, status FROM bi_applications WHERE public_id=$1`,
+    `SELECT id, score_decision, status, source FROM bi_applications WHERE public_id=$1`,
     [req.params.publicId],
   );
   if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
-  if (r.rows[0].score_decision !== "approve") return res.status(403).json({ error: "score_not_approved" });
+  if (!passesScoreGate(r.rows[0])) return res.status(403).json({ error: "score_not_approved" }); // v283
 
   // BI_SERVER_BLOCK_v184_PUBLIC_STATUS_GUARDS_v1
   // Status guard. Uploads belong while the row is in_progress (between
