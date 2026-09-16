@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { classifyBiDocument, labelForDetectedType } from "../services/biDocumentClassifier"; // BI_SERVER_DOC_CLASSIFICATION_v276
 import { pool } from "../db";
 import { submitApplicationToPGI, assertDocsReadyForCarrier, forwardAcceptedDocsToCarrier } from "../services/biPgiSubmissionService";
 import { badRequest, ok } from "../utils/apiResponse";
@@ -302,13 +303,28 @@ router.get("/applications/:id/documents", async (req, res) => {
             doc_slot,
             period_end,
             COALESCE(review_status, 'pending') AS status,
-            ocr_status::text AS ocr_status
+            ocr_status::text AS ocr_status,
+            detected_type, detected_confidence, detected_mismatch,
+            CASE WHEN detected_type IS NULL AND extracted_text IS NOT NULL THEN LEFT(extracted_text, 20000) END AS unclassified_text
      FROM bi_documents
      WHERE application_id=$1
        AND purged_at IS NULL
      ORDER BY created_at DESC`,
     [id]
   );
+
+  // BI_SERVER_DOC_CLASSIFICATION_v276 - classify documents OCR'd before v276, once.
+  for (const row of result.rows) {
+    if (row.detected_type || !row.unclassified_text) continue;
+    const c = classifyBiDocument(row.unclassified_text, row.doc_slot ?? row.doc_type);
+    row.detected_type = c.detectedType;
+    row.detected_confidence = c.confidence;
+    row.detected_mismatch = c.mismatch;
+    await pool.query(
+      `UPDATE bi_documents SET detected_type=$2, detected_confidence=$3, detected_mismatch=$4 WHERE id=$1`,
+      [row.id, c.detectedType, c.confidence, c.mismatch],
+    ).catch((err: unknown) => console.error("[bi-docs] classification save failed", row.id, err instanceof Error ? err.message : err));
+  }
 
   const documents = result.rows.map((row) => ({
     id: row.id,
@@ -320,6 +336,9 @@ router.get("/applications/:id/documents", async (req, res) => {
     period_end: row.period_end,
     status: row.status,
     ocr_status: row.ocr_status,
+    detected_label: labelForDetectedType(row.detected_type), // v276
+    detected_confidence: row.detected_confidence === null || row.detected_confidence === undefined ? null : Number(row.detected_confidence),
+    looks_misfiled: row.detected_mismatch === true,
   }));
 
   return ok(res, { documents });
