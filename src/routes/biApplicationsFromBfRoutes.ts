@@ -5,6 +5,7 @@
 // shared JWT_SECRET (decision A1, no new env var). On success returns
 // a completion_url that BF puts into the client mini-portal messenger.
 import express, { type Request, type Response } from "express";
+import { normalizeE164 } from "../util/phoneE164"; // BI_SERVER_BF_PHONE_v282
 import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 import { pool } from "../db";
@@ -101,7 +102,8 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
 
   const guarantorName = s(b.guarantor_name);
   const guarantorEmail = s(b.guarantor_email);
-  const guarantorPhone = s(b.guarantor_phone);
+  // BI_SERVER_BF_PHONE_v282 - store the phone the applicant will sign in with.
+  const guarantorPhone = normalizeE164(s(b.guarantor_phone) ?? "") ?? s(b.guarantor_phone);
   const businessName = s(b.business_name);
   const lenderName = s(b.lender_name);
   const loanAmount = num(b.loan_amount);
