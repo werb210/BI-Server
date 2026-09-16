@@ -83,10 +83,32 @@ router.post("/sequences", async (req: Request, res) => {
         await client.query("ROLLBACK");
         return badRequest(res, `step ${i}: invalid type`);
       }
+      // BI_SERVER_SEQUENCE_TEMPLATES_v284 - the portal's sequence canvas sends email
+      // steps as { template_id } with no subject or body. That id was dropped, so
+      // every email step was saved empty and the worker sent blank emails. Copy the
+      // template's subject and body onto the step, and refuse an email step that
+      // would still be empty.
+      let stepSubject: string | null = s.subject ?? null;
+      let stepBody: string | null = s.body ?? null;
+      if (s.type === "email" && s.template_id && (!stepSubject || !stepBody)) {
+        const t = await client.query(
+          `SELECT subject, body_html, body_text FROM bi_email_templates WHERE id::text = $1 LIMIT 1`,
+          [String(s.template_id)],
+        );
+        const tpl = t.rows[0];
+        if (tpl) {
+          stepSubject = stepSubject || tpl.subject || null;
+          stepBody = stepBody || tpl.body_html || tpl.body_text || null;
+        }
+      }
+      if (s.type === "email" && (!stepSubject || !stepBody)) {
+        await client.query("ROLLBACK");
+        return badRequest(res, `step ${i + 1}: choose an email template (or give a subject and body)`);
+      }
       await client.query(
         `INSERT INTO bi_sequence_steps (sequence_id, position, type, delay_seconds, subject, body, variant, conditions, assignee_user_id)
               VALUES ($1, $2, $3, COALESCE($4,0), $5, $6, COALESCE($7,'A'), COALESCE($8,'{}'::jsonb), $9)`,
-        [seq.id, i, s.type, s.delay_seconds, s.subject ?? null, s.body ?? null, s.variant ?? null, JSON.stringify(s.conditions ?? {}), s.assignee_user_id ?? null],
+        [seq.id, i, s.type, s.delay_seconds, stepSubject, stepBody, s.variant ?? null, JSON.stringify({ ...(s.conditions ?? {}), ...(s.template_id ? { template_id: s.template_id } : {}) }), s.assignee_user_id ?? null],
       );
     }
     await client.query("COMMIT");
