@@ -112,6 +112,15 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
   const annualRevenue = num(b.annual_revenue);
   const collateralValue = num(b.collateral_value);
 
+  // BI_SERVER_BF_REFERRAL_FIELDS_v361 - the completion form pre-fills from these
+  // columns. Country, website, business number and the guarantor phone were
+  // either never received or kept only inside data, so the applicant saw blanks,
+  // a US business was treated as Canadian, and submit required re-entry.
+  const rawCountry = String(s(b.country) ?? "").toUpperCase();
+  const country = rawCountry === "US" || rawCountry === "CA" ? rawCountry : null;
+  const businessWebsite = s(b.business_website);
+  const businessNumber = s(b.business_number);
+
   const naicsCode = s(b.naics_code);
   const naicsConfidence = b.naics_confidence === true || b.naics_confidence === "true" ? true
     : b.naics_confidence === false || b.naics_confidence === "false" ? false
@@ -129,7 +138,9 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
     business_name: businessName,
     business_address: s(b.business_address),
     entity_type: s(b.entity_type),
-    business_number: s(b.business_number),
+    business_number: businessNumber,
+    country, // v361
+    business_website: businessWebsite, // v361
     naics_code: naicsCode,
     naics_confidence: naicsConfidence,
     formation_date: s(b.formation_date),
@@ -153,6 +164,7 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
           loan_amount, pgi_limit, annual_revenue, collateral_value,
           naics_code, naics_confidence,
           entity_type, guarantor_dob, guarantor_address, business_address, loan_purpose, formation_date,
+          country, business_website, business_number, guarantor_phone,
           data,
           created_at, updated_at)
        VALUES ($1,$2,$3,
@@ -160,6 +172,7 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
                $4,
                $5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
                $16,$17,$18,$19,$20,$21,
+               COALESCE($23::text, 'CA'), $24, $25, $26,
                $22::jsonb, NOW(), NOW())`,
       [
         id, publicId, applicationCode,
@@ -172,6 +185,7 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
         // (these were previously stored only inside `data`).
         s(b.entity_type), s(b.guarantor_dob), s(b.guarantor_address), s(b.business_address), s(b.loan_purpose), s(b.formation_date),
         JSON.stringify(formData),
+        country, businessWebsite, businessNumber, guarantorPhone, // v361
       ],
     );
   } catch (e: any) {
