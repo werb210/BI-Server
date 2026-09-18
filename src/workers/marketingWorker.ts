@@ -167,6 +167,13 @@ async function createTask(
 }
 
 async function recordEvent(enrollmentId: string, stepId: string | null, eventType: string, channel: string | null, senderId: string | null, metadata: Record<string, unknown>): Promise<void> {
+  // BI_SERVER_SEQUENCE_SEND_LOGS_v354 - a failed send used to be written only to
+  // bi_sequence_events, so a sequence could run end to end sending nothing while
+  // the log stream stayed silent. Every outcome is now logged with its reason.
+  // The metadata never carries message bodies, phone numbers or email addresses.
+  const logFields = { enrollmentId, stepId, channel, ...metadata };
+  if (eventType === "failed") logger.warn(logFields, "marketing.worker.send.failed");
+  else logger.info(logFields, `marketing.worker.send.${eventType}`);
   await pool.query(
     `INSERT INTO bi_sequence_events (enrollment_id, step_id, event_type, channel, sender_id, metadata)
           VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
@@ -285,6 +292,7 @@ async function tick(): Promise<void> {
   running = true;
   try {
     const due = await pickDue(50);
+    if (due.length > 0) logger.info({ due: due.length }, "marketing.worker.tick.due");
     for (const enr of due) {
       try { await processOne(enr); } catch (err) { logger.error({ err, enrollmentId: enr.id }, "marketing.worker.step.failed"); }
     }
