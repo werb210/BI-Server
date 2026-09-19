@@ -124,6 +124,7 @@ router.post("/applicants/contract/upload", authApplicant, upload.single("file"),
     `SELECT id, public_id, country FROM bi_applications
       WHERE (applicant_phone_e164 = $1 OR guarantor_phone = $1)
         AND status IN ('created','in_progress')
+        AND COALESCE(source, '') <> 'bf_pgi_referral' -- BI_SERVER_CLIENT_APP_ISOLATION_v362
       ORDER BY created_at DESC LIMIT 1`,
     [phone],
   );
@@ -146,6 +147,20 @@ router.post("/applicants/contract/upload", authApplicant, upload.single("file"),
       [appId, publicId, appCountry, phone],
     );
   }
+
+  // BI_SERVER_CONTRACT_REUPLOAD_v362 - a second contract on the same application hit
+  // idx_bi_documents_app_doctype_unique ("That upload did not go through"). A new
+  // contract replaces the old one: retire the old file and what was read from it.
+  await pool.query(
+    `UPDATE bi_documents SET purged_at = NOW()
+      WHERE application_id = $1 AND doc_type = 'subcontract_agreement' AND purged_at IS NULL`,
+    [appId],
+  );
+  await pool.query(`DELETE FROM bi_contract_requirements WHERE application_id = $1`, [appId]);
+  await pool.query(
+    `DELETE FROM bi_application_products WHERE application_id = $1 AND source = 'contract'`,
+    [appId],
+  );
 
   const stored = await getStorage().put({
     buffer: file.buffer,
