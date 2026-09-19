@@ -25,6 +25,7 @@ async function ownedApplication(publicIdOrId: string, phone: string) {
          FROM bi_applications
         WHERE (applicant_phone_e164 = $1 OR guarantor_phone = $1)
           AND status IN ('created','in_progress')
+          AND COALESCE(source, '') <> 'bf_pgi_referral' -- BI_SERVER_CLIENT_APP_ISOLATION_v362
         ORDER BY created_at DESC LIMIT 1`,
       [phone],
     );

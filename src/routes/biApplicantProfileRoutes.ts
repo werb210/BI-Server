@@ -50,8 +50,11 @@ router.post("/applicants/profile", authApplicant, async (req: ApplicantReq, res)
     `SELECT id, public_id FROM bi_applications
       WHERE (applicant_phone_e164 = $1 OR guarantor_phone = $1)
         AND status IN ('created','in_progress')
+        -- BI_SERVER_CLIENT_APP_ISOLATION_v362 - same business, never a BF referral.
+        AND COALESCE(source, '') <> 'bf_pgi_referral'
+        AND lower(trim(COALESCE(data->>'businessName', business_name, ''))) = lower(trim($2))
       ORDER BY created_at DESC LIMIT 1`,
-    [phone],
+    [phone, businessName],
   );
 
   let appId: string;
