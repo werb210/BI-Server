@@ -1,6 +1,7 @@
 import { pool } from "../db";
 import { logger } from "../platform/logger";
 import { isSendableAt, nextSendableAt, scheduleFromNow, type SendWindow } from "../services/sequenceSchedule";
+import { resolveEmailContent } from "../services/sequenceEmailContent"; // BI_SEQ_EMAIL_TEMPLATE_AT_SEND_v373
 import { backendTokenProblem, RETRY_DELAY_MINUTES, shouldRetrySend } from "../services/backendToken"; // BI_SERVER_BACKEND_TOKEN_CHECK_v372
 
 const TICK_MS = 60_000;
@@ -171,6 +172,15 @@ async function createTask(
   }
 }
 
+async function loadEmailTemplate(templateId: string): Promise<{ subject: string | null; body: string | null } | null> {
+  const r = await pool.query<{ subject: string | null; body: string | null }>(
+    `SELECT subject, COALESCE(NULLIF(body_html, ''), body_text) AS body
+       FROM bi_email_templates WHERE id::text = $1 LIMIT 1`,
+    [templateId],
+  );
+  return r.rows[0] ?? null;
+}
+
 async function recordEvent(enrollmentId: string, stepId: string | null, eventType: string, channel: string | null, senderId: string | null, metadata: Record<string, unknown>): Promise<void> {
   // BI_SERVER_SEQUENCE_SEND_LOGS_v354 - a failed send used to be written only to
   // bi_sequence_events, so a sequence could run end to end sending nothing while
@@ -240,7 +250,15 @@ async function processOne(enr: Enrollment): Promise<void> {
       await advanceStep(enr.id, enr.current_step + 1);
       return;
     }
-    const result = await sendEmail(enr.contact_email, step.subject ?? "", step.body ?? "", sender);
+    // BI_SEQ_EMAIL_TEMPLATE_AT_SEND_v373 - fill a blank subject/body from the
+    // step's template; a step with no content cannot succeed, so report it once.
+    const content = await resolveEmailContent(step, loadEmailTemplate);
+    if (!content) {
+      await recordEvent(enr.id, step.id, "failed", "email", sender, { reason: "empty_email_step" });
+      await advanceStep(enr.id, enr.current_step + 1);
+      return;
+    }
+    const result = await sendEmail(enr.contact_email, content.subject, content.body, sender);
     if (result.ok) await recordEvent(enr.id, step.id, "sent", "email", sender, { messageId: result.messageId });
     else { await recordEvent(enr.id, step.id, "failed", "email", sender, { error: result.error }); failedSend = true; }
   } else if (step.type === "task") {

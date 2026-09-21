@@ -9,6 +9,7 @@
 // depend silently on mount order.
 import { Router } from "express";
 import { pool } from "../db";
+import { resolveEmailContent } from "../services/sequenceEmailContent"; // BI_SEQ_EMAIL_TEMPLATE_AT_SEND_v373
 import { handleGraphReplyWebhook } from "../integrations/microsoftGraphSubscriptions";
 
 const router = Router();
@@ -30,6 +31,23 @@ const positionFrom = (body: any) => body?.position ?? body?.step_number ?? null;
 const bodyTextFrom = (body: any) => body?.body ?? body?.body_template ?? null;
 const assigneeFrom = (body: any) => body?.assignee_user_id ?? body?.send_as_user_id ?? null;
 
+// BI_SEQ_EMAIL_TEMPLATE_AT_SEND_v373 - a step saved from a template carries
+// template_id and no subject/body; copy the template in so the step is not blank.
+async function contentFrom(body: any): Promise<{ subject: string | null; body: string | null }> {
+  const subject = body?.subject ?? null;
+  const text = bodyTextFrom(body);
+  const templateId = body?.template_id ? String(body.template_id) : null;
+  if (!templateId || (subject && text)) return { subject, body: text };
+  const filled = await resolveEmailContent({ subject, body: text }, async (id) => {
+    const t = await pool.query(
+      `SELECT subject, COALESCE(NULLIF(body_html, ''), body_text) AS body FROM bi_email_templates WHERE id::text = $1 LIMIT 1`,
+      [id],
+    );
+    return t.rows[0] ?? null;
+  }, templateId);
+  return filled ? { subject: filled.subject, body: filled.body } : { subject, body: text };
+}
+
 router.get("/sequences/:id/steps", async (req, res) => {
   try {
     const r = await pool.query(
@@ -49,6 +67,7 @@ router.get("/sequences/:id/steps", async (req, res) => {
 
 router.post("/sequences/:id/steps", async (req, res) => {
   try {
+    const content = await contentFrom(req.body);
     const r = await pool.query(
       `INSERT INTO bi_sequence_steps
          (sequence_id, position, type, delay_seconds, subject, body, assignee_user_id)
@@ -61,8 +80,8 @@ router.post("/sequences/:id/steps", async (req, res) => {
         positionFrom(req.body),
         req.body?.type ?? null,
         delaySecondsFrom(req.body),
-        req.body?.subject ?? null,
-        bodyTextFrom(req.body),
+        content.subject,
+        content.body,
         assigneeFrom(req.body),
       ],
     );
@@ -75,6 +94,7 @@ router.post("/sequences/:id/steps", async (req, res) => {
 
 router.patch("/sequences/:id/steps/:stepId", async (req, res) => {
   try {
+    const content = await contentFrom(req.body);
     const r = await pool.query(
       `UPDATE bi_sequence_steps
           SET position         = COALESCE($2, position),
@@ -88,8 +108,8 @@ router.patch("/sequences/:id/steps/:stepId", async (req, res) => {
         req.params.stepId,
         positionFrom(req.body),
         delaySecondsFrom(req.body),
-        req.body?.subject ?? null,
-        bodyTextFrom(req.body),
+        content.subject,
+        content.body,
         assigneeFrom(req.body),
         req.params.id,
       ],
