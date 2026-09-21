@@ -594,8 +594,35 @@ router.get("/:id/co-guarantors", requireStaffOrAdmin, async (req: Request, res: 
         ORDER BY created_at ASC`,
       [appId],
     );
+    // BI_SERVER_BF_CO_APPLICANT_v391 - a BF co-applicant whose details were not
+    // complete enough for bi_co_guarantors is kept on data.co_guarantors; list it
+    // too (unless the same person is already a row) so staff see who it is.
+    const pendingRes = await pool.query<{ pending: unknown }>(
+      `SELECT data->'co_guarantors' AS pending FROM bi_applications WHERE id = $1`,
+      [appId],
+    ).catch(() => ({ rows: [] as Array<{ pending: unknown }> }));
+    const pendingRaw = pendingRes.rows[0]?.pending;
+    const known = new Set(rows.rows.map((r) => `${(r.first_name ?? "").toLowerCase()}|${(r.last_name ?? "").toLowerCase()}`));
+    const pending = (Array.isArray(pendingRaw) ? pendingRaw : [])
+      .filter((g: any) => g && typeof g === "object")
+      .filter((g: any) => !known.has(`${String(g.first_name ?? "").toLowerCase()}|${String(g.last_name ?? "").toLowerCase()}`))
+      .map((g: any, i: number) => ({
+        id: `bf-${i}`,
+        first_name: g.first_name ?? "",
+        last_name: g.last_name ?? "",
+        full_name: [g.first_name, g.last_name].filter(Boolean).join(" "),
+        email: g.email ?? null,
+        date_of_birth: g.date_of_birth ?? null,
+        phone: g.phone ?? null,
+        address: g.address ?? null,
+        city: g.city ?? null,
+        province: g.province ?? null,
+        postal_code: g.postal_code ?? null,
+        relationship: `${g.relationship ?? "Co-applicant"} (from Boreal Financial, details incomplete)`,
+        created_at: null,
+      }));
     return res.json({
-      co_guarantors: rows.rows.map((r) => ({
+      co_guarantors: [...rows.rows.map((r) => ({
         id: r.id,
         first_name: r.first_name ?? "",
         last_name: r.last_name ?? "",
@@ -609,7 +636,7 @@ router.get("/:id/co-guarantors", requireStaffOrAdmin, async (req: Request, res: 
         postal_code: r.postal_code,
         relationship: r.relationship ?? "Guarantor",
         created_at: r.created_at,
-      })),
+      })), ...pending],
     });
   } catch (err) {
     logger.error({ err, appId }, "bi.applications.co_guarantors.list_failed");
