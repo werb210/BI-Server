@@ -1,6 +1,7 @@
 import { pool } from "../db";
 import { logger } from "../platform/logger";
 import { isSendableAt, nextSendableAt, scheduleFromNow, type SendWindow } from "../services/sequenceSchedule";
+import { backendTokenProblem, RETRY_DELAY_MINUTES, shouldRetrySend } from "../services/backendToken"; // BI_SERVER_BACKEND_TOKEN_CHECK_v372
 
 const TICK_MS = 60_000;
 
@@ -42,7 +43,8 @@ type Enrollment = {
 const BF_SERVER_URL = process.env.BF_SERVER_URL || "https://server.boreal.financial";
 // BACKEND_SERVICE_TOKEN is shared with BF-Server's service bridge. Keep the
 // legacy name as a transition fallback for existing App Service deployments.
-const BACKEND_SERVICE_TOKEN = process.env.BACKEND_SERVICE_TOKEN || process.env.BI_BACKEND_TOKEN || "";
+const BACKEND_SERVICE_TOKEN = (process.env.BACKEND_SERVICE_TOKEN || process.env.BI_BACKEND_TOKEN || "").trim();
+const TOKEN_PROBLEM = backendTokenProblem(BACKEND_SERVICE_TOKEN);
 
 async function pickDue(limit: number): Promise<Enrollment[]> {
   const r = await pool.query<Enrollment>(
@@ -101,6 +103,7 @@ function sendWindow(seq: Sequence): SendWindow {
 }
 
 async function sendSms(toPhone: string, body: string, sender: string | null): Promise<{ ok: boolean; sid?: string; error?: string }> {
+  if (TOKEN_PROBLEM) return { ok: false, error: TOKEN_PROBLEM };
   try {
     const r = await fetch(`${BF_SERVER_URL}/api/service/sms`, {
       method: "POST",
@@ -120,6 +123,7 @@ async function sendSms(toPhone: string, body: string, sender: string | null): Pr
 }
 
 async function sendEmail(toEmail: string, subject: string, body: string, sender: string | null): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+  if (TOKEN_PROBLEM) return { ok: false, error: TOKEN_PROBLEM };
   try {
     const r = await fetch(`${BF_SERVER_URL}/api/service/mail`, {
       method: "POST",
@@ -143,6 +147,7 @@ async function createTask(
   title: string,
   description: string,
 ): Promise<{ ok: boolean; taskId?: string; error?: string }> {
+  if (TOKEN_PROBLEM) return { ok: false, error: TOKEN_PROBLEM };
   try {
     const r = await fetch(`${BF_SERVER_URL}/api/service/tasks`, {
       method: "POST",
@@ -214,6 +219,11 @@ async function processOne(enr: Enrollment): Promise<void> {
   }
 
   const sender = seq.sender_rotation.length > 0 ? seq.sender_rotation[enr.current_step % seq.sender_rotation.length] : null;
+  // BI_SEQ_SEND_RETRY_v372 - a failed send used to advance to the next step
+  // exactly like a successful one. With a bad token, a whole sequence ran to
+  // "completed" in three minutes having sent nothing. Retry the same step
+  // instead, and only move on after MAX_SEND_ATTEMPTS failures.
+  let failedSend = false;
 
   if (step.type === "sms") {
     if (!enr.contact_phone) {
@@ -223,7 +233,7 @@ async function processOne(enr: Enrollment): Promise<void> {
     }
     const result = await sendSms(enr.contact_phone, step.body ?? "", sender);
     if (result.ok) await recordEvent(enr.id, step.id, "sent", "sms", sender, { sid: result.sid });
-    else await recordEvent(enr.id, step.id, "failed", "sms", sender, { error: result.error });
+    else { await recordEvent(enr.id, step.id, "failed", "sms", sender, { error: result.error }); failedSend = true; }
   } else if (step.type === "email") {
     if (!enr.contact_email) {
       await recordEvent(enr.id, step.id, "failed", "email", sender, { reason: "no_email" });
@@ -232,7 +242,7 @@ async function processOne(enr: Enrollment): Promise<void> {
     }
     const result = await sendEmail(enr.contact_email, step.subject ?? "", step.body ?? "", sender);
     if (result.ok) await recordEvent(enr.id, step.id, "sent", "email", sender, { messageId: result.messageId });
-    else await recordEvent(enr.id, step.id, "failed", "email", sender, { error: result.error });
+    else { await recordEvent(enr.id, step.id, "failed", "email", sender, { error: result.error }); failedSend = true; }
   } else if (step.type === "task") {
     if (!step.assignee_user_id) {
       await recordEvent(enr.id, step.id, "failed", null, null, { reason: "no_assignee" });
@@ -246,12 +256,41 @@ async function processOne(enr: Enrollment): Promise<void> {
         await recordEvent(enr.id, step.id, "sent", null, step.assignee_user_id, { task_id: result.taskId });
       } else {
         await recordEvent(enr.id, step.id, "failed", null, step.assignee_user_id, { error: result.error });
+        failedSend = true;
       }
     }
   } else if (step.type === "wait") {
     await recordEvent(enr.id, step.id, "sent", null, null, { wait_seconds: step.delay_seconds });
   }
 
+  if (failedSend) {
+    await retryOrAdvance(enr, step.id);
+    return;
+  }
+  await advanceStep(enr.id, enr.current_step + 1);
+}
+
+// BI_SEQ_SEND_RETRY_v372 - failures are counted per step since this enrollment
+// (re)started, so a restarted sequence gets fresh attempts.
+async function retryOrAdvance(enr: Enrollment, stepId: string): Promise<void> {
+  const r = await pool.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n
+       FROM bi_sequence_events ev
+       JOIN bi_sequence_enrollments e ON e.id = ev.enrollment_id
+      WHERE ev.enrollment_id = $1 AND ev.step_id = $2
+        AND ev.event_type = 'failed' AND ev.created_at >= e.started_at`,
+    [enr.id, stepId],
+  );
+  const failures = Number(r.rows[0]?.n ?? 0);
+  if (shouldRetrySend(failures)) {
+    logger.warn({ enrollmentId: enr.id, stepId, failures }, "marketing.worker.send.retry_scheduled");
+    await pool.query(
+      `UPDATE bi_sequence_enrollments SET next_step_at = NOW() + ($2 || ' minutes')::interval WHERE id = $1`,
+      [enr.id, String(RETRY_DELAY_MINUTES)],
+    );
+    return;
+  }
+  logger.warn({ enrollmentId: enr.id, stepId, failures }, "marketing.worker.send.gave_up");
   await advanceStep(enr.id, enr.current_step + 1);
 }
 
@@ -307,6 +346,7 @@ let timer: NodeJS.Timeout | null = null;
 export function startMarketingWorker(): void {
   if (timer) return;
   logger.info("marketing.worker.starting");
+  if (TOKEN_PROBLEM) logger.error({ problem: TOKEN_PROBLEM }, "marketing.worker.backend_token_invalid");
   timer = setInterval(() => { void tick(); }, TICK_MS);
 }
 

@@ -249,10 +249,20 @@ router.post("/sequences/:id/enroll", async (req, res) => {
             SELECT 1 FROM bi_suppressions s
              WHERE lower(s.identifier) = lower(c.email) AND s.channel IN ('email', 'all')
           )
-       ON CONFLICT (sequence_id, contact_id) DO NOTHING`,
+       ON CONFLICT (sequence_id, contact_id) DO UPDATE
+          SET status = 'active', current_step = 0, next_step_at = EXCLUDED.next_step_at,
+              started_at = NOW(), last_step_at = NULL, completed_at = NULL, paused_reason = NULL
+        WHERE bi_sequence_enrollments.status IN ('completed', 'stopped')
+       RETURNING (xmax = 0) AS fresh`,
       [req.params.id, ids, dueAt],
     );
+    // BI_SEQ_REENROLL_RESTART_v372 - adding someone who already finished (or
+    // was stopped) did nothing: ON CONFLICT DO NOTHING kept the old completed
+    // row, so the contact never got the sequence again and the skip said
+    // "already_enrolled". A finished or stopped enrollment now restarts from
+    // step 1. Active and paused ones are left alone.
     const inserted = result.rowCount ?? 0;
+    const restarted = result.rows.filter((row: any) => row.fresh === false).length;
 
     // BI_SEQ_ENROLL_SKIP_REASONS_v1
     // The INSERT above drops rows on four conditions and the caller only saw a
@@ -309,7 +319,7 @@ router.post("/sequences/:id/enroll", async (req, res) => {
       }
     }
 
-    return res.json({ inserted, skipped: ids.length - inserted, requested: ids.length, next_step_at: dueAt, skips });
+    return res.json({ inserted, restarted, skipped: ids.length - inserted, requested: ids.length, next_step_at: dueAt, skips });
   } catch (err) {
     logger.error({ err }, "bi.marketing.sequences.enroll.failed");
     return res.status(500).json({ error: { code: "internal" } });
