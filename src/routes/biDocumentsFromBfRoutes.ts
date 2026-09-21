@@ -212,4 +212,55 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
   });
 });
 
+// BI_SERVER_WITHDRAW_BF_MIRROR_v394
+// POST /api/v1/bi/applications/:public_id/documents/from-bf/withdraw
+// BF staff moved a mirrored document OUT of a category PGI uses (an A/R report
+// re-filed as "Other"), so BI's copy is now wrong. Retire it the same way a
+// superseded upload is retired (purged_at set, row kept for history). A copy
+// BI staff already ACCEPTED is left alone: that is a decision made in BI.
+router.post("/applications/:public_id/documents/from-bf/withdraw", async (req: Request, res: Response) => {
+  const svc = verifyServiceJwt(req);
+  if (!svc) return res.status(401).json({ ok: false, error: "service_jwt_required" });
+  if (svc.source !== "bf-server") {
+    return res.status(403).json({ ok: false, error: "service_source_not_allowed" });
+  }
+  const publicId = s(req.params.public_id);
+  const bfDocumentId = s((req.body ?? {}).bf_document_id);
+  if (!publicId) return res.status(400).json({ ok: false, error: "public_id_required" });
+  if (!bfDocumentId) return res.status(400).json({ ok: false, error: "bf_document_id_required" });
+  try {
+    const appRow = await pool.query<{ id: string }>(
+      `SELECT id FROM bi_applications WHERE public_id = $1 LIMIT 1`,
+      [publicId],
+    );
+    const biApplicationId = appRow.rows[0]?.id;
+    if (!biApplicationId) return res.status(404).json({ ok: false, error: "bi_application_not_found" });
+    const r = await pool.query<{ id: string }>(
+      `UPDATE bi_documents
+          SET purged_at = NOW()
+        WHERE application_id = $1
+          AND bf_document_id = $2
+          AND purged_at IS NULL
+          AND COALESCE(review_status, 'pending') <> 'accepted'
+        RETURNING id`,
+      [biApplicationId, bfDocumentId],
+    );
+    const kept = await pool.query<{ id: string }>(
+      `SELECT id FROM bi_documents
+        WHERE application_id = $1 AND bf_document_id = $2 AND purged_at IS NULL
+        LIMIT 1`,
+      [biApplicationId, bfDocumentId],
+    );
+    return res.json({
+      ok: true,
+      withdrawn: r.rows.length,
+      kept_accepted: kept.rows.length > 0,
+      bi_application_id: biApplicationId,
+    });
+  } catch (e: any) {
+    logger.error({ err: e, bfDocumentId, publicId }, "docs_from_bf_withdraw_failed");
+    return res.status(500).json({ ok: false, error: "withdraw_failed" });
+  }
+});
+
 export default router;
