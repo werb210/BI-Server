@@ -22,14 +22,11 @@ describe("BI_SERVER_BLOCK_1_29_DOC_INTEL_SWAP — extractText", () => {
   });
 
   it("returns CSV-shaped text for xlsx without calling Azure", async () => {
-    const XLSX = await import("xlsx");
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([
+    const { buildXlsx } = await import("../../lib/spreadsheet"); // v376
+    const buf = await buildXlsx([
       ["a", "b"],
       ["1", "2"],
     ]);
-    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
     const r = await extractText({
       buffer: buf,
       mimeType:

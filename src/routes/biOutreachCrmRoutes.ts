@@ -5,7 +5,7 @@
 // as the actor so the activity timeline shows who did what.
 import express, { type Request, type Response } from "express";
 import multer from "multer";
-import * as XLSX from "xlsx";
+import { readFirstSheetObjects } from "../lib/spreadsheet"; // BI_SERVER_SPREADSHEET_EXCELJS_v376
 import { pool } from "../db";
 import { isCompanySuppressed } from "../services/biCrmSuppression"; // BI_SERVER_BLOCK_v820b_CRM_DELETE_SUPPRESSION
 import { requireAuth } from "../platform/auth";
@@ -442,12 +442,11 @@ router.post(
 
     let rows: Array<Record<string, unknown>> = [];
     try {
-      const wb = XLSX.read(file.buffer, { type: "buffer" });
-      const sheetName = wb.SheetNames[0];
-      if (!sheetName) {
+      const parsed = await readFirstSheetObjects(file.buffer);
+      if (!parsed) {
         return res.status(400).json({ ok: false, error: "no_sheets_in_file" });
       }
-      rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: null, raw: false });
+      rows = parsed;
     } catch (e: any) {
       logger.error({ err: e, file: file.originalname }, "outreach_import_parse_failed");
       return res.status(400).json({ ok: false, error: "parse_failed", detail: e?.message });
@@ -970,10 +969,9 @@ router.post(
 
     let rows: Array<Record<string, unknown>> = [];
     try {
-      const wb = XLSX.read(file.buffer, { type: "buffer" });
-      const sheetName = wb.SheetNames[0];
-      if (!sheetName) return res.status(400).json({ ok: false, error: "no_sheets_in_file" });
-      rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: null, raw: false });
+      const parsed = await readFirstSheetObjects(file.buffer);
+      if (!parsed) return res.status(400).json({ ok: false, error: "no_sheets_in_file" });
+      rows = parsed;
     } catch (e: any) {
       logger.error({ err: e, file: file.originalname }, "company_import_parse_failed");
       return res.status(400).json({ ok: false, error: "parse_failed", detail: e?.message });
