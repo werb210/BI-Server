@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 import jwt from "jsonwebtoken";
-import * as XLSX from "xlsx";
+import { buildXlsx as buildSheet } from "../../lib/spreadsheet"; // v376
 
 const queryMock = vi.fn();
 vi.mock("../../db", () => ({
@@ -40,11 +40,9 @@ function makeApp() {
 function staffToken() {
   return jwt.sign({ staffUserId: "staff-1", role: "staff" }, SECRET);
 }
-function buildXlsx(rows: Array<Record<string, unknown>>): Buffer {
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(rows);
-  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-  return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+async function buildXlsx(rows: Array<Record<string, unknown>>): Promise<Buffer> {
+  const keys = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  return buildSheet([keys, ...rows.map((row) => keys.map((k) => row[k] ?? null))]);
 }
 
 describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
@@ -71,7 +69,7 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
       .mockResolvedValueOnce({ rows: [{ id: "c-1" }] })           // contact insert
       .mockResolvedValueOnce({ rows: [], rowCount: 1 });           // activity insert
 
-    const xlsx = buildXlsx([
+    const xlsx = await buildXlsx([
       {
         full_name: "Jane Doe",
         company_name: "Acme Inc",
@@ -104,7 +102,7 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
   });
 
   it("skips rows missing full_name", async () => {
-    const xlsx = buildXlsx([
+    const xlsx = await buildXlsx([
       { full_name: "Jane Doe", email: "jane@example.com" },
       { full_name: "", email: "nobody@example.com" },
     ]);
@@ -134,7 +132,7 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
       .mockResolvedValueOnce({ rows: [{ id: "c-1" }] }) // contact update
       .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // activity
 
-    const xlsx = buildXlsx([
+    const xlsx = await buildXlsx([
       { full_name: "Jane Updated", email: "jane@example.com", tags: "q3" },
     ]);
 
@@ -158,7 +156,7 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
   it("skips suppressed email rows", async () => {
     queryMock.mockResolvedValueOnce({ rows: [{ "?column?": 1 }] }); // suppression lookup
 
-    const xlsx = buildXlsx([
+    const xlsx = await buildXlsx([
       { full_name: "Jane Doe", email: "jane@example.com" },
     ]);
 
@@ -180,7 +178,7 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
       .mockResolvedValueOnce({ rows: [{ id: "c-1" }] })         // contact insert
       .mockResolvedValueOnce({ rows: [], rowCount: 1 });         // activity
 
-    const xlsx = buildXlsx([
+    const xlsx = await buildXlsx([
       { Name: "Jane Doe", Company: "Acme", Phone: "+14165551234", Role: "CFO" },
     ]);
 

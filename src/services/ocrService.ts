@@ -6,7 +6,7 @@ import DocumentIntelligence, {
 import { AzureKeyCredential } from "@azure/core-auth";
 import pdfParse from "pdf-parse/lib/pdf-parse.js";
 import mammoth from "mammoth";
-import * as XLSX from "xlsx";
+import { readSheets, toCsv } from "../lib/spreadsheet"; // BI_SERVER_SPREADSHEET_EXCELJS_v376
 import { logger } from "../platform/logger";
 
 let _diClient: ReturnType<typeof DocumentIntelligence> | null = null;
@@ -64,7 +64,7 @@ export async function extractText(input: OcrInput): Promise<OcrResult> {
       const result = await mammoth.extractRawText({ buffer });
       return { status: "complete", extractedText: result.value || "" };
     }
-    if (XLSX_MIMES.has(mimeType)) return extractSpreadsheet(buffer);
+    if (XLSX_MIMES.has(mimeType)) return await extractSpreadsheet(buffer);
     if (IMAGE_MIMES.has(mimeType)) return await extractWithDocIntel(buffer);
     if (DOC_MIMES.has(mimeType)) {
       logger.warn({ filename, mimeType }, "Legacy .doc — OCR not attempted, marking skipped");
@@ -131,13 +131,10 @@ async function extractWithDocIntel(buffer: Buffer): Promise<OcrResult> {
   return { status: "complete", extractedText: content };
 }
 
-function extractSpreadsheet(buffer: Buffer): OcrResult {
-  const workbook = XLSX.read(buffer, { type: "buffer" });
+async function extractSpreadsheet(buffer: Buffer): Promise<OcrResult> {
   const parts: string[] = [];
-  for (const sheetName of workbook.SheetNames) {
-    const sheet = workbook.Sheets[sheetName];
-    const csv = XLSX.utils.sheet_to_csv(sheet);
-    parts.push(`--- Sheet: ${sheetName} ---\n${csv}`);
+  for (const sheet of await readSheets(buffer)) {
+    parts.push(`--- Sheet: ${sheet.name} ---\n${toCsv(sheet.rows)}`);
   }
   return { status: "complete", extractedText: parts.join("\n\n") };
 }
