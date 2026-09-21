@@ -108,7 +108,11 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
   const lenderName = s(b.lender_name);
   const loanAmount = num(b.loan_amount);
   // pgi_limit defaults to 80% of loan_amount per CORE scoring rules.
-  const pgiLimit = num(b.pgi_limit) ?? (loanAmount != null ? Math.round(loanAmount * 0.8) : null);
+  // BI_BF_HANDOFF_LOAN_CAP_v374 - the guarantee can never exceed the carrier's
+  // $1,000,000 maximum (bi_applications_pgi_limit_max_chk), however large the loan.
+  const PGI_LIMIT_MAX = 1_000_000;
+  const pgiLimitRaw = num(b.pgi_limit) ?? (loanAmount != null ? Math.round(loanAmount * 0.8) : null);
+  const pgiLimit = pgiLimitRaw == null ? null : Math.min(pgiLimitRaw, PGI_LIMIT_MAX);
   const annualRevenue = num(b.annual_revenue);
   const collateralValue = num(b.collateral_value);
 

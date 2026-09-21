@@ -128,7 +128,23 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
 
   const id = randomUUID();
   let mirroredId: string = id;
+  // BI_DOC_MIRROR_SUPERSEDE_v374 - idx_bi_documents_app_doctype_unique allows
+  // one active document per (application, doc_type). A second BF upload of the
+  // same type (balance_sheet, profit_loss on 2026-09-21) violated it and the
+  // mirror 500ed on every retry. The newest upload now supersedes the older one
+  // (purged_at set, row kept for history), exactly as applicant re-uploads do.
+  const client = await pool.connect();
   try {
+    await client.query("BEGIN");
+    await client.query(
+      `UPDATE bi_documents
+          SET purged_at = NOW()
+        WHERE application_id = $1
+          AND doc_type = $2::bi_document_type
+          AND purged_at IS NULL
+          AND bf_document_id IS DISTINCT FROM $3`,
+      [biApplicationId, docTypeEnum, bfDocumentId],
+    );
     // BI_SERVER_BLOCK_v269_DOC_MIRROR_COLUMN_FIX_v1
     // Real columns per master schema + 20260428_bi_blob_storage + v249:
     //   id, application_id, doc_type (NOT NULL enum), original_filename,
@@ -137,7 +153,7 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
     //   document_type_legacy (TEXT, BF's original string), source,
     //   bf_document_id, bf_application_id, created_at.
     // No updated_at column on bi_documents. No uploaded_by_name column.
-    const mirrored = await pool.query<{ id: string }>(
+    const mirrored = await client.query<{ id: string }>(
       `INSERT INTO bi_documents
          (id, application_id, doc_type, original_filename, mime_type, bytes,
           blob_url, uploaded_by_actor,
@@ -147,6 +163,7 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
                $8,$9,'bf_mirror',$10,$11,NOW())
        ON CONFLICT (application_id, bf_document_id) WHERE bf_document_id IS NOT NULL
        DO UPDATE SET
+         purged_at = NULL,
          doc_type = EXCLUDED.doc_type,
          original_filename = EXCLUDED.original_filename,
          mime_type = EXCLUDED.mime_type,
@@ -166,9 +183,13 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
       ],
     );
     mirroredId = mirrored.rows[0].id;
+    await client.query("COMMIT");
   } catch (e: any) {
+    await client.query("ROLLBACK").catch(() => undefined);
     logger.error({ err: e, bfDocumentId, biApplicationId }, "docs_from_bf_insert_failed");
     return res.status(500).json({ ok: false, error: "insert_failed", detail: e?.message });
+  } finally {
+    client.release();
   }
 
   // BI_PGI_COMPLETION_ON_ARRIVAL_v1
