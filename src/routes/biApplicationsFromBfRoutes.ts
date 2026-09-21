@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { pool } from "../db";
 import { env } from "../platform/env";
 import { logger } from "../platform/logger";
+import { isCompleteCoGuarantor, normalizeBfCoGuarantors } from "../services/bfCoGuarantors"; // BI_SERVER_BF_CO_APPLICANT_v391
 
 const router = express.Router();
 
@@ -195,6 +196,34 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
   } catch (e: any) {
     logger.error({ err: e, bfApplicationId }, "from_bf_insert_failed");
     return res.status(500).json({ error: "insert_failed", detail: e?.message });
+  }
+
+  // BI_SERVER_BF_CO_APPLICANT_v391 - carry the BF co-applicant across. Never
+  // fails the handoff: the application row already exists at this point.
+  const coGuarantors = normalizeBfCoGuarantors(b.co_guarantors);
+  if (coGuarantors.length) {
+    try {
+      await pool.query(
+        `UPDATE bi_applications
+            SET has_co_guarantors = TRUE,
+                data = COALESCE(data, '{}'::jsonb) || jsonb_build_object('co_guarantors', $2::jsonb),
+                updated_at = NOW()
+          WHERE id = $1`,
+        [id, JSON.stringify(coGuarantors)],
+      );
+      for (const g of coGuarantors.filter(isCompleteCoGuarantor)) {
+        await pool.query(
+          `INSERT INTO bi_co_guarantors
+             (application_id, first_name, last_name, email, date_of_birth, phone,
+              address, city, province, postal_code, relationship)
+           VALUES ($1,$2,$3,$4,$5::date,$6,$7,$8,$9,$10,$11)`,
+          [id, g.first_name, g.last_name, g.email, g.date_of_birth, g.phone,
+           g.address, g.city, g.province, g.postal_code, g.relationship],
+        );
+      }
+    } catch (e) {
+      logger.warn({ err: e, bfApplicationId }, "from_bf_co_guarantor_failed");
+    }
   }
 
   return res.json({
