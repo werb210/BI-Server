@@ -20,7 +20,12 @@ describe("sequence sends are visible in the log stream", () => {
     expect(fn.indexOf('"marketing.worker.send.failed"')).toBeLessThan(fn.indexOf("INSERT INTO bi_sequence_events"));
     expect(worker).toContain("`marketing.worker.send.${eventType}`");
   });
-  it("logs how many enrollments were due on each tick that had work", () => {
-    expect(worker).toContain('"marketing.worker.tick.due"');
+  // v410 - v408 replaced the conditional "marketing.worker.tick.due" line with an
+  // unconditional "marketing.worker.tick" heartbeat that also carries the backlog,
+  // so a silent log stream no longer hides a dead worker.
+  it("logs the claim count and the backlog on every tick", () => {
+    expect(worker).toContain('"marketing.worker.tick"');
+    expect(worker).toContain("claimed: due.length");
+    expect(worker).toContain("dueNow:");
   });
 });
