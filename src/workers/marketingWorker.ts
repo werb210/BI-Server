@@ -47,17 +47,35 @@ const BF_SERVER_URL = process.env.BF_SERVER_URL || "https://server.boreal.financ
 const BACKEND_SERVICE_TOKEN = (process.env.BACKEND_SERVICE_TOKEN || process.env.BI_BACKEND_TOKEN || "").trim();
 const TOKEN_PROBLEM = backendTokenProblem(BACKEND_SERVICE_TOKEN);
 
+// BI_SERVER_SEQ_CLAIM_v405 - the production and staging slots (and any scaled-out
+// instance) each run this worker. The old query only READ due enrollments, so two
+// workers could pick the same one in the same minute and send the email twice.
+// Claiming now happens in one statement: due rows are locked (SKIP LOCKED, so a
+// second worker skips them) and pushed 5 minutes ahead as a lease. Sending,
+// advancing or retrying sets next_step_at as before; if a worker dies mid-send,
+// the lease simply expires and the step is picked up again.
+export const CLAIM_LEASE_SQL = "NOW() + interval '5 minutes'";
 async function pickDue(limit: number): Promise<Enrollment[]> {
   const r = await pool.query<Enrollment>(
-    `SELECT e.id, e.sequence_id, e.contact_id, e.status, e.current_step, e.variant,
-            c.email AS contact_email, c.phone_e164 AS contact_phone
-       FROM bi_sequence_enrollments e
-       JOIN bi_contacts c ON c.id = e.contact_id
-      WHERE e.status = 'active'
-        AND e.next_step_at IS NOT NULL
-        AND e.next_step_at <= NOW()
-      ORDER BY e.next_step_at
-      LIMIT $1`,
+    `WITH due AS (
+       SELECT e.id
+         FROM bi_sequence_enrollments e
+        WHERE e.status = 'active'
+          AND e.next_step_at IS NOT NULL
+          AND e.next_step_at <= NOW()
+        ORDER BY e.next_step_at
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+     ), claimed AS (
+       UPDATE bi_sequence_enrollments e
+          SET next_step_at = ${CLAIM_LEASE_SQL}
+         FROM due
+        WHERE e.id = due.id
+        RETURNING e.id, e.sequence_id, e.contact_id, e.status, e.current_step, e.variant
+     )
+     SELECT claimed.*, c.email AS contact_email, c.phone_e164 AS contact_phone
+       FROM claimed
+       JOIN bi_contacts c ON c.id = claimed.contact_id`,
     [limit],
   );
   return r.rows;
