@@ -11,10 +11,23 @@ import { logger } from "../platform/logger";
 import { sendOutreachSms } from "../services/smsService";
 
 const TICK_MS = 15 * 60 * 1000;
+
+// BI_SERVER_PGI_LINKS_v406 - these texts linked to the bare boreal.insure domain (no www).
+// The bare domain is a GoDaddy parking page, so clients who tapped the link to
+// finish their PGI application landed on "This domain is registered". The live
+// site is www.boreal.insure, and the resume link must go through login (same as
+// the BF referral completion link).
+const PUBLIC_SITE = (process.env.BI_PUBLIC_URL || "https://www.boreal.insure").replace(/\/+$/, "");
+export function resumeUrl(publicId: string): string {
+  return `${PUBLIC_SITE}/login?next=/applications/${encodeURIComponent(publicId)}/form`;
+}
+export function startUrl(): string {
+  return `${PUBLIC_SITE}/applications/new`;
+}
 const BATCH = 25;
 
 function nudgeBody(publicId: string): string {
-  const url = `https://boreal.insure/applications/${publicId}/form`;
+  const url = resumeUrl(publicId);
   return (
     "Thank you for starting your PGI application. We noticed you did not complete it. " +
     `Please return to ${url} to finalize the application. If you have questions and would ` +
@@ -88,7 +101,7 @@ export async function runAbandonedNudgeTick(): Promise<{ first: number; second: 
   const contactMsg =
     "Thank you for your interest in Boreal Risk Management. You verified your number " +
     "but did not start your PGI application. Start here: " +
-    "https://boreal.insure/applications/new \u2014 or reply to this text and our intake " +
+    `${startUrl()} \u2014 or reply to this text and our intake ` +
     "team will help.";
 
   const contactFirst = await pool.query<{ id: string; phone_e164: string }>(
