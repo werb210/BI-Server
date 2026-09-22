@@ -7,6 +7,7 @@ import { pool } from "../db";
 import { logger } from "../platform/logger";
 import { hasCapability } from "../platform/capabilities";
 import { scheduleFromNow } from "../services/sequenceSchedule"; // BI_SEQ_ENROLL_HARDENING_v1
+import { emptyEmailSteps, emptyStepsMessage } from "../services/emptyEmailSteps"; // BI_SERVER_NO_EMPTY_EMAIL_STEPS_v398
 
 const router: Router = Router();
 
@@ -177,6 +178,10 @@ router.delete("/sequences/:id", async (req, res) => {
 
 router.post("/sequences/:id/start", async (req, res) => {
   try {
+    const empty = await emptyEmailSteps(req.params.id);
+    if (empty.length) {
+      return res.status(422).json({ message: emptyStepsMessage(empty), error: { code: "empty_email_steps", message: emptyStepsMessage(empty), steps: empty } });
+    }
     const r = await pool.query(
       `UPDATE bi_sequences SET status = 'active', updated_at = NOW()
          WHERE id = $1 AND deleted_at IS NULL RETURNING id`,
@@ -228,6 +233,10 @@ router.post("/sequences/:id/enroll", async (req, res) => {
     );
     const sequence = sequenceResult.rows[0];
     if (!sequence) return res.status(404).json({ error: { code: "sequence_not_found" } });
+    const empty = await emptyEmailSteps(req.params.id);
+    if (empty.length) {
+      return res.status(422).json({ message: emptyStepsMessage(empty), error: { code: "empty_email_steps", message: emptyStepsMessage(empty), steps: empty } });
+    }
     const firstStep = await pool.query<{ delay_seconds: number }>(
       `SELECT delay_seconds FROM bi_sequence_steps WHERE sequence_id = $1 ORDER BY position ASC LIMIT 1`,
       [req.params.id],

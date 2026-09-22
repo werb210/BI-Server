@@ -68,12 +68,17 @@ router.get("/sequences/:id/steps", async (req, res) => {
 router.post("/sequences/:id/steps", async (req, res) => {
   try {
     const content = await contentFrom(req.body);
+    const stepType = req.body?.type ?? "email";
+    if (stepType === "email" && (!String(content.subject ?? "").trim() || !String(content.body ?? "").trim())) {
+      return res.status(400).json({ message: "An email step needs an email template (or a subject and a message).", error: { code: "bad_request" } });
+    }
+    const templateId = req.body?.template_id ? String(req.body.template_id) : null;
     const r = await pool.query(
       `INSERT INTO bi_sequence_steps
-         (sequence_id, position, type, delay_seconds, subject, body, assignee_user_id)
+         (sequence_id, position, type, delay_seconds, subject, body, assignee_user_id, conditions)
        VALUES ($1, COALESCE($2, (SELECT COALESCE(MAX(position), 0) + 1
                                    FROM bi_sequence_steps WHERE sequence_id = $1)),
-               COALESCE($3, 'email'), COALESCE($4, 0), $5, $6, $7)
+               COALESCE($3, 'email'), COALESCE($4, 0), $5, $6, $7, COALESCE($8::jsonb, '{}'::jsonb))
        RETURNING *`,
       [
         req.params.id,
@@ -83,6 +88,7 @@ router.post("/sequences/:id/steps", async (req, res) => {
         content.subject,
         content.body,
         assigneeFrom(req.body),
+        JSON.stringify({ ...(req.body?.conditions ?? {}), ...(templateId ? { template_id: templateId } : {}) }),
       ],
     );
     res.status(201).json({ step: r.rows[0] });
@@ -95,13 +101,16 @@ router.post("/sequences/:id/steps", async (req, res) => {
 router.patch("/sequences/:id/steps/:stepId", async (req, res) => {
   try {
     const content = await contentFrom(req.body);
+    const templateId = req.body?.template_id ? String(req.body.template_id) : null;
     const r = await pool.query(
       `UPDATE bi_sequence_steps
           SET position         = COALESCE($2, position),
               delay_seconds    = COALESCE($3, delay_seconds),
-              subject          = COALESCE($4, subject),
-              body             = COALESCE($5, body),
-              assignee_user_id = COALESCE($6, assignee_user_id)
+              subject          = COALESCE(NULLIF(btrim($4), ''), subject),
+              body             = COALESCE(NULLIF(btrim($5), ''), body),
+              assignee_user_id = COALESCE($6, assignee_user_id),
+              conditions       = CASE WHEN $8::text IS NULL THEN conditions
+                                      ELSE COALESCE(conditions, '{}'::jsonb) || jsonb_build_object('template_id', $8::text) END
         WHERE id = $1 AND sequence_id = $7
         RETURNING *`,
       [
@@ -112,6 +121,7 @@ router.patch("/sequences/:id/steps/:stepId", async (req, res) => {
         content.body,
         assigneeFrom(req.body),
         req.params.id,
+        templateId,
       ],
     );
     if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
