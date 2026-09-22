@@ -216,7 +216,19 @@ async function recordEvent(enrollmentId: string, stepId: string | null, eventTyp
 
 async function processOne(enr: Enrollment): Promise<void> {
   const seq = await loadSequence(enr.sequence_id);
-  if (!seq || seq.status !== "active") return;
+  if (!seq || seq.status !== "active") {
+    // BI_SERVER_SEQ_PARK_INACTIVE_v408 - v405 claims a due enrollment by pushing
+    // next_step_at five minutes ahead, then this branch returned without clearing
+    // it. Enrollments on a paused, archived or deleted sequence were therefore
+    // re-claimed every five minutes forever. Clearing next_step_at parks them;
+    // resuming a sequence already restores it with COALESCE(next_step_at, NOW()).
+    await pool.query(`UPDATE bi_sequence_enrollments SET next_step_at = NULL WHERE id = $1`, [enr.id]);
+    logger.info(
+      { enrollmentId: enr.id, sequenceId: enr.sequence_id, sequenceStatus: seq?.status ?? "missing" },
+      "marketing.worker.parked_inactive",
+    );
+    return;
+  }
   // BI_SEQ_BUSINESS_HOURS_v1: evaluate in America/Edmonton and jump directly
   // to the next opening rather than repeatedly claiming a closed enrollment.
   if (!isSendableAt(new Date(), sendWindow(seq))) {
@@ -367,7 +379,24 @@ async function tick(): Promise<void> {
   running = true;
   try {
     const due = await pickDue(50);
-    if (due.length > 0) logger.info({ due: due.length }, "marketing.worker.tick.due");
+    // BI_SERVER_SEQ_HEARTBEAT_v408 - the tick logged only when work existed, so a
+    // silent log stream could mean nothing was due OR the worker was not running.
+    // One line every tick, always, with the backlog sitting behind it.
+    const gauge = await pool.query<{ active: string; due_now: string; scheduled: string }>(
+      `SELECT COUNT(*) FILTER (WHERE status = 'active')::text AS active,
+              COUNT(*) FILTER (WHERE status = 'active' AND next_step_at IS NOT NULL AND next_step_at <= NOW())::text AS due_now,
+              COUNT(*) FILTER (WHERE status = 'active' AND next_step_at > NOW())::text AS scheduled
+         FROM bi_sequence_enrollments`,
+    );
+    logger.info(
+      {
+        claimed: due.length,
+        active: Number(gauge.rows[0]?.active ?? 0),
+        dueNow: Number(gauge.rows[0]?.due_now ?? 0),
+        scheduled: Number(gauge.rows[0]?.scheduled ?? 0),
+      },
+      "marketing.worker.tick",
+    );
     for (const enr of due) {
       try { await processOne(enr); } catch (err) { logger.error({ err, enrollmentId: enr.id }, "marketing.worker.step.failed"); }
     }
