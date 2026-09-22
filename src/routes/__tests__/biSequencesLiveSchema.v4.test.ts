@@ -59,14 +59,14 @@ describe("BI_SERVER_SEQUENCES_LIVE_SCHEMA_v4", () => {
   it("prefers delay_seconds when both are supplied", async () => {
     queryMock.mockResolvedValueOnce({ rows: [{ id: "st1" }] });
     await request(makeApp()).post("/api/v1/bi/marketing/sequences/s1/steps")
-      .send({ delay_seconds: 90, delay_days: 3 }).expect(201);
+      .send({ delay_seconds: 90, delay_days: 3, subject: "S", body: "B" }).expect(201);
     expect((queryMock.mock.calls[0]![1] as unknown[])[3]).toBe(90);
   });
 
   it("appends to the end when no position is given", async () => {
     queryMock.mockResolvedValueOnce({ rows: [{ id: "st1" }] });
     await request(makeApp()).post("/api/v1/bi/marketing/sequences/s1/steps")
-      .send({ subject: "Follow up" }).expect(201);
+      .send({ subject: "Follow up", body: "B" }).expect(201);
     expect(String(queryMock.mock.calls[0]![0])).toContain("MAX(position), 0) + 1");
   });
 
