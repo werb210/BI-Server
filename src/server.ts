@@ -92,6 +92,7 @@ import biApplicantContractRoutes from "./routes/biApplicantContractRoutes";
 import biSmsInboundRoutes from "./routes/biSmsInboundRoutes";
 import biCarrierHealthRoutes from "./routes/biCarrierHealthRoutes";
 import { startCarrierHealthJob, getCarrierHealth } from "./services/carrierHealthService";
+import { workersEnabled } from "./workers/workersSwitch"; // BI_SERVER_BLOCK_v472_STAGING_JOBS_OFF
 // BI_SERVER_BLOCK_v382_SUBMIT_SMS_AND_REMINDER_SIMPLIFY_v1 —
 // Path A (docReminderService) deleted. The 07:00 MT M-F cron in
 // biJobs.ts:runDocsReminderCronTick is now the sole doc-reminder
@@ -687,7 +688,11 @@ async function bootstrapInner() {
     // and run schemaRescue once more so any column gap is patched before the
     // request cycle begins.
     try { await runSchemaRescue(); } catch (e) { logger.warn({ err: String(e) }, "post-init schemaRescue threw (non-blocking)"); }
-    for (const [name, fn] of [
+    // BI_SERVER_BLOCK_v472_STAGING_JOBS_OFF - v471 stopped the workers in index.ts;
+    // these scheduled jobs (docs reminder texts, purge, premium accrual, carrier
+    // health) also run against the live database, so the staging slot skips them too.
+    if (!workersEnabled()) logger.warn("BI scheduled jobs not started: BI_WORKERS_ENABLED=false");
+    else for (const [name, fn] of [
       ["premiumAccrual",   startPremiumAccrualJob],
       ["purge",            startPurgeJob],
       // BI_SERVER_BLOCK_v382_SUBMIT_SMS_AND_REMINDER_SIMPLIFY_v1 —
