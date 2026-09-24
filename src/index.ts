@@ -21,11 +21,11 @@ import { env } from "./platform/env";
 import { logger } from "./platform/logger";
 import { pool } from "./db";
 import { startMarketingWorker } from "./workers/marketingWorker";
-import { workersEnabled } from "./workers/workersSwitch"; // BI_SERVER_BLOCK_v471_WORKERS_SWITCH
 import { startBiSendWorker } from "./services/biMarketingSendRunner";
 import { startAbandonedApplicationNudge } from "./workers/abandonedApplicationNudge"; // BI_SERVER_ABANDONED_NUDGE_v1
 import { startMailboxHealthRollup } from "./workers/mailboxHealthRollup";
 import { logSendgridWebhookSigningStatus } from "./routes/biSendgridWebhookRoutes";
+import { workersEnabled } from "./platform/workersEnabled"; // BI_SERVER_BLOCK_v472_WORKER_SWITCH_v1
 
 // eslint-disable-next-line no-console
 console.log("BI process start", new Date().toISOString());
@@ -51,17 +51,15 @@ const server = app.listen(port, "0.0.0.0", () => {
   // column 0); if any threw synchronously the listener callback errored
   // out, which only logs via uncaughtException — leaving a partially-
   // initialized worker set with no indication of which one failed.
-  for (const [name, fn] of [
+  // BI_SERVER_BLOCK_v472_WORKER_SWITCH_v1
+  const runWorkers = workersEnabled();
+  if (!runWorkers) logger.warn("BI workers disabled by BI_WORKERS_ENABLED (staging slot) - no emails or texts will be sent from this instance");
+  if (runWorkers) for (const [name, fn] of [
     ["marketingWorker",     startMarketingWorker],
     ["mailboxHealthRollup", startMailboxHealthRollup],
     ["abandonedApplicationNudge", startAbandonedApplicationNudge], // BI_SERVER_ABANDONED_NUDGE_v1
     ["biSendWorker", () => startBiSendWorker(pool)],
   ] as const) {
-    // BI_SERVER_BLOCK_v471_WORKERS_SWITCH - staging shares the production database; it must not run workers.
-    if (!workersEnabled()) {
-      logger.warn({ worker: name }, "BI worker not started: BI_WORKERS_ENABLED=false");
-      continue;
-    }
     try { fn(); } catch (err) {
       logger.error({ worker: name, err: err instanceof Error ? err.message : String(err) }, "BI worker start failed (non-blocking)");
     }
