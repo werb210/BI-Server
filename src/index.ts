@@ -25,7 +25,7 @@ import { startBiSendWorker } from "./services/biMarketingSendRunner";
 import { startAbandonedApplicationNudge } from "./workers/abandonedApplicationNudge"; // BI_SERVER_ABANDONED_NUDGE_v1
 import { startMailboxHealthRollup } from "./workers/mailboxHealthRollup";
 import { logSendgridWebhookSigningStatus } from "./routes/biSendgridWebhookRoutes";
-import { workersEnabled } from "./platform/workersEnabled"; // BI_SERVER_BLOCK_v472_WORKER_SWITCH_v1
+import { workersEnabled } from "./workers/workersSwitch"; // BI_SERVER_BLOCK_v475_ONE_WORKER_SWITCH
 
 // eslint-disable-next-line no-console
 console.log("BI process start", new Date().toISOString());
@@ -51,10 +51,10 @@ const server = app.listen(port, "0.0.0.0", () => {
   // column 0); if any threw synchronously the listener callback errored
   // out, which only logs via uncaughtException — leaving a partially-
   // initialized worker set with no indication of which one failed.
-  // BI_SERVER_BLOCK_v472_WORKER_SWITCH_v1
-  const runWorkers = workersEnabled();
-  if (!runWorkers) logger.warn("BI workers disabled by BI_WORKERS_ENABLED (staging slot) - no emails or texts will be sent from this instance");
-  if (runWorkers) for (const [name, fn] of [
+  // BI_SERVER_BLOCK_v475_ONE_WORKER_SWITCH - staging slot sets BI_WORKERS_ENABLED=false
+  if (!workersEnabled()) {
+    logger.warn("BI workers not started: BI_WORKERS_ENABLED=false");
+  } else for (const [name, fn] of [
     ["marketingWorker",     startMarketingWorker],
     ["mailboxHealthRollup", startMailboxHealthRollup],
     ["abandonedApplicationNudge", startAbandonedApplicationNudge], // BI_SERVER_ABANDONED_NUDGE_v1
