@@ -92,7 +92,7 @@ import biApplicantContractRoutes from "./routes/biApplicantContractRoutes";
 import biSmsInboundRoutes from "./routes/biSmsInboundRoutes";
 import biCarrierHealthRoutes from "./routes/biCarrierHealthRoutes";
 import { startCarrierHealthJob, getCarrierHealth } from "./services/carrierHealthService";
-import { workersEnabled } from "./platform/workersEnabled"; // BI_SERVER_BLOCK_v472_WORKER_SWITCH_v1
+import { workersEnabled } from "./workers/workersSwitch"; // BI_SERVER_BLOCK_v475_ONE_WORKER_SWITCH
 // BI_SERVER_BLOCK_v382_SUBMIT_SMS_AND_REMINDER_SIMPLIFY_v1 —
 // Path A (docReminderService) deleted. The 07:00 MT M-F cron in
 // biJobs.ts:runDocsReminderCronTick is now the sole doc-reminder
