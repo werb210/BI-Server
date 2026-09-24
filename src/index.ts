@@ -21,6 +21,7 @@ import { env } from "./platform/env";
 import { logger } from "./platform/logger";
 import { pool } from "./db";
 import { startMarketingWorker } from "./workers/marketingWorker";
+import { workersEnabled } from "./workers/workersSwitch"; // BI_SERVER_BLOCK_v471_WORKERS_SWITCH
 import { startBiSendWorker } from "./services/biMarketingSendRunner";
 import { startAbandonedApplicationNudge } from "./workers/abandonedApplicationNudge"; // BI_SERVER_ABANDONED_NUDGE_v1
 import { startMailboxHealthRollup } from "./workers/mailboxHealthRollup";
@@ -56,6 +57,11 @@ const server = app.listen(port, "0.0.0.0", () => {
     ["abandonedApplicationNudge", startAbandonedApplicationNudge], // BI_SERVER_ABANDONED_NUDGE_v1
     ["biSendWorker", () => startBiSendWorker(pool)],
   ] as const) {
+    // BI_SERVER_BLOCK_v471_WORKERS_SWITCH - staging shares the production database; it must not run workers.
+    if (!workersEnabled()) {
+      logger.warn({ worker: name }, "BI worker not started: BI_WORKERS_ENABLED=false");
+      continue;
+    }
     try { fn(); } catch (err) {
       logger.error({ worker: name, err: err instanceof Error ? err.message : String(err) }, "BI worker start failed (non-blocking)");
     }
