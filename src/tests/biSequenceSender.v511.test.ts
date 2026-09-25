@@ -15,7 +15,7 @@ describe("v511 BI sequence sender", () => {
     const m = worker.match(/export function biDefaultSender\(\): string \{[\s\S]*?\n\}/);
     expect(m).toBeTruthy();
     const fn = new Function("process", m![0].replace("export function biDefaultSender(): string", "return function ()"))(process);
-    expect(fn()).toBe("andrew@boreal.financial");
+    expect(fn()).toBe("andrew.p@boreal.financial");
     process.env.BI_SEQUENCE_DEFAULT_SENDER = "insure@boreal.financial";
     expect(fn()).toBe("insure@boreal.financial");
   });
