@@ -2,6 +2,7 @@ import { Router } from "express";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { pool } from "../db";
+import { logger } from "../platform/logger"; // BI_SERVER_BLOCK_v520
 import { passesScoreGate, withDateOnlyFields } from "../services/biPublicFormGates"; // BI_SERVER_BF_REFERRAL_FORM_v283
 import { env } from "../platform/env";
 import { pgiScore } from "../services/pgiAdapter";
@@ -17,6 +18,31 @@ import { checkRegion, isSupportedCountry, isValidPostalCode } from "../services/
 const SUPPORTED_COUNTRIES = ["CA", "US"] as const; // BI_SERVER_US_APPLICATIONS_v21
 
 const router = Router();
+
+// BI_SERVER_BLOCK_v520_PUBLIC_SUBMIT_REJECTION_LOG - when an applicant presses
+// Submit and the server refuses (missing fields, consents, score, status, caps),
+// the reason went back to the browser only. Nothing was logged and nothing was
+// stored, so "BI referrals fail to submit" could not be diagnosed. Log every
+// refusal with the code and the field names (never the values).
+router.use("/applications/:publicId/submit", (req: any, res: any, next: any) => {
+  const originalJson = res.json.bind(res);
+  res.json = (body: any) => {
+    if (res.statusCode >= 400) {
+      const publicId = String(req.originalUrl ?? "").split("/applications/")[1]?.split("/")[0] ?? null;
+      logger.warn(
+        {
+          publicId,
+          status: res.statusCode,
+          error: body?.error ?? null,
+          fields: Array.isArray(body?.fields) ? body.fields : body?.errors ? Object.keys(body.errors) : null,
+        },
+        "bi_public_submit_rejected",
+      );
+    }
+    return originalJson(body);
+  };
+  next();
+});
 const EBITDA_MIN = 50_000;
 const LOAN_MAX = 1_000_000;
 
