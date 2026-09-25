@@ -141,7 +141,7 @@ async function sendSms(toPhone: string, body: string, sender: string | null): Pr
   }
 }
 
-async function sendEmail(toEmail: string, subject: string, body: string, sender: string | null): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+async function sendEmail(toEmail: string, subject: string, body: string, sender: string | null): Promise<{ ok: boolean; messageId?: string; sentAs?: string; error?: string }> {
   if (TOKEN_PROBLEM) return { ok: false, error: TOKEN_PROBLEM };
   try {
     const r = await fetch(`${BF_SERVER_URL}/api/service/mail`, {
@@ -155,7 +155,7 @@ async function sendEmail(toEmail: string, subject: string, body: string, sender:
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) return { ok: false, error: `BF-Server email ${r.status}: ${JSON.stringify(j).slice(0, 200)}` };
-    return { ok: true, messageId: (j as any).messageId };
+    return { ok: true, messageId: (j as any).messageId, sentAs: (j as any).sentAs ?? undefined }; // BI_SERVER_BLOCK_v516
   } catch (err: any) {
     return { ok: false, error: err?.message || "fetch failed" };
   }
@@ -212,6 +212,40 @@ async function recordEvent(enrollmentId: string, stepId: string | null, eventTyp
           VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
     [enrollmentId, stepId, eventType, channel, senderId, JSON.stringify(metadata)],
   );
+}
+
+// BI_SERVER_BLOCK_v516_SEQUENCE_TOUCH_LOGGING - a sequence send used to be written
+// only to bi_sequence_events. The contact's activity feed never showed it and
+// the outreach card never left New, because only a manually logged touch
+// (biOutreachCrmRoutes v852) advanced the status. Every successful sequence
+// email/SMS now does both. Never throws: a logging failure must not undo a send.
+async function logSequenceTouch(
+  contactId: string,
+  channel: "email" | "sms",
+  summary: string,
+  meta: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await pool.query(
+      `INSERT INTO bi_contact_activity
+         (id, contact_id, actor_id, actor_name, event_type, outcome, body, meta)
+       VALUES (gen_random_uuid(), $1, NULL, 'Sequence', $2, 'sent', $3, $4::jsonb)`,
+      [contactId, channel, summary.slice(0, 1000), JSON.stringify(meta)],
+    );
+  } catch (err) {
+    logger.warn({ contactId, channel, err: (err as Error)?.message }, "marketing.worker.touch_activity_failed");
+  }
+  try {
+    await pool.query(
+      `UPDATE bi_contacts
+          SET outreach_status = 'contacted', outreach_updated_at = NOW()
+        WHERE id = $1
+          AND COALESCE(outreach_status, 'new') IN ('new', 'cold', 'attempting', 'voicemail')`,
+      [contactId],
+    );
+  } catch (err) {
+    logger.warn({ contactId, err: (err as Error)?.message }, "marketing.worker.touch_status_failed");
+  }
 }
 
 // BI_SERVER_BLOCK_v511 - BI_SEQUENCE_DEFAULT_SENDER overrides; andrew@ otherwise.
@@ -283,7 +317,10 @@ async function processOne(enr: Enrollment): Promise<void> {
       return;
     }
     const result = await sendSms(enr.contact_phone, step.body ?? "", sender);
-    if (result.ok) await recordEvent(enr.id, step.id, "sent", "sms", sender, { sid: result.sid });
+    if (result.ok) {
+      await recordEvent(enr.id, step.id, "sent", "sms", sender, { sid: result.sid });
+      await logSequenceTouch(enr.contact_id, "sms", step.body ?? "", { sequence_id: enr.sequence_id, step_id: step.id, sid: result.sid ?? null }); // BI_SERVER_BLOCK_v516
+    }
     else { await recordEvent(enr.id, step.id, "failed", "sms", sender, { error: result.error }); failedSend = true; }
   } else if (step.type === "email") {
     if (!enr.contact_email) {
@@ -300,7 +337,10 @@ async function processOne(enr: Enrollment): Promise<void> {
       return;
     }
     const result = await sendEmail(enr.contact_email, content.subject, content.body, sender);
-    if (result.ok) await recordEvent(enr.id, step.id, "sent", "email", sender, { messageId: result.messageId });
+    if (result.ok) {
+      await recordEvent(enr.id, step.id, "sent", "email", sender, { messageId: result.messageId, sentAs: result.sentAs ?? sender });
+      await logSequenceTouch(enr.contact_id, "email", `Sequence email: ${content.subject}`, { sequence_id: enr.sequence_id, step_id: step.id, sent_as: result.sentAs ?? sender }); // BI_SERVER_BLOCK_v516
+    }
     else { await recordEvent(enr.id, step.id, "failed", "email", sender, { error: result.error }); failedSend = true; }
   } else if (step.type === "task") {
     if (!step.assignee_user_id) {
