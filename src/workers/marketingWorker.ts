@@ -251,7 +251,7 @@ async function logSequenceTouch(
 // BI_SERVER_BLOCK_v511 - BI_SEQUENCE_DEFAULT_SENDER overrides; andrew@ otherwise.
 export function biDefaultSender(): string {
   const v = String(process.env.BI_SEQUENCE_DEFAULT_SENDER ?? "").trim();
-  return v.includes("@") ? v : "andrew@boreal.financial";
+  return v.includes("@") ? v : "andrew.p@boreal.financial"; // BI_SERVER_BLOCK_v518 - andrew@ is not a real mailbox (Graph ErrorInvalidUser)
 }
 
 async function processOne(enr: Enrollment): Promise<void> {
