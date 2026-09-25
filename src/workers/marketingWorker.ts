@@ -214,6 +214,12 @@ async function recordEvent(enrollmentId: string, stepId: string | null, eventTyp
   );
 }
 
+// BI_SERVER_BLOCK_v511 - BI_SEQUENCE_DEFAULT_SENDER overrides; andrew@ otherwise.
+export function biDefaultSender(): string {
+  const v = String(process.env.BI_SEQUENCE_DEFAULT_SENDER ?? "").trim();
+  return v.includes("@") ? v : "andrew@boreal.financial";
+}
+
 async function processOne(enr: Enrollment): Promise<void> {
   const seq = await loadSequence(enr.sequence_id);
   if (!seq || seq.status !== "active") {
@@ -258,7 +264,12 @@ async function processOne(enr: Enrollment): Promise<void> {
     }
   }
 
-  const sender = seq.sender_rotation.length > 0 ? seq.sender_rotation[enr.current_step % seq.sender_rotation.length] : null;
+  // BI_SERVER_BLOCK_v511_BI_SEQUENCE_SENDER - a sequence with no sender chosen
+  // used to pass sendAs=null, and BF-Server then sent from its own default
+  // mailbox (submissions@boreal.financial, BF's lender inbox). BI emails always
+  // go out from a BI sender: the sequence's rotation, else the BI default.
+  const rotation = Array.isArray(seq.sender_rotation) ? seq.sender_rotation.filter((x) => typeof x === "string" && x.includes("@")) : [];
+  const sender = rotation.length > 0 ? rotation[enr.current_step % rotation.length] : biDefaultSender();
   // BI_SEQ_SEND_RETRY_v372 - a failed send used to advance to the next step
   // exactly like a successful one. With a bad token, a whole sequence ran to
   // "completed" in three minutes having sent nothing. Retry the same step
