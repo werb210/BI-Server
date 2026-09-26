@@ -35,6 +35,7 @@ import biMarketingRoutes from "./routes/biMarketingRoutes";
 import biMarketingEmailRoutes from "./routes/biMarketingEmailRoutes";
 import { biMarketingEmailAssetPublicRouter, biMarketingEmailAssetUploadRouter } from "./routes/biMarketingEmailAssetRoutes";
 import biPublicBrandRoutes from "./routes/biPublicBrandRoutes"; // BI_SERVER_EMAIL_LOGO_v24
+import biVisitorTrackRoutes from "./routes/biVisitorTrackRoutes"; // BI_SERVER_BLOCK_v568_BI_VISITOR_JOURNEY
 import biMarketingEmailCompatRoutes from "./routes/biMarketingEmailCompatRoutes"; // BI_EMAIL_COMPOSER_COMPAT_v1
 import biInternalBuildRoutes from "./routes/biInternalBuildRoutes"; // BI_SERVER_BUILD_TRUTH_v18
 import biSequencesRoutes from "./routes/biSequencesRoutes";
@@ -325,6 +326,7 @@ app.use("/api/v1/bi/marketing", biCors, biMarketingEmailAssetPublicRouter);
 // BI_SERVER_EMAIL_LOGO_v24 - public brand asset; keep above every matching
 // requireAuth mount so mail clients and image proxies can fetch it unauthenticated.
 app.use("/api/v1/bi", biCors, biPublicBrandRoutes);
+app.use("/api/v1/bi", biCors, biVisitorTrackRoutes); // BI_SERVER_BLOCK_v568 - public journey collector
 
 // BI_SERVER_BUILD_TRUTH_v18 - public and above all matching auth middleware.
 app.use("/api/v1", biCors, biInternalBuildRoutes);

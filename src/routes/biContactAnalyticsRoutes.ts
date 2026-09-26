@@ -120,4 +120,31 @@ router.get("/crm/contacts/:id/ai-summary", async (req, res) => {
   }
 });
 
+// BI_SERVER_BLOCK_v568_BI_VISITOR_JOURNEY - same payload shape as BF-Server's contact journey.
+router.get("/crm/contacts/:id/journey", async (req, res) => {
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id)) return res.status(400).json({ error: "invalid_contact_id" });
+  try {
+    const sess = await pool.query(
+      `SELECT s.session_id, s.first_seen_at, s.last_seen_at, s.landing_page, s.referrer, s.gclid,
+              s.utm_source, s.utm_medium, s.utm_campaign, s.utm_term, s.utm_content
+         FROM bi_visitor_sessions s
+        WHERE s.public_id IN (SELECT public_id FROM bi_applications WHERE primary_contact_id = $1 AND public_id IS NOT NULL)
+        ORDER BY s.first_seen_at ASC`,
+      [id],
+    );
+    if (!sess.rows.length) return res.json({ sessions: [], events: [], applications: [] });
+    const ev = await pool.query(
+      `SELECT session_id, event_type, path, title, step, dwell_ms, occurred_at
+         FROM bi_visitor_events WHERE session_id = ANY($1) ORDER BY occurred_at ASC LIMIT 1000`,
+      [sess.rows.map((r: any) => r.session_id)],
+    );
+    const { summarise } = await import("../services/biVisitorJourney");
+    return res.json({ sessions: sess.rows, events: ev.rows, applications: [], summary: summarise(ev.rows) });
+  } catch (err) {
+    logger.error({ err }, "bi.contacts.journey.failed");
+    return res.status(500).json({ error: "journey_failed" });
+  }
+});
+
 export default router;
