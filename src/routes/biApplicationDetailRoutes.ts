@@ -757,4 +757,31 @@ router.post("/:id/staff-decline", requireStaffOrAdmin, async (req: Request, res:
   }
 });
 
+// BI_SERVER_BLOCK_v559_CARRIER_CATALOGUE - Send to carrier (staff).
+router.get("/:id/carrier-options", requireStaffOrAdmin, async (req: Request, res: Response) => {
+  try {
+    const { carrierOptionsFor } = await import("../services/biCarrierSubmission");
+    return res.json({ products: await carrierOptionsFor(String(req.params.id)) });
+  } catch (err) {
+    logger.error?.({ err: (err as Error).message }, "[carrier-options] failed");
+    return res.status(500).json({ error: "carrier_options_failed" });
+  }
+});
+router.post("/:id/products/:productId/send-to-carrier", requireStaffOrAdmin, async (req: Request, res: Response) => {
+  const carrierProductId = String((req.body as { carrierProductId?: string } | undefined)?.carrierProductId ?? "");
+  if (!/^[0-9a-f-]{36}$/i.test(carrierProductId)) return res.status(400).json({ error: "carrier_required" });
+  const note = String((req.body as { note?: string } | undefined)?.note ?? "").trim().slice(0, 1000) || null;
+  const user = (req as any).user ?? {};
+  try {
+    const { sendToCarrier } = await import("../services/biCarrierSubmission");
+    const r = await sendToCarrier({ applicationId: String(req.params.id), applicationProductId: String(req.params.productId), carrierProductId, note,
+      staffName: user.name ?? user.fullName ?? null, staffEmail: user.email ?? null, staffId: user.id ?? user.userId ?? null });
+    if (!r.ok) return res.status(r.error === "not_found" ? 404 : 409).json({ error: r.error });
+    return res.json(r);
+  } catch (err) {
+    logger.error?.({ err: (err as Error).message }, "[send-to-carrier] failed");
+    return res.status(502).json({ error: "send_failed", message: (err as Error).message });
+  }
+});
+
 export default router;
