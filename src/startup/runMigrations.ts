@@ -9,7 +9,7 @@
 //   - Runs each unapplied migration inside a transaction
 //   - On error: ROLLBACK that one migration, log, throw — the BI server treats
 //     this as non-blocking via its existing try/catch in src/index.ts
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Pool } from "pg";
 import { logger } from "../platform/logger";
@@ -94,6 +94,48 @@ export async function runMigrations(pool: Pool): Promise<{ applied: string[]; sk
   // 3. Fetch already-applied set
   const { rows } = await pool.query<{ filename: string }>(`SELECT filename FROM bi_migrations_applied`);
   const alreadyApplied = new Set(rows.map((r) => r.filename));
+
+  // BI_SERVER_BLOCK_v581_SCHEMA_BASELINE - a genuinely empty database (no history and no
+  // bi_applications table) loads the live-schema snapshot in src/db/baseline/ instead of
+  // replaying 150 historical files, several of which only ever worked in production's order.
+  // Every current migration is then recorded as applied. The snapshot lives outside the
+  // migrations folder so it is never mistaken for an ordinary migration, and production (which
+  // has history) never reads it.
+  if (alreadyApplied.size === 0) {
+    const baselinePath = path.resolve(MIGRATIONS_DIR, "../baseline/000000_baseline.sql");
+    if (existsSync(baselinePath)) {
+      const has = await pool.query<{ exists: boolean }>("SELECT to_regclass('public.bi_applications') IS NOT NULL AS exists");
+      if (has.rows[0]?.exists) {
+        logger.warn("runMigrations: tables exist but bi_migrations_applied is empty - NOT applying the baseline");
+      } else {
+        // pg_dump 17.6+ brackets the file with psql-only \restrict lines; node-pg cannot run them.
+        const baselineSql = readFileSync(baselinePath, "utf8")
+          .split("\n")
+          .filter((line) => !/^\s*\\(un)?restrict\b/.test(line))
+          .join("\n");
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await client.query("DROP TABLE IF EXISTS bi_migrations_applied");
+          await client.query(baselineSql);
+          // pg_dump empties search_path; put it back before anything unqualified runs.
+          await client.query("SET search_path TO public");
+          await client.query(ENSURE_TABLE_SQL);
+          for (const f of sqlFiles) {
+            await client.query(`INSERT INTO bi_migrations_applied (filename) VALUES ($1) ON CONFLICT DO NOTHING`, [f]);
+          }
+          await client.query("COMMIT");
+          for (const f of sqlFiles) alreadyApplied.add(f);
+          logger.info({ recorded: sqlFiles.length }, "runMigrations: empty database - schema baseline applied");
+        } catch (err) {
+          await client.query("ROLLBACK").catch(() => {});
+          throw err;
+        } finally {
+          client.release();
+        }
+      }
+    }
+  }
 
   // 4. Apply each unapplied migration in its own transaction
   for (const file of sqlFiles) {

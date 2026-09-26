@@ -25,6 +25,7 @@ jobs:
             -type d \( -name node_modules -o -name .git -o -name dist -o -name scripts \) -prune \
             -o -type f -name '*.sql' -print \
             | grep -v '^./src/db/migrations/' \
+            | grep -v '^./src/db/baseline/000000_baseline.sql$' \
             || true)
           if [ -n "$offenders" ]; then
             echo "::error::All migration .sql files must live in src/db/migrations/. Files outside that directory will not run on startup."
@@ -65,3 +66,44 @@ jobs:
 
       - name: Unit tests
         run: npm run test:unit
+
+  # BI_SERVER_BLOCK_v581_INTEGRATION - the full suite against a real Postgres built from the
+  # live-schema snapshot (src/db/baseline/000000_baseline.sql). Ratcheted: it may not get worse.
+  integration:
+    name: Integration (real database)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bi_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Full suite
+        id: suite
+        continue-on-error: true
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/bi_test
+          NODE_ENV: test
+        run: |
+          if [ ! -f src/db/baseline/000000_baseline.sql ]; then
+            echo "::notice::No schema baseline yet (src/db/baseline/000000_baseline.sql) - skipping the integration suite."
+            echo '{"numFailedTestSuites":0,"numFailedTests":0,"numTotalTests":0,"testResults":[]}' > /tmp/bi-integration.json
+            exit 0
+          fi
+          npx vitest run --reporter=json --outputFile=/tmp/bi-integration.json
+      - name: Ratchet
+        run: node scripts/check-integration-ratchet.mjs /tmp/bi-integration.json
