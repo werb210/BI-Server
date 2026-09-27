@@ -32,6 +32,7 @@ export default defineConfig({
       "src/routes/__tests__/biOutreachCrm.v251.test.ts",
       "src/routes/__tests__/biOutreachImport.v252.test.ts",
       "src/routes/__tests__/biSequencesRoutes.v110.test.ts",
+      "src/routes/__tests__/biFromBfDates.v586.test.ts", // BI_SERVER_BLOCK_v586 - real database
     ],
   },
 });

@@ -6,6 +6,7 @@
 // a completion_url that BF puts into the client mini-portal messenger.
 import express, { type Request, type Response } from "express";
 import { normalizeE164 } from "../util/phoneE164"; // BI_SERVER_BF_PHONE_v282
+import { toIsoDate } from "../util/isoDate"; // BI_SERVER_BLOCK_v586_BF_HANDOFF_DATES
 import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 import { pool } from "../db";
@@ -188,7 +189,8 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
         naicsCode, naicsConfidence,
         // BI_SERVER_BLOCK_v404 — populate the columns the BI form pre-fills from
         // (these were previously stored only inside `data`).
-        s(b.entity_type), s(b.guarantor_dob), s(b.guarantor_address), s(b.business_address), s(b.loan_purpose), s(b.formation_date),
+        // BI_SERVER_BLOCK_v586 - DATE columns get a real date or null; the raw text stays in data.
+        s(b.entity_type), toIsoDate(b.guarantor_dob), s(b.guarantor_address), s(b.business_address), s(b.loan_purpose), toIsoDate(b.formation_date),
         JSON.stringify(formData),
         country, businessWebsite, businessNumber, guarantorPhone, // v361
       ],
@@ -217,7 +219,7 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
              (application_id, first_name, last_name, email, date_of_birth, phone,
               address, city, province, postal_code, relationship)
            VALUES ($1,$2,$3,$4,$5::date,$6,$7,$8,$9,$10,$11)`,
-          [id, g.first_name, g.last_name, g.email, g.date_of_birth, g.phone,
+          [id, g.first_name, g.last_name, g.email, toIsoDate(g.date_of_birth), g.phone, // BI_SERVER_BLOCK_v586
            g.address, g.city, g.province, g.postal_code, g.relationship],
         );
       }
