@@ -76,6 +76,7 @@ import biLenderApiRoutes from "./routes/biLenderApiRoutes";
 import biLenderOpenApi from "./routes/biLenderOpenApi"; // BI_SERVER_BLOCK_69_LENDER_OPENAPI_SPEC_v1
 import biApplicantOtpRoutes from "./routes/biApplicantOtpRoutes";
 import biApplicantDeviceSignInRoutes from "./routes/biApplicantDeviceSignInRoutes"; // BI_SERVER_APPLICANT_FACE_ID_v300
+import biApplicantPasskeyRoutes from "./routes/biApplicantPasskeyRoutes"; // BI_SERVER_BLOCK_v601
 // BI_SERVER_BLOCK_v230_DEFER_DOCS_AND_SMS_REMINDERS_v1
 import biApplicantDocFlowRoutes from "./routes/biApplicantDocFlowRoutes";
 // BI_CLIENT_SUBMIT_v25
@@ -348,6 +349,7 @@ app.use("/api/v1", biCors, biLenderApiRoutes);
 app.use("/api/v1", biCors, biLenderOpenApi); // BI_SERVER_BLOCK_69_LENDER_OPENAPI_SPEC_v1
 app.use("/api/v1", biCors, biApplicantOtpRoutes);
 app.use("/api/v1", biCors, biApplicantDeviceSignInRoutes); // BI_SERVER_APPLICANT_FACE_ID_v300
+app.use("/api/v1", biCors, biApplicantPasskeyRoutes); // BI_SERVER_BLOCK_v601
 // BI_SERVER_REFERRAL_FROM_BF_v1 - biReferrerRoutes unmounted (referrals now handled in BF).
 // BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1 — cron-triggered job
 // endpoints. Mounted under /api/v1 alongside other public routes; auth
