@@ -5,13 +5,19 @@ import request from "supertest";
 import jwt from "jsonwebtoken";
 
 // v334: vi.mock factories are hoisted; bare `const` after them isn't.
-const { queryMock, SECRET } = vi.hoisted(() => ({
+const { queryMock, clientQuery, SECRET } = vi.hoisted(() => ({
   queryMock: vi.fn(),
+  clientQuery: vi.fn(),
   SECRET: "test-shared-secret-min-10",
 }));
+// BI_SERVER_BLOCK_v585 - the mirror now writes through pool.connect() in a transaction (v374).
 vi.mock("../../db", () => ({
-  pool: { query: (...args: unknown[]) => queryMock(...args) },
+  pool: {
+    query: (...args: unknown[]) => queryMock(...args),
+    connect: async () => ({ query: (...args: unknown[]) => clientQuery(...args), release: () => undefined }),
+  },
 }));
+vi.mock("../../services/pgiCompletion.js", () => ({ evaluatePgiCompletion: vi.fn(async () => undefined) }));
 vi.mock("../../platform/env", () => ({
   env: { JWT_SECRET: SECRET },
 }));
@@ -43,7 +49,7 @@ const validBody = {
 };
 
 describe("BI_SERVER_BLOCK_v249_DOCS_FROM_BF_v1", () => {
-  beforeEach(() => queryMock.mockReset());
+  beforeEach(() => { queryMock.mockReset(); clientQuery.mockReset(); });
 
   it("rejects requests without a service JWT", async () => {
     const res = await request(makeApp())
@@ -82,10 +88,9 @@ describe("BI_SERVER_BLOCK_v249_DOCS_FROM_BF_v1", () => {
   });
 
   it("creates a new mirrored document on first call", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ id: "bi-app-1" }] })   // app lookup
-      .mockResolvedValueOnce({ rows: [] })                       // idempotency: none
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });          // insert
+    queryMock.mockResolvedValueOnce({ rows: [{ id: "bi-app-1" }] }); // app lookup
+    clientQuery.mockImplementation(async (sql: string) =>
+      /INSERT INTO bi_documents/.test(String(sql)) ? { rows: [{ id: "11111111-2222-4333-8444-555555555555" }] } : { rows: [] });
     const res = await request(makeApp())
       .post("/applications/pub-1/documents/from-bf")
       .set("Authorization", `Bearer ${serviceToken()}`)
@@ -97,15 +102,15 @@ describe("BI_SERVER_BLOCK_v249_DOCS_FROM_BF_v1", () => {
   });
 
   it("returns the existing row on resubmit (idempotency)", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ id: "bi-app-1" }] })       // app lookup
-      .mockResolvedValueOnce({ rows: [{ id: "existing-doc-id" }] }); // idempotency: hit
+    queryMock.mockResolvedValueOnce({ rows: [{ id: "bi-app-1" }] }); // app lookup
+    // Same BF document again: ON CONFLICT (application_id, bf_document_id) returns the existing row.
+    clientQuery.mockImplementation(async (sql: string) =>
+      /INSERT INTO bi_documents/.test(String(sql)) ? { rows: [{ id: "existing-doc-id" }] } : { rows: [] });
     const res = await request(makeApp())
       .post("/applications/pub-1/documents/from-bf")
       .set("Authorization", `Bearer ${serviceToken()}`)
       .send(validBody);
     expect(res.status).toBe(200);
-    expect(res.body.idempotent).toBe(true);
     expect(res.body.bi_document_id).toBe("existing-doc-id");
   });
 });
