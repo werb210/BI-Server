@@ -30,10 +30,10 @@ describe("v366 — Referral invite SMS", () => {
 });
 
 describe("v366 — Submit confirmation SMS", () => {
-  it("uses sendOutreachSms", () => {
-    expect(publicSrc).toMatch(/sendOutreachSms/);
+  it("goes app first, SMS as fallback (v588)", () => {
+    expect(publicSrc).toMatch(/notifyBiClient/);
   });
-  it("fires only when applicant_phone_e164 present", () => {
+  it("texts the applicant or guarantor phone when the app can't be reached", () => {
     // BI_UNQUARANTINE_SOURCE_REGEX_v1
     // v382 widened this guard. applicant_phone_e164 is NULL for virtually
     // every public applicant - the website form collects guarantor_phone - so
@@ -41,7 +41,7 @@ describe("v366 — Submit confirmation SMS", () => {
     // Assert the behaviour (a phone is resolved, then sent to) rather than the
     // exact expression, which is what made this brittle in the first place.
     expect(publicSrc).toMatch(/app\.applicant_phone_e164\s*\|\|\s*app\.guarantor_phone/);
-    expect(publicSrc).toMatch(/if \(submitSmsTo\) \{[\s\S]*sendOutreachSms\(submitSmsTo,/);
+    expect(publicSrc).toMatch(/smsTo: submitSmsTo/); // BI_SERVER_BLOCK_v588
   });
   it("includes the docs upload link", () => {
     expect(publicSrc).toMatch(/applications\/\$\{app\.public_id\}\/documents/);
@@ -60,7 +60,7 @@ describe("v366 — Policy.bound SMS in pgiOnApprovedHook", () => {
     expect(hookSrc).toMatch(/bound a PGI policy/);
   });
   it("each SMS call has its own .catch so failures are isolated", () => {
-    expect(hookSrc).toMatch(/applicant bound SMS failed/);
+    expect(hookSrc).toMatch(/applicant bound notice failed/); // BI_SERVER_BLOCK_v588 - app first
     expect(hookSrc).toMatch(/referrer bound SMS failed/);
   });
   it("preserves the existing DB updates from BI_BLOCK_PGI_ALIGNMENT_v1", () => {

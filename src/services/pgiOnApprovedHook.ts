@@ -35,12 +35,16 @@ export async function onApplicationApproved(applicationId: string) {
     const baseUrl = process.env.BI_PUBLIC_URL || "https://www.boreal.insure";
 
     // 1. Applicant — congratulatory + policy link.
-    if (app.applicant_phone_e164) {
+    {
+      // BI_SERVER_BLOCK_v588_APP_FIRST - the app first, SMS only as the fallback.
       const policyUrl = `${baseUrl}/applications/${app.public_id}`;
       const applicantBody = `Boreal Risk: Your PGI application has been APPROVED and bound. Policy details: ${policyUrl}`;
-      await sendOutreachSms(app.applicant_phone_e164, applicantBody).catch((e) =>
-        console.warn("[v366] applicant bound SMS failed", { error: (e as Error)?.message })
-      );
+      const { notifyBiClient } = await import("./notifyBiClient");
+      const r = await notifyBiClient({
+        applicationId, kind: "APPLICATION_UPDATE", title: "PGI approved",
+        body: "Your PGI application is approved and bound.", sms: applicantBody, smsTo: app.applicant_phone_e164,
+      });
+      if (r.channel === "none") console.warn("[v366] applicant bound notice failed", { error: r.error });
     }
 
     // 2. Referrer — heads-up that one of their referrals closed.

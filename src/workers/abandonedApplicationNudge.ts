@@ -48,7 +48,14 @@ async function sendBatch(rows: Row[], flagKey: string): Promise<number> {
           WHERE id = $1`,
         [row.id, `{${flagKey}}`],
       );
-      await sendOutreachSms(row.applicant_phone_e164, nudgeBody(row.public_id));
+      // BI_SERVER_BLOCK_v588_APP_FIRST - the app first, SMS only as the fallback.
+      const { notifyBiClient } = await import("../services/notifyBiClient");
+      const r = await notifyBiClient({
+        applicationId: row.id, kind: "APPLICATION_UPDATE", title: "Finish your PGI application",
+        body: "You're almost there - pick up where you left off.",
+        sms: nudgeBody(row.public_id), smsTo: row.applicant_phone_e164,
+      });
+      if (r.channel === "none") throw new Error(r.error ?? "not_delivered");
       sent += 1;
     } catch (err) {
       logger.error(

@@ -4,7 +4,7 @@ import { Pool } from "pg";
 import fs from "fs";
 import path from "path";
 import { badRequest, ok } from "../utils/apiResponse";
-import { sendDocumentRejectedSms } from "../services/smsService";
+import { notifyBiClient } from "../services/notifyBiClient"; // BI_SERVER_BLOCK_v588_APP_FIRST
 import { requireAuth } from "../platform/auth";
 import { env } from "../platform/env";
 // BI_HARDENING_v44 — switch BI document storage from local disk to the Azure
@@ -372,37 +372,35 @@ router.post("/:id/reject", requireAuth, requireStaffOrAdmin, async (req, res) =>
     ]
   );
 
-  // BI_SERVER_PUSH_DISPATCH_v240 - actionable push alongside the SMS.
-  void import("../services/push/biPushSender").then((m) => m.notifyBiApplicant({
-    applicationId: doc.application_id,
-    kind: "DOCUMENT_REQUEST",
-    title: "Document needed",
-    body: `Please upload a new ${String(doc.doc_type ?? "document").replace(/_/g, " ")}. ${reason.trim()}`.trim(),
-    dedupeKey: String(id),
-  }));
-
-  if (doc.contact_phone) {
+  // BI_SERVER_BLOCK_v588_APP_FIRST - the Boreal Risk app first; SMS only when the app can't be
+  // reached (it used to send both). The activity line records which channel was used.
+  {
     const portalBase = process.env.APPLICANT_PORTAL_URL || "https://borealinsurance.ca";
     const link = `${portalBase}/application/documents?app=${doc.application_id}`;
-    try {
-      const smsResult = await sendDocumentRejectedSms(doc.contact_phone, {
-        name: doc.contact_name || "there",
-        docType: doc.doc_type,
-        reason: reason.trim(),
-        link
-      });
+    const docLabel = String(doc.doc_type ?? "document").replace(/_/g, " ");
+    const sent = await notifyBiClient({
+      applicationId: doc.application_id,
+      kind: "DOCUMENT_REQUEST",
+      title: "Document needed",
+      body: `Please upload a new ${docLabel}. ${reason.trim()}`.trim(),
+      sms: `Hi ${doc.contact_name || "there"}, your ${doc.doc_type} was not accepted. Reason: ${reason.trim()}. Please re-upload: ${link}`,
+      smsTo: doc.contact_phone ?? null,
+      dedupeKey: String(id),
+    });
+    if (sent.channel !== "none") {
       await pool.query(
         `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
-         VALUES($1, 'system', $2, 'sms_sent', $3, $4::jsonb)`,
+         VALUES($1, 'system', $2, $3, $4, $5::jsonb)`,
         [
           doc.application_id,
           userId,
-          `SMS sent for rejected doc ${doc.doc_type}`,
-          JSON.stringify({ template: "document_rejected", to: doc.contact_phone, sid: (smsResult as { sid?: string }).sid ?? null })
-        ]
-      );
-    } catch (smsErr) {
-      console.error("SMS send failed for doc reject", smsErr);
+          sent.channel === "push" ? "push_sent" : "sms_sent",
+          `${sent.channel === "push" ? "App notification" : "SMS"} sent for rejected doc ${doc.doc_type}`,
+          JSON.stringify({ template: "document_rejected", channel: sent.channel, to: sent.channel === "sms" ? doc.contact_phone : null, sid: sent.sid ?? null }),
+        ],
+      ).catch((err) => console.error("doc reject activity insert failed", err));
+    } else {
+      console.error("doc reject notice not delivered", { applicationId: doc.application_id, error: sent.error });
     }
   }
 
