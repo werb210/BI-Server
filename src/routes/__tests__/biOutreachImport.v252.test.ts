@@ -198,7 +198,7 @@ describe("BI_SERVER_BLOCK_v799 — POST /crm/outreach/contacts/bulk-action", () 
     sendSmsMock.mockReset();
   });
 
-  it("clears outreach_status for remove_from_outreach", async () => {
+  it("excludes contacts for remove_from_outreach (v853)", async () => { // BI_SERVER_BLOCK_v585
     queryMock.mockResolvedValueOnce({ rowCount: 2, rows: [] });
 
     const r = await request(makeApp())
@@ -208,7 +208,7 @@ describe("BI_SERVER_BLOCK_v799 — POST /crm/outreach/contacts/bulk-action", () 
 
     expect(r.status).toBe(200);
     expect(r.body.affected).toBe(2);
-    expect(String(queryMock.mock.calls[0][0])).toContain("outreach_status = NULL");
+    expect(String(queryMock.mock.calls[0][0])).toContain("outreach_excluded = TRUE");
   });
 
   it("suppresses and deletes contacts for delete_from_crm", async () => {

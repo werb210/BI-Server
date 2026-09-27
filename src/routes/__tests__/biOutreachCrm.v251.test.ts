@@ -43,6 +43,7 @@ describe("BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — GET /crm/outreach/contacts", 
     queryMock.mockResolvedValueOnce({
       rows: [{ id: "c1", full_name: "Jane", outreach_status: "cold" }],
     });
+    queryMock.mockResolvedValueOnce({ rows: [{ total: 1 }] }); // BI_SERVER_BLOCK_v585 - v791 pagination count
     const r = await request(makeApp())
       .get("/crm/outreach/contacts")
       .set("Authorization", `Bearer ${staffToken()}`);
@@ -61,6 +62,7 @@ describe("BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — GET /crm/outreach/contacts", 
 
   it("owner=mine binds the staffUserId from the JWT", async () => {
     queryMock.mockResolvedValueOnce({ rows: [] });
+    queryMock.mockResolvedValueOnce({ rows: [{ total: 0 }] }); // BI_SERVER_BLOCK_v585 - v791 pagination count
     const r = await request(makeApp())
       .get("/crm/outreach/contacts?owner=mine")
       .set("Authorization", `Bearer ${staffToken()}`);
