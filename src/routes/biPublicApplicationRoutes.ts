@@ -651,15 +651,17 @@ router.post("/applications/:publicId/submit", async (req, res) => {
   // every public applicant because applicant_phone_e164 was NULL on
   // virtually every row. Non-fatal — submit response goes back regardless.
   const submitSmsTo: string | null = app.applicant_phone_e164 || app.guarantor_phone || null;
-  if (submitSmsTo) {
-    try {
-      const { sendOutreachSms } = await import("../services/smsService");
-      const docsUrl = `${process.env.BI_PUBLIC_URL || "https://www.boreal.insure"}/applications/${app.public_id}/documents`;
-      const body = `Boreal Risk: We got your application. Next step — upload supporting documents here: ${docsUrl}`;
-      await sendOutreachSms(submitSmsTo, body);
-    } catch (err) {
-      console.warn("[v382] submit confirmation SMS failed (non-fatal)", { app_id: app.id, error: (err as Error)?.message });
-    }
+  {
+    // BI_SERVER_BLOCK_v588_APP_FIRST - the app first, SMS only as the fallback.
+    const { notifyBiClient } = await import("../services/notifyBiClient");
+    const docsUrl = `${process.env.BI_PUBLIC_URL || "https://www.boreal.insure"}/applications/${app.public_id}/documents`;
+    const r = await notifyBiClient({
+      applicationId: app.id, kind: "DOCUMENT_REQUEST", title: "Application received",
+      body: "Next step: upload your supporting documents.",
+      sms: `Boreal Risk: We got your application. Next step — upload supporting documents here: ${docsUrl}`,
+      smsTo: submitSmsTo,
+    });
+    if (r.channel === "none" && submitSmsTo) console.warn("[v382] submit confirmation failed (non-fatal)", { app_id: app.id, error: r.error });
   }
   // BI_SERVER_BLOCK_v320_LAUNCH_RESCUE_v1
   void ensureContactAndCompanyForApp(app.id).catch(() => {});

@@ -116,7 +116,15 @@ async function runDocsReminderCronTickInner(): Promise<{ scanned: number; sent: 
       const body = isLast
         ? `Final reminder: your Boreal Risk application for ${businessName} is waiting on documents. Upload now or we will close it: ${docUrl}`
         : `Reminder: upload your financial documents to keep your Boreal Risk application moving for ${businessName}. ${docUrl}`;
-      await sendOutreachSms(phone, body);
+      // BI_SERVER_BLOCK_v588_APP_FIRST - the app first, SMS only as the fallback.
+      const { notifyBiClient } = await import("../services/notifyBiClient");
+      const r = await notifyBiClient({
+        applicationId: row.id, kind: "DOCUMENT_REQUEST",
+        title: isLast ? "Final reminder" : "Documents needed",
+        body: `Upload your documents to keep your application for ${businessName} moving.`,
+        sms: body, smsTo: phone,
+      });
+      if (r.channel === "none") throw new Error(r.error ?? "not_delivered");
       sent += 1;
 
       if (isLast && escalationPhone) {
