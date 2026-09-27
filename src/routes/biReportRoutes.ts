@@ -37,6 +37,22 @@ router.get("/reports/summary", async (_req, res) => {
     WHERE status = 'payable'
   `);
 
+  // BI_SERVER_BLOCK_v595_COMMISSIONS_BY_CURRENCY - the same two figures, kept apart by currency.
+  const byCurrency = await pool.query(`
+    SELECT CASE WHEN UPPER(TRIM(COALESCE(a.country, ''))) IN ('US', 'USA', 'UNITED STATES') THEN 'USD' ELSE 'CAD' END AS currency,
+           COALESCE(SUM(c.annual_premium_amount), 0)::numeric AS premium,
+           COALESCE(SUM(c.commission_amount) FILTER (WHERE c.status = 'payable'), 0)::numeric AS outstanding
+      FROM bi_commissions c
+      LEFT JOIN bi_applications a ON a.id = c.application_id
+     GROUP BY 1
+  `);
+  const premiumVolumeByCurrency: Record<string, number> = {};
+  const commissionOutstandingByCurrency: Record<string, number> = {};
+  for (const r of byCurrency.rows ?? []) {
+    premiumVolumeByCurrency[r.currency] = Number(r.premium ?? 0);
+    commissionOutstandingByCurrency[r.currency] = Number(r.outstanding ?? 0);
+  }
+
   // Referral count
   const referrals = await pool.query(`
     SELECT COUNT(*)::int AS count
@@ -74,6 +90,8 @@ router.get("/reports/summary", async (_req, res) => {
     conversionRate,
     premiumVolume: Number(premiumVolume.rows?.[0]?.total ?? 0),
     commissionOutstanding: Number(commissionOutstanding.rows?.[0]?.total ?? 0),
+    premiumVolumeByCurrency, // BI_SERVER_BLOCK_v595
+    commissionOutstandingByCurrency,
     claimsRatio,
     referralCount: Number(referrals.rows?.[0]?.count ?? 0),
     lenderCount: Number(lenders.rows?.[0]?.count ?? 0)

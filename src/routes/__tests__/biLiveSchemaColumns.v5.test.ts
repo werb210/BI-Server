@@ -41,7 +41,7 @@ describe("BI_SERVER_LIVE_SCHEMA_COLUMNS_v5", () => {
   });
   it("premium-received writes the fields the report actually reads", () => {
     const src = read("src/routes/biCommissionRoutes.ts");
-    expect(src).not.toMatch(/SET\s+received\s*=/); expect(src).toContain("premium_received_at"); expect(src).toContain("status = 'received'");
+    expect(src).not.toMatch(/SET\s+received\s*=/); expect(src).toContain("premium_received_at"); expect(src).toContain("status = 'payable'"); // BI_SERVER_BLOCK_v595 - 'received' is not an enum value
   });
   it("neither referrer SMS lookup asks for display_name", () => {
     for (const rel of ["src/routes/biReferrerRoutes.ts", "src/services/pgiOnApprovedHook.ts"]) {
