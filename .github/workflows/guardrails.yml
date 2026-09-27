@@ -26,6 +26,7 @@ jobs:
             -o -type f -name '*.sql' -print \
             | grep -v '^./src/db/migrations/' \
             | grep -v '^./src/db/baseline/000000_baseline.sql$' \
+            | grep -v '^./src/db/baseline/000001_reference_data.sql$' \
             || true)
           if [ -n "$offenders" ]; then
             echo "::error::All migration .sql files must live in src/db/migrations/. Files outside that directory will not run on startup."

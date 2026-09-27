@@ -118,6 +118,18 @@ export async function runMigrations(pool: Pool): Promise<{ applied: string[]; sk
           await client.query("BEGIN");
           await client.query("DROP TABLE IF EXISTS bi_migrations_applied");
           await client.query(baselineSql);
+          // BI_SERVER_BLOCK_v583_REFERENCE_DATA - the built-in lists the app depends on (outreach
+          // stages, question banks, coverage labels, industries, document catalogue, products,
+          // carrier products, NAICS codes). No customer, contact, company or lender data.
+          const referencePath = path.resolve(MIGRATIONS_DIR, "../baseline/000001_reference_data.sql");
+          if (existsSync(referencePath)) {
+            await client.query(
+              readFileSync(referencePath, "utf8")
+                .split("\n")
+                .filter((line) => !/^\s*\\(un)?restrict\b/.test(line))
+                .join("\n"),
+            );
+          }
           // pg_dump empties search_path; put it back before anything unqualified runs.
           await client.query("SET search_path TO public");
           await client.query(ENSURE_TABLE_SQL);
