@@ -1,6 +1,6 @@
 {
   "_comment": "BI_SERVER_BLOCK_v581 - first run of the full suite on the schema-baseline database (858 tests, 9 failing in 5 files; files are counted with their describe blocks). Drive these down, never up.",
-  "maxFailedFiles": 11,
-  "maxFailedTests": 9,
+  "maxFailedFiles": 8,
+  "maxFailedTests": 7,
   "maxCollectionFailures": 0
 }

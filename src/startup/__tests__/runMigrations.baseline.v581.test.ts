@@ -55,3 +55,18 @@ describe("v581 schema baseline", () => {
     expect(clientCalls.some((c) => c.sql === "CREATE TABLE a (id int);")).toBe(true);
   });
 });
+
+// BI_SERVER_BLOCK_v583_REFERENCE_DATA
+describe("v583 reference data", () => {
+  it("loads the reference lists right after the snapshot", async () => {
+    const dir = process.cwd();
+    writeFileSync(path.join(dir, "src/db/baseline/000001_reference_data.sql"), "\\restrict r\nINSERT INTO public.bi_outreach_stages VALUES ('new');\n\\unrestrict r\n");
+    const { runMigrations } = await import("../runMigrations");
+    const { pool, clientCalls } = fakePool(false);
+    await runMigrations(pool as any);
+    const i = clientCalls.findIndex((c) => c.sql.includes("CREATE TABLE public.bi_applications"));
+    const ref = clientCalls[i + 1]?.sql ?? "";
+    expect(ref).toContain("INSERT INTO public.bi_outreach_stages");
+    expect(ref).not.toContain("restrict");
+  });
+});
