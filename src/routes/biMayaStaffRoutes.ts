@@ -11,6 +11,7 @@ import { pool } from "../db";
 import { env } from "../platform/env";
 import { logger } from "../platform/logger";
 import { runBiPipelineQuery } from "../services/biMayaPipelineQuery";
+import { findBiPerson } from "../services/biPersonSummary"; // BI_SERVER_PERSON_SUMMARY_v652
 // BI_SERVER_MAYA_F_PGI_READINESS_v1 — canonical PGI doc list + startup logic.
 import {
   BI_DOC_REQUIREMENTS,
@@ -235,6 +236,22 @@ router.post("/maya/staff/pgi-readiness", async (req: Request, res: Response) => 
     await audit({ tool: "pgi.readiness", args: { ident }, ok: false, summary: e?.message ?? "error", errorCode: "pgi_readiness_exception", source: svc.source });
     logger.error({ err: e }, "bi_maya_pgi_readiness_failed");
     return res.status(500).json({ ok: false, error: "pgi_readiness_failed" });
+  }
+});
+
+// BI_SERVER_PERSON_SUMMARY_v652 - BF-Server's CRM summary and Maya ask for one person's BI side.
+router.post("/maya/staff/person-summary", async (req: Request, res: Response) => {
+  const svc = verifyMayaService(req);
+  if (!svc) return res.status(401).json({ ok: false, error: "service_jwt_required" });
+  try {
+    const result = await findBiPerson(pool, req.body?.email, req.body?.phone);
+    if (!result.ok) return res.status(400).json(result);
+    await audit({ tool: "person.summary", args: { has_email: Boolean(req.body?.email), has_phone: Boolean(req.body?.phone) }, ok: true, summary: result.summary, source: svc.source });
+    return res.json(result);
+  } catch (e: any) {
+    await audit({ tool: "person.summary", args: {}, ok: false, summary: e?.message ?? "error", errorCode: "bi_person_summary_exception", source: svc.source });
+    logger.error({ err: e }, "bi_maya_person_summary_failed");
+    return res.status(500).json({ ok: false, error: "person_summary_failed" });
   }
 });
 
