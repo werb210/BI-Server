@@ -7,7 +7,7 @@
 // The applicant is identified by x-applicant-phone; the backend token authenticates BI-Server.
 import { backendTokenProblem } from "./backendToken";
 
-const bfBaseUrl = () => (process.env.BF_SERVER_URL || "[https://server.boreal.financial](https://server.boreal.financial)").replace(/\/+$/, "");
+const bfBaseUrl = () => (process.env.BF_SERVER_URL || "https://server.boreal.financial").replace(/\/+$/, "");
 const backendToken = () => (process.env.BACKEND_SERVICE_TOKEN || process.env.BI_BACKEND_TOKEN || "").trim();
 
 export async function relayApplicantMessages(phone: string, method: "GET" | "POST", body?: unknown, fetchImpl: typeof fetch = fetch, subpath = "") {

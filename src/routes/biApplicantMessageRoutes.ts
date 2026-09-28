@@ -45,7 +45,7 @@ async function noticeByPhone(phone: string, body: string, title: string, dedupeK
     `SELECT id::text AS id FROM bi_applications
       WHERE right(regexp_replace(coalesce(applicant_phone_e164, ''), '[^0-9]', '', 'g'), 10) = right(regexp_replace($1, '[^0-9]', '', 'g'), 10)
       ORDER BY created_at DESC LIMIT 1`, [phone])).rows[0];
-  const base = String(process.env.BI_CLIENT_URL || "[https://client.boreal.insure](https://client.boreal.insure)").replace(/\/$/, "");
+  const base = String(process.env.BI_CLIENT_URL || "https://client.boreal.insure").replace(/\/$/, "");
   return notifyBiClient({
     applicationId: app?.id ?? "", kind: "APPLICATION_UPDATE", title, body,
     sms: `Boreal Risk: you have a new message. Open the Boreal Risk app or ${base}/messages to read it.`, smsTo: phone, dedupeKey,
