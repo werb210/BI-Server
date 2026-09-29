@@ -9,9 +9,9 @@ on:
 jobs:
   guardrails:
     name: Repo guardrails
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: All .sql files live in src/db/migrations
         shell: bash
@@ -54,7 +54,7 @@ jobs:
       # and typechecks the artifact that actually ships; nothing about running
       # unit tests needs to match the production runtime.
       - name: Setup Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
@@ -72,7 +72,7 @@ jobs:
   # live-schema snapshot (src/db/baseline/000000_baseline.sql). Ratcheted: it may not get worse.
   integration:
     name: Integration (real database)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
@@ -85,9 +85,9 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
