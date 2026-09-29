@@ -133,12 +133,19 @@ export async function runMigrations(pool: Pool): Promise<{ applied: string[]; sk
           // pg_dump empties search_path; put it back before anything unqualified runs.
           await client.query("SET search_path TO public");
           await client.query(ENSURE_TABLE_SQL);
-          for (const f of sqlFiles) {
+          // BI_SERVER_BASELINE_MANIFEST_v679 - only the migrations the snapshot was taken from count
+          // as applied; newer ones run below, so CI databases get every new table.
+          const manifestPath = path.resolve(MIGRATIONS_DIR, "../baseline/000000_baseline.files.txt");
+          const covered = existsSync(manifestPath)
+            ? new Set(readFileSync(manifestPath, "utf8").split(String.fromCharCode(10)).map((l) => l.trim()).filter(Boolean))
+            : null;
+          const inBaseline = sqlFiles.filter((f) => !covered || covered.has(f));
+          for (const f of inBaseline) {
             await client.query(`INSERT INTO bi_migrations_applied (filename) VALUES ($1) ON CONFLICT DO NOTHING`, [f]);
           }
           await client.query("COMMIT");
-          for (const f of sqlFiles) alreadyApplied.add(f);
-          logger.info({ recorded: sqlFiles.length }, "runMigrations: empty database - schema baseline applied");
+          for (const f of inBaseline) alreadyApplied.add(f);
+          logger.info({ recorded: inBaseline.length, newer: sqlFiles.length - inBaseline.length }, "runMigrations: empty database - schema baseline applied");
         } catch (err) {
           await client.query("ROLLBACK").catch(() => {});
           throw err;
