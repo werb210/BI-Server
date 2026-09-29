@@ -57,10 +57,10 @@ describe("v401 — BI OTP flows end-to-end (post-v399 + v400)", () => {
 
   describe("PUBLIC applicant (no provisioning gate)", () => {
     it("dispatches SMS for any valid phone", async () => {
-      const r = await request(await buildApp()).post("/api/v1/applicants/otp/start").send({ phone: "+17802648467" });
+      const r = await request(await buildApp()).post("/api/v1/applicants/otp/start").send({ phone: "+14035550188" });
       expect(r.status).toBe(200);
       expect(r.body).toEqual({ ok: true });
-      expect(sendOtpCalls).toEqual(["+17802648467"]);
+      expect(sendOtpCalls).toEqual(["+14035550188"]);
     });
     it("400s invalid phone, no dispatch", async () => {
       const r = await request(await buildApp()).post("/api/v1/applicants/otp/start").send({ phone: "garbage" });
@@ -68,31 +68,31 @@ describe("v401 — BI OTP flows end-to-end (post-v399 + v400)", () => {
       expect(sendOtpCalls).toEqual([]);
     });
     it("verify correct code returns a JWT", async () => {
-      const r = await request(await buildApp()).post("/api/v1/applicants/otp/verify").send({ phone: "+17802648467", code: "123456" });
+      const r = await request(await buildApp()).post("/api/v1/applicants/otp/verify").send({ phone: "+14035550188", code: "123456" });
       expect(r.status).toBe(200);
       expect(typeof r.body.token).toBe("string");
     });
     it("verify wrong code → 401", async () => {
-      const r = await request(await buildApp()).post("/api/v1/applicants/otp/verify").send({ phone: "+17802648467", code: "000000" });
+      const r = await request(await buildApp()).post("/api/v1/applicants/otp/verify").send({ phone: "+14035550188", code: "000000" });
       expect(r.status).toBe(401);
     });
     it("normalizes a 10-digit number to +1...", async () => {
-      const r = await request(await buildApp()).post("/api/v1/applicants/otp/start").send({ phone: "7802648467" });
+      const r = await request(await buildApp()).post("/api/v1/applicants/otp/start").send({ phone: "4035550188" });
       expect(r.status).toBe(200);
-      expect(sendOtpCalls).toEqual(["+17802648467"]);
+      expect(sendOtpCalls).toEqual(["+14035550188"]);
     });
   });
 
   describe("LENDER (provisioning-gated, v400)", () => {
     it("PROVISIONED phone → 200 + SMS dispatched", async () => {
-      provisionedPhones.add("+17802648467");
-      const r = await request(await buildApp()).post("/api/v1/lender/otp/start").send({ phone: "+17802648467" });
+      provisionedPhones.add("+14035550188");
+      const r = await request(await buildApp()).post("/api/v1/lender/otp/start").send({ phone: "+14035550188" });
       expect(r.status).toBe(200);
       expect(r.body).toEqual({ ok: true, channel: "sms" });
-      expect(sendOtpCalls).toEqual(["+17802648467"]);
+      expect(sendOtpCalls).toEqual(["+14035550188"]);
     });
     it("UNPROVISIONED phone → 404 lender_not_provisioned + NO dispatch", async () => {
-      const r = await request(await buildApp()).post("/api/v1/lender/otp/start").send({ phone: "+17802648467" });
+      const r = await request(await buildApp()).post("/api/v1/lender/otp/start").send({ phone: "+14035550188" });
       expect(r.status).toBe(404);
       expect(r.body).toEqual({ error: "lender_not_provisioned" });
       expect(sendOtpCalls).toEqual([]);
