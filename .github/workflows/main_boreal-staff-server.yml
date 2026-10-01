@@ -11,9 +11,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+# BI_SERVER_DEPLOY_QUEUE_v3: queue staging deploys instead of cancelling them. With
+# cancel-in-progress a second merge killed a deploy part-way through publishing,
+# which can leave the staging slot half-updated. Queued, each deploy finishes.
 concurrency:
   group: bi-server-staging
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   # BI_SERVER_BLOCK_v189_PROBE_FQDN_AND_NON_FATAL_v1
