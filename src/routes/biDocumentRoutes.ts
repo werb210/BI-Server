@@ -10,6 +10,7 @@ import { env } from "../platform/env";
 // BI_HARDENING_v44 — switch BI document storage from local disk to the Azure
 // Blob abstraction. Memory storage so multer doesn't write to disk first.
 import { getStorage } from "../lib/storage";
+import { fetchBfDocumentFile } from "../services/bfDocumentFile"; // BI_SERVER_BF_DOC_FILE_v4
 // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER / BI_SERVER_BLOCK_v273_PUBLIC_UPLOAD_OCR_v1
 // runOcrForDocument moved into shared service so public-flow uploads
 // can call the same code. extractText import retained because other
@@ -127,7 +128,7 @@ router.get("/:id", async (req, res, next) => {
   // BI_HARDENING_v44 — prefer blob_name (new uploads); fall back to legacy disk
   // path for documents written before this block.
   const result = await pool.query(
-    `SELECT original_filename, storage_key, blob_name, mime_type FROM bi_documents WHERE id=$1 AND purged_at IS NULL LIMIT 1`,
+    `SELECT original_filename, storage_key, blob_name, mime_type, bf_document_id FROM bi_documents WHERE id=$1 AND purged_at IS NULL LIMIT 1`,
     [req.params.id]
   );
 
@@ -138,6 +139,7 @@ router.get("/:id", async (req, res, next) => {
     storage_key: string | null;
     blob_name: string | null;
     mime_type: string;
+    bf_document_id: string | null;
   };
 
   if (row.blob_name) {
@@ -148,6 +150,14 @@ router.get("/:id", async (req, res, next) => {
     return res.end(got.buffer);
   }
 
+  // BI_SERVER_BF_DOC_FILE_v4 - copied from Boreal Financial: fetch the file from BF-Server.
+  if (!row.storage_key && row.bf_document_id) {
+    const got = await fetchBfDocumentFile(row.bf_document_id);
+    if (!got) return badRequest(res, "File missing");
+    res.setHeader("Content-Type", row.mime_type || got.contentType || "application/octet-stream");
+    res.setHeader("Content-Disposition", `inline; filename="${row.original_filename}"`);
+    return res.end(got.buffer);
+  }
   // Legacy disk path.
   if (!row.storage_key) return badRequest(res, "File missing");
   const fullPath = path.join(legacyUploadDir, row.storage_key);
@@ -417,7 +427,7 @@ router.get("/:id/download", async (req, res, next) => {
     return next();
   }
   const result = await pool.query(
-    `SELECT original_filename, storage_key, blob_name, mime_type FROM bi_documents WHERE id=$1 AND purged_at IS NULL LIMIT 1`,
+    `SELECT original_filename, storage_key, blob_name, mime_type, bf_document_id FROM bi_documents WHERE id=$1 AND purged_at IS NULL LIMIT 1`,
     [req.params.id]
   );
   if (!result.rows.length) return badRequest(res, "Document not found");
@@ -426,10 +436,19 @@ router.get("/:id/download", async (req, res, next) => {
     storage_key: string | null;
     blob_name: string | null;
     mime_type: string;
+    bf_document_id: string | null;
   };
   const safeName = String(row.original_filename || "document").replace(/[\r\n"\\]/g, "_");
   if (row.blob_name) {
     const got = await getStorage().get(row.blob_name);
+    if (!got) return badRequest(res, "File missing");
+    res.setHeader("Content-Type", row.mime_type || got.contentType || "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
+    return res.end(got.buffer);
+  }
+  // BI_SERVER_BF_DOC_FILE_v4 - copied from Boreal Financial: fetch the file from BF-Server.
+  if (!row.storage_key && row.bf_document_id) {
+    const got = await fetchBfDocumentFile(row.bf_document_id);
     if (!got) return badRequest(res, "File missing");
     res.setHeader("Content-Type", row.mime_type || got.contentType || "application/octet-stream");
     res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
