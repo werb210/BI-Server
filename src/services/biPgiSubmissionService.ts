@@ -3,6 +3,7 @@ import { buildCarrierPayloadFromRow, buildCarrierPayloadV2 } from "./pgiCarrierM
 import { pgiSubmitV2, pgiUploadDocument, type BIApplication } from "./pgiAdapter";
 import { requiredSlotsFor, type BiDocSlot } from "../lib/biDocumentRequirements";
 import { getStorage } from "../lib/storage";
+import { fetchBfDocumentFile } from "./bfDocumentFile"; // BI_SERVER_BF_DOC_FILE_v4
 // BI_PGI_ALIGNMENT_v56 — reads from bi_applications.data which now contains the full PGI form_data shape.
 // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — adds documents_text bundle to PGI submission.
 
@@ -408,9 +409,11 @@ export async function forwardAcceptedDocsToCarrier(
     doc_type: string;
     original_filename: string;
     mime_type: string;
-    storage_key: string;
+    storage_key: string | null;
+    blob_name: string | null;
+    bf_document_id: string | null;
   }>(
-    `SELECT id, doc_type, original_filename, mime_type, storage_key
+    `SELECT id, doc_type, original_filename, mime_type, storage_key, blob_name, bf_document_id
        FROM bi_documents
       WHERE application_id = $1
         AND review_status = 'accepted'
@@ -428,7 +431,11 @@ export async function forwardAcceptedDocsToCarrier(
   for (const d of pending.rows) {
     if (!FORWARDABLE_DOC_TYPES.has(d.doc_type)) { skipped += 1; continue; }
     try {
-      const blob = await store.get(d.storage_key);
+      // BI_SERVER_BF_DOC_FILE_v4 - documents copied from Boreal Financial have no BI storage key.
+      const blob = d.storage_key ? await store.get(d.storage_key)
+        : d.blob_name ? await store.get(d.blob_name)
+        : d.bf_document_id ? await fetchBfDocumentFile(d.bf_document_id)
+        : null;
       if (!blob?.buffer) throw new Error("blob not found");
       const fwd = await pgiUploadDocument({
         pgiApplicationId,
