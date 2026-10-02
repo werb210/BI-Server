@@ -7,6 +7,7 @@ import { env } from "../platform/env";
 import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
 import { normalizeE164 } from "../util/phoneE164";
+import { isReviewPhone, reviewCodeMatches } from "../services/reviewLogin"; // BI_SERVER_REVIEW_LOGIN_v710
 
 const router = Router();
 
@@ -14,6 +15,8 @@ router.post("/applicants/otp/start", async (req, res) => {
   // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1 / v278
   const phone = normalizeE164(req.body?.phone);
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
+  // BI_SERVER_REVIEW_LOGIN_v710 - the store-review number gets no text.
+  if (isReviewPhone(phone)) return res.json({ ok: true });
   const r = await sendOtpSafe(phone);
   // BI_SERVER_BLOCK_v321_OTP_ERROR_MAPPING_v1
   if (!r.ok) {
@@ -34,7 +37,10 @@ router.post("/applicants/otp/verify", async (req, res) => {
   const code = String(req.body?.code ?? "").trim();
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
   if (!code) return res.status(400).json({ error: "missing_code" });
-  const vr = await verifyOtpSafe(phone, code);
+  // BI_SERVER_REVIEW_LOGIN_v710 - the store-review number accepts only its configured code.
+  const vr = isReviewPhone(phone)
+    ? ({ ok: true, approved: reviewCodeMatches(phone, code) } as const)
+    : await verifyOtpSafe(phone, code);
   // BI_SERVER_BLOCK_v321_OTP_ERROR_MAPPING_v1
   if (!vr.ok) {
     const detail = String(vr.error ?? "");
