@@ -1,5 +1,7 @@
 // BI_SEQ_BUSINESS_HOURS_v1
-export const SEQUENCE_TIME_ZONE = "America/Edmonton";
+// BI_SERVER_ALBERTA_TIME_v711 - Alberta is UTC-6 all year since 2026 (tzdata 2026c). Older time-zone data still
+// falls the Edmonton zone back an hour on Nov 1; America/Regina is UTC-6 in every version.
+export const SEQUENCE_TIME_ZONE = "America/Regina";
 
 export type SendWindow = {
   startHour: number;

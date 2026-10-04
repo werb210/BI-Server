@@ -269,7 +269,7 @@ async function processOne(enr: Enrollment): Promise<void> {
     );
     return;
   }
-  // BI_SEQ_BUSINESS_HOURS_v1: evaluate in America/Edmonton and jump directly
+  // BI_SEQ_BUSINESS_HOURS_v1: evaluate in Alberta time (UTC-6 all year) and jump directly
   // to the next opening rather than repeatedly claiming a closed enrollment.
   if (!isSendableAt(new Date(), sendWindow(seq))) {
     await pool.query(`UPDATE bi_sequence_enrollments SET next_step_at = $2 WHERE id = $1`, [
