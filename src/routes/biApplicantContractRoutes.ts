@@ -8,6 +8,7 @@ import { analyzeContract } from "../services/contractRequirements"; // BI_CONTRA
 import { extractText } from "../services/ocrService";
 import { authApplicant, type ApplicantReq } from "./applicantAuth";
 
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const COUNTRIES = new Set(["CA", "US"]);
@@ -233,7 +234,7 @@ router.get("/applicants/applications/:id/requirements", authApplicant, async (re
     `SELECT COALESCE(data->'missing_schedules', '[]'::jsonb) AS missing_schedules
        FROM bi_applications WHERE id = $1`,
     [app.id],
-  ).catch(() => ({ rows: [] as any[] }));
+  ).catch(loggedFallback("biApplicantContractRoutes", { rows: [] as any[] }));
   const missingSchedules = Array.isArray(stored.rows[0]?.missing_schedules)
     ? (stored.rows[0]!.missing_schedules as { ref: string; title: string }[])
     : [];

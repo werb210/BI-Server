@@ -4,6 +4,7 @@
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 type Query = (sql: string, params: unknown[]) => Promise<{ rows: any[] }>;
 
 export const hashSecret = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
@@ -39,7 +40,7 @@ export async function signInApplicantDevice(query: Query, credentialId: string, 
     [credentialId, hashSecret(rotated), row.secret_hash],
   );
   if (!upd.rows.length) return { ok: false, reason: "invalid" };
-  const contact = await query(`SELECT id::text AS id FROM bi_contacts WHERE phone_e164 = $1 LIMIT 1`, [row.phone_e164]).catch(() => ({ rows: [] as any[] }));
+  const contact = await query(`SELECT id::text AS id FROM bi_contacts WHERE phone_e164 = $1 LIMIT 1`, [row.phone_e164]).catch(loggedFallback("biApplicantDeviceSignIn", { rows: [] as any[] }));
   const contactId = contact.rows[0]?.id ?? null;
   const token = jwt.sign({ kind: "applicant", phone: row.phone_e164, ...(contactId ? { contactId } : {}) }, jwtSecret, { expiresIn: "1h" });
   return { ok: true, token, phone: row.phone_e164, contactId, secret: rotated };

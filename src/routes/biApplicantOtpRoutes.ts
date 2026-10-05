@@ -7,6 +7,7 @@ import { env } from "../platform/env";
 import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
 import { normalizeE164 } from "../util/phoneE164";
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 import { isReviewPhone, reviewCodeMatches } from "../services/reviewLogin"; // BI_SERVER_REVIEW_LOGIN_v710
 
 const router = Router();
@@ -68,7 +69,7 @@ router.post("/applicants/otp/verify", async (req, res) => {
       const guarantor = await pool.query<{ guarantor_name: string | null; guarantor_email: string | null }>(
         `SELECT guarantor_name, guarantor_email FROM bi_applications WHERE guarantor_phone = $1 ORDER BY created_at DESC LIMIT 1`,
         [phone],
-      ).catch(() => ({ rows: [] as Array<{ guarantor_name: string | null; guarantor_email: string | null }> }));
+      ).catch(loggedFallback("biApplicantOtpRoutes", { rows: [] as Array<{ guarantor_name: string | null; guarantor_email: string | null }> }));
       const guarantorName = guarantor.rows[0]?.guarantor_name?.trim() || null;
       const guarantorEmail = guarantor.rows[0]?.guarantor_email?.trim() || null;
       const displayName = guarantorName ?? `New applicant (${phone})`;

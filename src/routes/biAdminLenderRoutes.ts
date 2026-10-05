@@ -322,10 +322,11 @@ router.post("/admin/lenders/:id/approve-live-keys", async (req, res) => {
   if (!r.rows[0]) return badRequest(res, "lender not found");
   const row = r.rows[0];
   if (enabled && row.contact_phone_e164) {
+    // BI_SERVER_LENDER_SANDBOX_LINK_v712 - the sandbox page is on boreal.insure, not boreal.financial.
     void sendBiSms(
       row.contact_phone_e164,
       `Boreal Risk: ${row.contact_full_name || "your lender account"} has been approved for LIVE API keys. ` +
-      `Generate one at https://boreal.financial/lender/sandbox. Reply STOP to opt out.`,
+      `Generate one at https://www.boreal.insure/lender/sandbox. Reply STOP to opt out.`,
     );
   }
   await pool.query(

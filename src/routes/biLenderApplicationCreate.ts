@@ -16,6 +16,7 @@ import { pool } from "../db";
 import { logger } from "../platform/logger";
 import { getStorage } from "../lib/storage";
 
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 const router = express.Router();
 
 function genCode(): string { const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let out = ""; for (let i = 0; i < 8; i++) out += chars[Math.floor(Math.random() * chars.length)]; return out; }
@@ -283,7 +284,7 @@ router.post(
         return res.status(400).json({ error: "invalid_doc_type", doc_type: docType, detail: String((err as Error)?.message ?? err) });
       }
       created.push({ id: inserted.rows[0].id, doc_type: docType, filename: file.originalname });
-      await pool.query(`INSERT INTO bi_activity(application_id, actor_type, event_type, summary) VALUES($1,'lender','document_uploaded',$2)`, [app.id, `Document uploaded: ${file.originalname}`]).catch(() => {});
+      await pool.query(`INSERT INTO bi_activity(application_id, actor_type, event_type, summary) VALUES($1,'lender','document_uploaded',$2)`, [app.id, `Document uploaded: ${file.originalname}`]).catch(loggedFallback("biLenderApplicationCreate activity", undefined));
 
       // BI_SERVER_BLOCK_v391_LENDER_DOC_CARRIER_FORWARD_v1
       // Forward to PGI immediately when the application has already been

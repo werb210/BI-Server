@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { pool } from "../db";
 import { authApplicant, type ApplicantReq } from "./applicantAuth";
 
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 const router = Router();
 
 const COUNTRIES = new Set(["CA", "US"]);
@@ -24,7 +25,7 @@ async function resolveIndustry(raw: unknown): Promise<{ code: string; naics: str
     `SELECT code, naics_code, wants_contract FROM bi_industries
       WHERE active = TRUE AND code = $1 LIMIT 1`,
     [requested],
-  ).catch(() => ({ rows: [] as any[] }));
+  ).catch(loggedFallback("biApplicantProfileRoutes", { rows: [] as any[] }));
   const row = result.rows[0];
   if (row) return { code: row.code, naics: row.naics_code, wantsContract: row.wants_contract };
   return { code: "other", naics: "561990", wantsContract: false };

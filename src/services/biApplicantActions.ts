@@ -8,6 +8,7 @@
 // up on the applicant's home screen without a second edit.
 import { pool } from "../db";
 
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 export type BiActionItem = {
   key: string;
   kind: "document" | "question";
@@ -54,7 +55,7 @@ export async function buildBiActionCenter(applicationId: string): Promise<BiActi
         AND COALESCE(c.required, TRUE) = TRUE
       ORDER BY c.sort_order`,
     [applicationId],
-  ).catch(() => ({ rows: [] as any[] }));
+  ).catch(loggedFallback("biApplicantActions#1", { rows: [] as any[] }));
 
   const questions = await pool.query<{ question_key: string; prompt: string }>(
     `SELECT q.question_key, q.prompt
@@ -71,7 +72,7 @@ export async function buildBiActionCenter(applicationId: string): Promise<BiActi
                  AND COALESCE(TRIM(a.reason),'') = ''))
       GROUP BY q.question_key, q.prompt`,
     [applicationId],
-  ).catch(() => ({ rows: [] as any[] }));
+  ).catch(loggedFallback("biApplicantActions#2", { rows: [] as any[] }));
 
   const outstanding: BiActionItem[] = [];
   const completed: BiActionItem[] = [];

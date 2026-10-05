@@ -17,6 +17,7 @@ import multer from "multer";
 import { getStorage } from "../lib/storage";
 import { validatePgiSubmissionV2 } from "../lib/validation/pgiFields";
 
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 const router = Router();
 
 // BI_SERVER_BLOCK_BI_ROUND7_LENDER_DOCS_v1
@@ -92,7 +93,7 @@ async function authLender(req: any, res: any, next: any) {
   const r = await pool.query(`SELECT lender_id FROM bi_lender_api_keys WHERE key_hash=$1 AND is_active=TRUE LIMIT 1`, [hash]);
   const row = r.rows[0];
   if (!row) return res.status(401).json({ error: "invalid_api_key" });
-  await pool.query(`UPDATE bi_lender_api_keys SET last_used_at=NOW() WHERE key_hash=$1`, [hash]).catch(() => {});
+  await pool.query(`UPDATE bi_lender_api_keys SET last_used_at=NOW() WHERE key_hash=$1`, [hash]).catch(loggedFallback("biLenderApiRoutes", undefined));
   req.lenderId = row.lender_id;
   next();
 }

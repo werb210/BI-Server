@@ -2,6 +2,7 @@
 import { Router } from "express";
 import { pool } from "../db";
 import { authApplicant, type ApplicantReq } from "./applicantAuth";
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 const router = Router();
 router.post("/applicants/applications/:publicId/defer-docs", authApplicant, async (req: ApplicantReq, res) => {
   const r = await pool.query(`SELECT id, applicant_phone_e164, guarantor_phone, status, docs_deferred_at FROM bi_applications WHERE public_id = $1 LIMIT 1`, [req.params.publicId]);
@@ -12,7 +13,7 @@ router.post("/applicants/applications/:publicId/defer-docs", authApplicant, asyn
   if (!["in_progress", "document_review"].includes(String(app.status))) return res.status(409).json({ error: "wrong_status", current: app.status });
   if (app.docs_deferred_at) return res.json({ ok: true, idempotent: true });
   await pool.query(`UPDATE bi_applications SET docs_deferred_at = NOW(), updated_at = NOW() WHERE id = $1`, [app.id]);
-  await pool.query(`INSERT INTO bi_activity(application_id, actor_type, event_type, summary) VALUES($1, 'applicant', 'docs_deferred', 'Applicant chose to upload documents later')`, [app.id]).catch(() => {});
+  await pool.query(`INSERT INTO bi_activity(application_id, actor_type, event_type, summary) VALUES($1, 'applicant', 'docs_deferred', 'Applicant chose to upload documents later')`, [app.id]).catch(loggedFallback("biApplicantDocFlowRoutes activity", undefined));
   return res.json({ ok: true });
 });
 // BI_SERVER_BLOCK_v352_OTP_AND_PHONE_PREFILL_v1
