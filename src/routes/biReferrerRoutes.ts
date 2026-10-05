@@ -7,6 +7,7 @@ import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
 import { normalizeE164 } from "../util/phoneE164";
 
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 const router = Router();
 // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1
 router.post("/referrer/otp/start", async (req, res) => {
@@ -219,7 +220,7 @@ router.post("/referrer/referrals", requireReferrer, async (req: any, res) => {
         const firstName = String(full_name).split(" ")[0] || "there";
         const body = `Hi ${firstName}, ${fromName} referred you to Boreal Risk for Personal Guarantee Insurance. Get a quote in 5 min: ${applyUrl}`;
         await sendOutreachSms(phone, body);
-        await pool.query(`UPDATE bi_referrals SET sms_sent_at = NOW() WHERE id = $1`, [id]).catch(() => {});
+        await pool.query(`UPDATE bi_referrals SET sms_sent_at = NOW() WHERE id = $1`, [id]).catch(loggedFallback("biReferrerRoutes", undefined));
       } catch (err) {
         console.warn("[v366] referral invite SMS failed (non-fatal)", { referral_id: id, error: (err as Error)?.message });
       }

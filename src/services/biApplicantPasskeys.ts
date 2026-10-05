@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { base64url, challengeOf, verifyAssertion, verifyAttestation } from "./webauthnLite";
 
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 type Query = (sql: string, params: unknown[]) => Promise<{ rows: any[] }>;
 const challenge = () => base64url(crypto.randomBytes(32));
 const validCredential = (value: string) => typeof value === "string" && value.length > 5 && value.length < 2048;
@@ -48,7 +49,7 @@ export async function finishApplicantPasskeySignIn(query: Query, body: any, jwtS
   const verified = verifyAssertion({ clientDataJSON: String(a.clientDataJSON ?? ""), authenticatorData: String(a.authenticatorData ?? ""), signature: String(a.signature ?? ""), publicKeyPem: row.public_key_pem, challenge: challengeValue, origin, rpId, requireUserVerification: true });
   if (Number(row.sign_count) && verified.signCount && verified.signCount <= Number(row.sign_count)) throw new Error("counter_replay");
   await query(`UPDATE bi_applicant_passkeys SET sign_count=$2,last_used_at=now() WHERE credential_id=$1`, [credentialId, verified.signCount]);
-  const contact = await query(`SELECT id::text AS id FROM bi_contacts WHERE phone_e164=$1 LIMIT 1`, [row.phone_e164]).catch(() => ({ rows: [] }));
+  const contact = await query(`SELECT id::text AS id FROM bi_contacts WHERE phone_e164=$1 LIMIT 1`, [row.phone_e164]).catch(loggedFallback("biApplicantPasskeys", { rows: [] }));
   const contactId = contact.rows[0]?.id ?? null;
   return { token: jwt.sign({ kind: "applicant", phone: row.phone_e164, ...(contactId ? { contactId } : {}) }, jwtSecret, { expiresIn: "1h" }), phone: row.phone_e164, contactId };
 }

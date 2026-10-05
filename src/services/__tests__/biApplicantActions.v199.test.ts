@@ -28,7 +28,8 @@ describe("bi action center", () => {
   });
 
   it("degrades to an empty list rather than throwing", () => {
-    expect(svc.match(/\.catch\(\(\) => \(\{ rows: \[\] as any\[\] \}\)\)/g)?.length).toBe(2);
+    // BI_SERVER_LOGGED_FALLBACKS_v712 - still degrades to empty, but now logs why.
+    expect(svc.match(/\.catch\(loggedFallback\("biApplicantActions#[12]", \{ rows: \[\] as any\[\] \}\)\)/g)?.length).toBe(2);
   });
 
   it("only reports canSubmit when nothing at all is outstanding", () => {

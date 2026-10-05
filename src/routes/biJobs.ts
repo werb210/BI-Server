@@ -25,6 +25,7 @@ import { sendOutreachSms } from "../services/smsService";
 import { logger } from "../platform/logger";
 import { env } from "../platform/env";
 
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 const router = Router();
 
 const MAX_REMINDERS = 10;
@@ -46,7 +47,7 @@ export async function runDocsReminderCronTick(): Promise<{ scanned: number; sent
   try {
     return await runDocsReminderCronTickInner();
   } finally {
-    await pool.query(`SELECT pg_advisory_unlock($1)`, [ADVISORY_LOCK_KEY]).catch(() => {});
+    await pool.query(`SELECT pg_advisory_unlock($1)`, [ADVISORY_LOCK_KEY]).catch(loggedFallback("biJobs", undefined));
   }
 }
 

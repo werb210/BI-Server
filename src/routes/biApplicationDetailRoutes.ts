@@ -5,6 +5,7 @@ import { Router, type Request, type Response } from "express";
 import { pool } from "../db";
 import { logger } from "../platform/logger";
 
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 const router: Router = Router();
 
 // Inline role gate aligned with biDocumentRoutes behavior.
@@ -600,7 +601,7 @@ router.get("/:id/co-guarantors", requireStaffOrAdmin, async (req: Request, res: 
     const pendingRes = await pool.query<{ pending: unknown }>(
       `SELECT data->'co_guarantors' AS pending FROM bi_applications WHERE id = $1`,
       [appId],
-    ).catch(() => ({ rows: [] as Array<{ pending: unknown }> }));
+    ).catch(loggedFallback("biApplicationDetailRoutes", { rows: [] as Array<{ pending: unknown }> }));
     const pendingRaw = pendingRes.rows[0]?.pending;
     const known = new Set(rows.rows.map((r) => `${(r.first_name ?? "").toLowerCase()}|${(r.last_name ?? "").toLowerCase()}`));
     const pending = (Array.isArray(pendingRaw) ? pendingRaw : [])

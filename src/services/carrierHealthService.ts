@@ -1,6 +1,7 @@
 // BI_SERVER_BLOCK_v234_OPS_HARDENING_v1
 import { pool } from "../db";
 import { logger } from "../platform/logger";
+import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 // BI_SERVER_BLOCK_56_EMAIL_OTP_APOLLO_HEALTH_NAME_v1 — added "idle" + "pending"
 // statuses so the dashboard distinguishes "no traffic yet" (idle) and
 // "submissions sent, awaiting carrier ack" (pending) from real errors (degraded).
@@ -55,5 +56,5 @@ export async function getCarrierHealth(): Promise<CarrierHealth> {
   };
 }
 let lastStatus: CarrierHealth["status"] | null = null;
-export async function runCarrierHealthTick(): Promise<void> { try { const h = await getCarrierHealth(); if (h.status === "degraded" && lastStatus !== "degraded") { await pool.query(`INSERT INTO bi_activity (application_id, actor_type, event_type, summary, meta) VALUES (NULL, 'system', 'carrier_health_degraded', $1, $2::jsonb)`, [`Carrier degraded: ${h.submissions_24h} submissions, ${h.received_24h} received, ${h.errors_24h} errors in 24h`, JSON.stringify(h)]).catch(() => {}); logger.warn({ health: h }, "[carrierHealth] degraded — see bi_activity"); } else if (h.status === "healthy" && lastStatus === "degraded") logger.info({ health: h }, "[carrierHealth] recovered to healthy"); lastStatus = h.status; } catch (err) { logger.error({ err }, "[carrierHealth] tick failed"); } }
+export async function runCarrierHealthTick(): Promise<void> { try { const h = await getCarrierHealth(); if (h.status === "degraded" && lastStatus !== "degraded") { await pool.query(`INSERT INTO bi_activity (application_id, actor_type, event_type, summary, meta) VALUES (NULL, 'system', 'carrier_health_degraded', $1, $2::jsonb)`, [`Carrier degraded: ${h.submissions_24h} submissions, ${h.received_24h} received, ${h.errors_24h} errors in 24h`, JSON.stringify(h)]).catch(loggedFallback("carrierHealth activity", undefined)); logger.warn({ health: h }, "[carrierHealth] degraded — see bi_activity"); } else if (h.status === "healthy" && lastStatus === "degraded") logger.info({ health: h }, "[carrierHealth] recovered to healthy"); lastStatus = h.status; } catch (err) { logger.error({ err }, "[carrierHealth] tick failed"); } }
 export function startCarrierHealthJob(): void { const TICK_MS = 60 * 60 * 1000; const handle = setInterval(() => { runCarrierHealthTick().catch(() => {}); }, TICK_MS); if (typeof (handle as any).unref === "function") (handle as any).unref(); setTimeout(() => { runCarrierHealthTick().catch(() => {}); }, 45_000).unref(); logger.info({ TICK_MS }, "[carrierHealth] startCarrierHealthJob: scheduled"); }
