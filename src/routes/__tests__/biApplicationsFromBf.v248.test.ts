@@ -21,6 +21,7 @@ vi.mock("../../platform/logger", () => ({
 }));
 
 import router from "../biApplicationsFromBfRoutes";
+import { answerBySql } from "../../__tests__/helpers/answerBySql";
 
 function makeApp() {
   const app = express();
@@ -73,9 +74,10 @@ describe("BI_SERVER_BLOCK_v248_APPLICATIONS_FROM_BF_v1", () => {
   });
 
   it("creates a new BI application and returns a completion_url", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_applications", { rows: [] }],
+      ["INSERT INTO bi_applications", { rows: [], rowCount: 1 }],
+    ], queryMock.getMockImplementation()));
     const res = await request(makeApp())
       .post("/applications/from-bf")
       .set("Authorization", `Bearer ${serviceToken()}`)
@@ -102,9 +104,10 @@ describe("BI_SERVER_BLOCK_v248_APPLICATIONS_FROM_BF_v1", () => {
   });
 
   it("defaults pgi_limit to 80% of loan_amount when not provided", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_applications", { rows: [] }],
+      ["INSERT INTO bi_applications", { rows: [], rowCount: 1 }],
+    ], queryMock.getMockImplementation()));
     await request(makeApp())
       .post("/applications/from-bf")
       .set("Authorization", `Bearer ${serviceToken()}`)

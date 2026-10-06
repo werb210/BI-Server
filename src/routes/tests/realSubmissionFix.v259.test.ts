@@ -37,6 +37,7 @@ vi.mock("../../util/phoneE164", () => ({
 }));
 
 import biReferrerRoutes from "../biReferrerRoutes";
+import { answerBySql, inTurn } from "../../__tests__/helpers/answerBySql";
 
 function makeApp() {
   const app = express();
@@ -52,10 +53,10 @@ describe("BI_SERVER_BLOCK_v259 — referrer OTP verify uses phone_e164", () => {
   });
 
   it("SELECT and INSERT on bi_referrers both use phone_e164", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [] }) // first SELECT
-      .mockResolvedValueOnce({ rows: [] }) // INSERT
-      .mockResolvedValueOnce({ rows: [{ id: "r1", intake_complete: false }] });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_referrers", inTurn({ rows: [] }, { rows: [{ id: "r1", intake_complete: false }] })],  // first SELECT
+      ["INSERT INTO bi_referrers", { rows: [] }],  // INSERT
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .post("/api/v1/referrer/otp/verify")
       .send({ phone: "+14165551234", code: "123456" });
@@ -94,9 +95,10 @@ describe("BI_SERVER_BLOCK_v259 — POST /referrer/referrals writes phone_e164", 
   });
 
   it("INSERT into bi_referrals uses phone_e164", async () => {
-    clientQueryMock
-      .mockResolvedValueOnce({ rows: [{ id: "ref-1" }] }) // INSERT bi_referrals
-      .mockResolvedValueOnce({ rows: [] }); // INSERT bi_contacts
+    clientQueryMock.mockImplementation(answerBySql([
+      ["INSERT INTO bi_referrals", { rows: [{ id: "ref-1" }] }],  // INSERT bi_referrals
+      ["INSERT INTO bi_contacts", { rows: [] }],  // INSERT bi_contacts
+    ], clientQueryMock.getMockImplementation()));
     const jwt = (await import("jsonwebtoken")).default;
     const token = jwt.sign({ kind: "referrer", id: "r1" }, SECRET);
     const r = await request(makeApp())

@@ -18,6 +18,7 @@ import { requireAuth } from "../../platform/auth";
 import biLenderApiRoutes from "../biLenderApiRoutes";
 import biReferrerRoutes from "../biReferrerRoutes";
 import biLenderApplicationCreate from "../biLenderApplicationCreate";
+import { answerBySql, inTurn } from "../../__tests__/helpers/answerBySql";
 
 function makeApp() {
   const app = express();
@@ -43,7 +44,7 @@ describe("v258 GET mine", () => {
 describe("v258 lender create sunset", () => {
   beforeEach(() => queryMock.mockReset());
   it("rejects the legacy application shape without writing to the database", async () => {
-    queryMock.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ id: "co-new" }] }).mockResolvedValue({ rows: [{ id: "app-1", application_code: "BI-A1" }] });
+    queryMock.mockResolvedValue({ rows: [{ id: "app-1", application_code: "BI-A1" }] });
     const r = await request(makeApp()).post("/api/v1/lender/lender/applications").set("Authorization", `Bearer ${lenderToken()}`).send({ company_name: "Acme Inc", contact_name: "Jane Doe", contact_email: "jane@acme.test", contact_phone: "+14165551234" });
     // BI_UNQUARANTINE_FINAL_v1 - this endpoint was sunset. The legacy shape
     // cannot satisfy the v2 validator's 11 declarations, so it returns 410
@@ -63,10 +64,10 @@ describe("v258 lender create sunset", () => {
 describe("v258 referrer verify", () => {
   beforeEach(() => queryMock.mockReset());
   it("uses phone_e164", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ id: "ref-1", intake_complete: false }] });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_referrers", inTurn({ rows: [] }, { rows: [{ id: "ref-1", intake_complete: false }] })],
+      ["INSERT INTO bi_referrers", { rows: [] }],
+    ], queryMock.getMockImplementation()));
     await request(makeApp()).post("/api/v1/referrer/referrer/otp/verify").send({ phone: "+14165551234", code: "123456" });
     const selectCall = queryMock.mock.calls.find((c) => String(c[0]).match(/SELECT \* FROM bi_referrers/i));
     expect(String(selectCall![0])).toMatch(/phone_e164\s*=/);

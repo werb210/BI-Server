@@ -30,6 +30,7 @@ vi.mock("../../services/smsService", () => ({
 }));
 
 import router from "../biOutreachCrmRoutes";
+import { answerBySql, rejects } from "../../__tests__/helpers/answerBySql";
 
 function makeApp() {
   const app = express();
@@ -61,13 +62,14 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
   });
 
   it("imports a single contact with company lookup-or-create", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [] })                       // suppression lookup
-      .mockResolvedValueOnce({ rows: [] })                       // company lookup
-      .mockResolvedValueOnce({ rows: [{ id: "co-1" }] })          // company insert
-      .mockResolvedValueOnce({ rows: [] })                       // existing contact lookup
-      .mockResolvedValueOnce({ rows: [{ id: "c-1" }] })           // contact insert
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });           // activity insert
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_suppressions", { rows: [] }],  // suppression lookup
+      ["FROM bi_companies", { rows: [] }],  // company lookup
+      ["INSERT INTO bi_companies", { rows: [{ id: "co-1" }] }],  // company insert
+      ["FROM bi_contacts", { rows: [] }],  // existing contact lookup
+      ["INSERT INTO bi_contacts", { rows: [{ id: "c-1" }] }],  // contact insert
+      ["INSERT INTO bi_contact_activity", { rows: [], rowCount: 1 }],  // activity insert
+    ], queryMock.getMockImplementation()));
 
     const xlsx = await buildXlsx([
       {
@@ -107,11 +109,12 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
       { full_name: "", email: "nobody@example.com" },
     ]);
     // Jane: suppression lookup → existing contact lookup → contact insert → activity insert.
-    queryMock
-      .mockResolvedValueOnce({ rows: [] })               // suppression lookup
-      .mockResolvedValueOnce({ rows: [] })               // existing contact lookup
-      .mockResolvedValueOnce({ rows: [{ id: "c-1" }] })  // contact insert
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // activity
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_suppressions", { rows: [] }],  // suppression lookup
+      ["FROM bi_contacts", { rows: [] }],  // existing contact lookup
+      ["INSERT INTO bi_contacts", { rows: [{ id: "c-1" }] }],  // contact insert
+      ["INSERT INTO bi_contact_activity", { rows: [], rowCount: 1 }],  // activity
+    ], queryMock.getMockImplementation()));
 
     const r = await request(makeApp())
       .post("/crm/outreach/import")
@@ -126,11 +129,12 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
   });
 
   it("updates existing contacts by email instead of duplicating", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [] }) // suppression lookup
-      .mockResolvedValueOnce({ rows: [{ id: "c-1", tags: ["warm"] }] }) // existing contact lookup
-      .mockResolvedValueOnce({ rows: [{ id: "c-1" }] }) // contact update
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // activity
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_suppressions", { rows: [] }],  // suppression lookup
+      ["FROM bi_contacts", { rows: [{ id: "c-1", tags: ["warm"] }] }],  // existing contact lookup
+      ["UPDATE bi_contacts", { rows: [{ id: "c-1" }] }],  // contact update
+      ["INSERT INTO bi_contact_activity", { rows: [], rowCount: 1 }],  // activity
+    ], queryMock.getMockImplementation()));
 
     const xlsx = await buildXlsx([
       { full_name: "Jane Updated", email: "jane@example.com", tags: "q3" },
@@ -173,10 +177,11 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/import", () => {
   });
 
   it("recognizes header aliases (Name, Company, Phone, Role)", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ id: "co-1" }] })       // company found
-      .mockResolvedValueOnce({ rows: [{ id: "c-1" }] })         // contact insert
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });         // activity
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_companies", { rows: [{ id: "co-1" }] }],  // company found
+      ["INSERT INTO bi_contacts", { rows: [{ id: "c-1" }] }],  // contact insert
+      ["INSERT INTO bi_contact_activity", { rows: [], rowCount: 1 }],  // activity
+    ], queryMock.getMockImplementation()));
 
     const xlsx = await buildXlsx([
       { Name: "Jane Doe", Company: "Acme", Phone: "+14165551234", Role: "CFO" },
@@ -212,13 +217,14 @@ describe("BI_SERVER_BLOCK_v799 — POST /crm/outreach/contacts/bulk-action", () 
   });
 
   it("suppresses and deletes contacts for delete_from_crm", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: null }) // BEGIN
-      .mockResolvedValueOnce({ rows: [{ id: "c-1", email: "jane@example.com", phone_e164: "+14165551234" }] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 }) // suppression insert
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 }) // activity delete
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 }) // contact delete
-      .mockResolvedValueOnce({ rows: [], rowCount: null }); // COMMIT
+    queryMock.mockImplementation(answerBySql([
+      ["BEGIN", { rows: [], rowCount: null }],  // BEGIN
+      ["SELECT id,", { rows: [{ id: "c-1", email: "jane@example.com", phone_e164: "+14165551234" }] }],
+      ["INSERT INTO bi_suppressions", { rows: [], rowCount: 1 }],  // suppression insert
+      ["DELETE FROM bi_contact_activity", { rows: [], rowCount: 1 }],  // activity delete
+      ["DELETE FROM bi_contacts", { rows: [], rowCount: 1 }],  // contact delete
+      ["COMMIT", { rows: [], rowCount: null }],  // COMMIT
+    ], queryMock.getMockImplementation()));
 
     const r = await request(makeApp())
       .post("/crm/outreach/contacts/bulk-action")
@@ -240,11 +246,12 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/contacts/:id/demo-invite",
   });
 
   it("400s when staff has no bookings_url", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ bookings_url: null }] })
-      .mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_staff_profile", { rows: [{ bookings_url: null }] }],
+      ["FROM bi_contacts", {
         rows: [{ phone_e164: "+14165551234", full_name: "Jane", outreach_status: null }],
-      });
+      }],
+    ], queryMock.getMockImplementation()));
 
     const r = await request(makeApp())
       .post("/crm/outreach/contacts/c1/demo-invite")
@@ -255,9 +262,10 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/contacts/:id/demo-invite",
   });
 
   it("404s when contact does not exist", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ bookings_url: "https://outlook.office.com/bookings/x" }] })
-      .mockResolvedValueOnce({ rows: [] });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_staff_profile", { rows: [{ bookings_url: "https://outlook.office.com/bookings/x" }] }],
+      ["FROM bi_contacts", { rows: [] }],
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .post("/crm/outreach/contacts/missing/demo-invite")
       .set("Authorization", `Bearer ${staffToken()}`)
@@ -266,11 +274,12 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/contacts/:id/demo-invite",
   });
 
   it("400s when contact has no phone", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ bookings_url: "https://outlook.office.com/bookings/x" }] })
-      .mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_staff_profile", { rows: [{ bookings_url: "https://outlook.office.com/bookings/x" }] }],
+      ["FROM bi_contacts", {
         rows: [{ phone_e164: null, full_name: "Jane", outreach_status: null }],
-      });
+      }],
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .post("/crm/outreach/contacts/c1/demo-invite")
       .set("Authorization", `Bearer ${staffToken()}`)
@@ -280,14 +289,17 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/contacts/:id/demo-invite",
   });
 
   it("sends SMS, logs activity, bumps status to attempting when cold", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ bookings_url: "https://outlook.office.com/bookings/x" }] })
-      .mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_staff_profile", { rows: [{ bookings_url: "https://outlook.office.com/bookings/x" }] }],
+      ["FROM bi_contacts", {
         rows: [{ phone_e164: "+14165551234", full_name: "Jane Doe", outreach_status: "cold" }],
-      })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 }) // activity log
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // status bump
-    sendSmsMock.mockResolvedValueOnce({ sid: "SM123" });
+      }],
+      ["INSERT INTO bi_contact_activity", { rows: [], rowCount: 1 }],  // activity log
+      ["UPDATE bi_contacts", { rows: [], rowCount: 1 }],  // status bump
+    ], queryMock.getMockImplementation()));
+    sendSmsMock.mockImplementation(answerBySql([
+      ["+14165551234", { sid: "SM123" }],
+    ], sendSmsMock.getMockImplementation()));
 
     const r = await request(makeApp())
       .post("/crm/outreach/contacts/c1/demo-invite")
@@ -304,13 +316,16 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/contacts/:id/demo-invite",
   });
 
   it("does NOT bump status when contact is already engaged", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ bookings_url: "https://outlook.office.com/bookings/x" }] })
-      .mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_staff_profile", { rows: [{ bookings_url: "https://outlook.office.com/bookings/x" }] }],
+      ["FROM bi_contacts", {
         rows: [{ phone_e164: "+14165551234", full_name: "Jane", outreach_status: "engaged" }],
-      })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // activity log only
-    sendSmsMock.mockResolvedValueOnce({ sid: "SM124" });
+      }],
+      ["INSERT INTO bi_contact_activity", { rows: [], rowCount: 1 }],  // activity log only
+    ], queryMock.getMockImplementation()));
+    sendSmsMock.mockImplementation(answerBySql([
+      ["+14165551234", { sid: "SM124" }],
+    ], sendSmsMock.getMockImplementation()));
 
     const r = await request(makeApp())
       .post("/crm/outreach/contacts/c1/demo-invite")
@@ -323,13 +338,16 @@ describe("BI_SERVER_BLOCK_v252 — POST /crm/outreach/contacts/:id/demo-invite",
   });
 
   it("logs failed=failed and returns 502 when SMS throws", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ bookings_url: "https://outlook.office.com/bookings/x" }] })
-      .mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_staff_profile", { rows: [{ bookings_url: "https://outlook.office.com/bookings/x" }] }],
+      ["FROM bi_contacts", {
         rows: [{ phone_e164: "+14165551234", full_name: "Jane", outreach_status: "cold" }],
-      })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // activity log (failed)
-    sendSmsMock.mockRejectedValueOnce(new Error("twilio 21408"));
+      }],
+      ["INSERT INTO bi_contact_activity", { rows: [], rowCount: 1 }],  // activity log (failed)
+    ], queryMock.getMockImplementation()));
+    sendSmsMock.mockImplementation(answerBySql([
+      ["+14165551234", rejects(new Error("twilio 21408"))],
+    ], sendSmsMock.getMockImplementation()));
 
     const r = await request(makeApp())
       .post("/crm/outreach/contacts/c1/demo-invite")
@@ -354,9 +372,9 @@ describe("BI_SERVER_BLOCK_v410 — POST /crm/outreach/contacts/:id/start-onboard
   });
 
   it("creates a lender, links it to the contact, advances stage, and sends SMS", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // BEGIN
-      .mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["BEGIN", { rows: [], rowCount: 0 }],  // BEGIN
+      ["FROM bi_contacts", {
         rows: [
           {
             id: "c1",
@@ -367,11 +385,14 @@ describe("BI_SERVER_BLOCK_v410 — POST /crm/outreach/contacts/:id/start-onboard
             promoted_lender_id: null,
           },
         ],
-      })
-      .mockResolvedValueOnce({ rows: [{ id: "lender-1" }] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // COMMIT
-    sendSmsMock.mockResolvedValueOnce({ sid: "SM1" });
+      }],
+      ["INSERT INTO bi_lenders", { rows: [{ id: "lender-1" }] }],
+      ["UPDATE bi_contacts", { rows: [], rowCount: 1 }],
+      ["COMMIT", { rows: [], rowCount: 0 }],  // COMMIT
+    ], queryMock.getMockImplementation()));
+    sendSmsMock.mockImplementation(answerBySql([
+      ["+14165551234", { sid: "SM1" }],
+    ], sendSmsMock.getMockImplementation()));
 
     const r = await request(makeApp())
       .post("/crm/outreach/contacts/c1/start-onboarding")
@@ -407,9 +428,9 @@ describe("BI_SERVER_BLOCK_v410 — POST /crm/outreach/contacts/:id/start-onboard
   });
 
   it("409s without inserting when the contact is already linked to a lender", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // BEGIN
-      .mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["BEGIN", { rows: [], rowCount: 0 }],  // BEGIN
+      ["FROM bi_contacts", {
         rows: [
           {
             id: "c1",
@@ -420,8 +441,9 @@ describe("BI_SERVER_BLOCK_v410 — POST /crm/outreach/contacts/:id/start-onboard
             promoted_lender_id: "existing-lender",
           },
         ],
-      })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // ROLLBACK
+      }],
+      ["ROLLBACK", { rows: [], rowCount: 0 }],  // ROLLBACK
+    ], queryMock.getMockImplementation()));
 
     const r = await request(makeApp())
       .post("/crm/outreach/contacts/c1/start-onboarding")
@@ -438,9 +460,9 @@ describe("BI_SERVER_BLOCK_v410 — POST /crm/outreach/contacts/:id/start-onboard
   });
 
   it("400s without inserting when required contact fields are missing", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // BEGIN
-      .mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["BEGIN", { rows: [], rowCount: 0 }],  // BEGIN
+      ["FROM bi_contacts", {
         rows: [
           {
             id: "c1",
@@ -451,8 +473,9 @@ describe("BI_SERVER_BLOCK_v410 — POST /crm/outreach/contacts/:id/start-onboard
             promoted_lender_id: null,
           },
         ],
-      })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // ROLLBACK
+      }],
+      ["ROLLBACK", { rows: [], rowCount: 0 }],  // ROLLBACK
+    ], queryMock.getMockImplementation()));
 
     const r = await request(makeApp())
       .post("/crm/outreach/contacts/c1/start-onboarding")

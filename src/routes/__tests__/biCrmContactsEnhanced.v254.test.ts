@@ -23,6 +23,7 @@ vi.mock("../../platform/logger", () => ({
 
 import { requireAuth } from "../../platform/auth";
 import biCrmRoutes from "../biCrmRoutes";
+import { answerBySql } from "../../__tests__/helpers/answerBySql";
 
 function makeApp() {
   const app = express();
@@ -42,7 +43,8 @@ describe("BI_SERVER_BLOCK_v254 — GET /crm/contacts list", () => {
     // v411 added a COUNT(*) after the rows query so the portal can paginate.
     // This test stubbed one query; the second resolved undefined, the handler
     // threw on cr.rows[0], and the route answered 500. Stub both.
-    queryMock.mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["SELECT c.id,", {
       rows: [
         {
           id: "c1",
@@ -58,8 +60,9 @@ describe("BI_SERVER_BLOCK_v254 — GET /crm/contacts list", () => {
           created_at: "2026-05-01",
         },
       ],
-    });
-    queryMock.mockResolvedValueOnce({ rows: [{ total: 1 }] });
+    }],
+      ["SELECT COUNT(*)::int", { rows: [{ total: 1 }] }],
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .get("/api/v1/bi/crm/crm/contacts")
       .set("Authorization", `Bearer ${staffToken()}`);

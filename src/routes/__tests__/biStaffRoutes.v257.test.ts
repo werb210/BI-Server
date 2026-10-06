@@ -20,6 +20,7 @@ vi.mock("../../platform/logger", () => ({
 
 import { requireAuth } from "../../platform/auth";
 import biStaffRoutes from "../biStaffRoutes";
+import { answerBySql } from "../../__tests__/helpers/answerBySql";
 
 function makeApp() {
   const app = express();
@@ -109,12 +110,13 @@ describe("BI_SERVER_BLOCK_v257 — PUT /me", () => {
   beforeEach(() => queryMock.mockReset());
 
   it("creates a profile when none exists", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["INSERT INTO bi_staff_profile", { rows: [], rowCount: 1 }],
+      ["UPDATE bi_staff_profile", { rows: [], rowCount: 1 }],
+      ["FROM bi_staff_profile", {
         rows: [{ staff_user_id: "staff-1", full_name: "Andrew", email: "a@b.com", role: null, is_active: true }],
-      });
+      }],
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .put("/api/v1/bi/staff/me")
       .set("Authorization", `Bearer ${staffToken("staff-1")}`)
@@ -137,12 +139,13 @@ describe("BI_SERVER_BLOCK_v257 — PUT /me", () => {
   });
 
   it("updates only changed fields (PATCH-like)", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["INSERT INTO bi_staff_profile", { rows: [], rowCount: 0 }],
+      ["UPDATE bi_staff_profile", { rows: [], rowCount: 1 }],
+      ["FROM bi_staff_profile", {
         rows: [{ staff_user_id: "staff-1", full_name: "Andrew Werb", email: null, role: null, is_active: true }],
-      });
+      }],
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .put("/api/v1/bi/staff/me")
       .set("Authorization", `Bearer ${staffToken()}`)
@@ -158,12 +161,13 @@ describe("BI_SERVER_BLOCK_v257 — PUT /me", () => {
   });
 
   it("clears a field when null is sent", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["INSERT INTO bi_staff_profile", { rows: [], rowCount: 0 }],
+      ["UPDATE bi_staff_profile", { rows: [], rowCount: 1 }],
+      ["FROM bi_staff_profile", {
         rows: [{ staff_user_id: "staff-1", full_name: null, email: null, role: null, is_active: true }],
-      });
+      }],
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .put("/api/v1/bi/staff/me")
       .set("Authorization", `Bearer ${staffToken()}`)
@@ -176,11 +180,12 @@ describe("BI_SERVER_BLOCK_v257 — PUT /me", () => {
   });
 
   it("does not run UPDATE when body is empty (no_op write)", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["INSERT INTO bi_staff_profile", { rows: [], rowCount: 0 }],
+      ["FROM bi_staff_profile", {
         rows: [{ staff_user_id: "staff-1", full_name: null, email: null, role: null, is_active: true }],
-      });
+      }],
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .put("/api/v1/bi/staff/me")
       .set("Authorization", `Bearer ${staffToken()}`)

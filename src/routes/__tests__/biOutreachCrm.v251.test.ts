@@ -18,6 +18,7 @@ vi.mock("../../platform/logger", () => ({
 }));
 
 import router from "../biOutreachCrmRoutes";
+import { answerBySql } from "../../__tests__/helpers/answerBySql";
 
 function makeApp() {
   const app = express();
@@ -40,10 +41,12 @@ describe("BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — GET /crm/outreach/contacts", 
   beforeEach(() => queryMock.mockReset());
 
   it("lists contacts with no filters", async () => {
-    queryMock.mockResolvedValueOnce({
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_companies", {
       rows: [{ id: "c1", full_name: "Jane", outreach_status: "cold" }],
-    });
-    queryMock.mockResolvedValueOnce({ rows: [{ total: 1 }] }); // BI_SERVER_BLOCK_v585 - v791 pagination count
+    }],
+      ["SELECT COUNT(*)::int", { rows: [{ total: 1 }] }],  // BI_SERVER_BLOCK_v585 - v791 pagination count
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .get("/crm/outreach/contacts")
       .set("Authorization", `Bearer ${staffToken()}`);
@@ -61,8 +64,10 @@ describe("BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — GET /crm/outreach/contacts", 
   });
 
   it("owner=mine binds the staffUserId from the JWT", async () => {
-    queryMock.mockResolvedValueOnce({ rows: [] });
-    queryMock.mockResolvedValueOnce({ rows: [{ total: 0 }] }); // BI_SERVER_BLOCK_v585 - v791 pagination count
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_companies", { rows: [] }],
+      ["SELECT COUNT(*)::int", { rows: [{ total: 0 }] }],  // BI_SERVER_BLOCK_v585 - v791 pagination count
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .get("/crm/outreach/contacts?owner=mine")
       .set("Authorization", `Bearer ${staffToken()}`);
@@ -76,10 +81,11 @@ describe("BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — PATCH /crm/outreach/contacts/
   beforeEach(() => queryMock.mockReset());
 
   it("updates status and auto-logs the change", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ outreach_status: "cold" }] }) // existing
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })                // UPDATE
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });                // INSERT activity
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_contacts", { rows: [{ outreach_status: "cold" }] }],  // existing
+      ["UPDATE bi_contacts", { rows: [], rowCount: 1 }],  // UPDATE
+      ["INSERT INTO bi_contact_activity", { rows: [], rowCount: 1 }],  // INSERT activity
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .patch("/crm/outreach/contacts/c1")
       .set("Authorization", `Bearer ${staffToken()}`)
@@ -91,9 +97,10 @@ describe("BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — PATCH /crm/outreach/contacts/
   });
 
   it("does not log when status is unchanged", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ outreach_status: "engaged" }] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_contacts", { rows: [{ outreach_status: "engaged" }] }],
+      ["UPDATE bi_contacts", { rows: [], rowCount: 1 }],
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .patch("/crm/outreach/contacts/c1")
       .set("Authorization", `Bearer ${staffToken()}`)
@@ -124,10 +131,11 @@ describe("BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1 — POST /crm/outreach/contacts/:
   beforeEach(() => queryMock.mockReset());
 
   it("logs a call with outcome=spoke and bumps status to engaged", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ "1": 1 }] })           // contact exists
-      .mockResolvedValueOnce({ rows: [{ id: "act-1" }] })       // INSERT activity
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });         // status bump
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_contacts", { rows: [{ "1": 1 }] }],  // contact exists
+      ["INSERT INTO bi_contact_activity", { rows: [{ id: "act-1" }] }],  // INSERT activity
+      ["UPDATE bi_contacts", { rows: [], rowCount: 1 }],  // status bump
+    ], queryMock.getMockImplementation()));
     const r = await request(makeApp())
       .post("/crm/outreach/contacts/c1/activity")
       .set("Authorization", `Bearer ${staffToken()}`)

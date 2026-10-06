@@ -10,6 +10,7 @@ vi.mock("../../platform/env", () => ({ env: { JWT_SECRET: SECRET } }));
 vi.mock("../../platform/logger", () => ({ logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } }));
 
 import router from "../biDocumentsFromBfRoutes";
+import { answerBySql } from "../../__tests__/helpers/answerBySql";
 
 const app = () => { const a = express(); a.use(express.json()); a.use(router); return a; };
 const token = (source = "bf-server") => jwt.sign({ kind: "service", source }, SECRET);
@@ -24,10 +25,11 @@ describe("withdraw a BF-mirrored document", () => {
   });
 
   it("retires the copy unless BI staff accepted it", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ id: "bi-app" }] })
-      .mockResolvedValueOnce({ rows: [{ id: "bi-doc" }] })
-      .mockResolvedValueOnce({ rows: [] });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_applications", { rows: [{ id: "bi-app" }] }],
+      ["UPDATE bi_documents", { rows: [{ id: "bi-doc" }] }],
+      ["FROM bi_documents", { rows: [] }],
+    ], queryMock.getMockImplementation()));
     const res = await request(app()).post(url).set("Authorization", `Bearer ${token()}`).send({ bf_document_id: "d1" });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: true, withdrawn: 1, kept_accepted: false });
@@ -37,10 +39,11 @@ describe("withdraw a BF-mirrored document", () => {
   });
 
   it("reports an accepted copy as kept", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ id: "bi-app" }] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ id: "bi-doc" }] });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_applications", { rows: [{ id: "bi-app" }] }],
+      ["UPDATE bi_documents", { rows: [] }],
+      ["FROM bi_documents", { rows: [{ id: "bi-doc" }] }],
+    ], queryMock.getMockImplementation()));
     const res = await request(app()).post(url).set("Authorization", `Bearer ${token()}`).send({ bf_document_id: "d1" });
     expect(res.body).toMatchObject({ ok: true, withdrawn: 0, kept_accepted: true });
   });
