@@ -23,6 +23,7 @@ vi.mock("../../platform/logger", () => ({
 
 import biMarketingEmailCompatRoutes from "../biMarketingEmailCompatRoutes";
 import biMarketingEmailRoutes from "../biMarketingEmailRoutes";
+import { answerBySql } from "../../__tests__/helpers/answerBySql";
 
 // Deliberately the REVERSE of server.ts's registration order. Before this
 // change the safe handler only won because it was mounted first; mounting it
@@ -85,9 +86,10 @@ describe("BI_SERVER_SEND_TEMPLATE_SINGLE_HANDLER_v2", () => {
   });
 
   it("a real send with no test address still queues a job", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ count: 3983 }] })
-      .mockResolvedValueOnce({ rows: [{ id: "job-1", scheduled_at: "2026-08-03T22:00:00Z" }] });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_contacts", { rows: [{ count: 3983 }] }],
+      ["INSERT INTO bi_marketing_send_jobs", { rows: [{ id: "job-1", scheduled_at: "2026-08-03T22:00:00Z" }] }],
+    ], queryMock.getMockImplementation()));
 
     const res = await request(makeApp())
       .post("/api/v1/bi/marketing/email/send-template")

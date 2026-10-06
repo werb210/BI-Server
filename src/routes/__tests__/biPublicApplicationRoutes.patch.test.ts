@@ -8,6 +8,7 @@ import { pool } from "../../db";
 import express from "express";
 import request from "supertest";
 import router from "../biPublicApplicationRoutes";
+import { answerBySql } from "../../__tests__/helpers/answerBySql";
 
 const app = express().use(express.json()).use(router);
 
@@ -15,9 +16,10 @@ describe("BI_SERVER_BLOCK_v62 — PATCH /applications/:publicId accepts financia
   beforeEach(() => vi.mocked(pool.query).mockReset());
 
   it("persists naics_code, formation_date, country, financial fields, pgi_limit", async () => {
-    vi.mocked(pool.query)
-      .mockResolvedValueOnce({ rows: [{ id: "abc", score_decision: "approve" }] } as any)
-      .mockResolvedValueOnce({ rows: [] } as any);
+    vi.mocked(pool.query).mockImplementation(answerBySql([
+      ["FROM bi_applications", { rows: [{ id: "abc", score_decision: "approve" }] }],
+      ["UPDATE bi_applications", { rows: [] }],
+    ]) as any);
 
     const r = await request(app)
       .patch("/applications/038DA9E7")

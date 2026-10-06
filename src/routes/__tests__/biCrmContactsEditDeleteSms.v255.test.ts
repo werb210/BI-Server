@@ -37,6 +37,7 @@ vi.mock("../../services/biCrmSuppression", () => ({
 
 import { requireAuth } from "../../platform/auth";
 import biCrmRoutes from "../biCrmRoutes";
+import { answerBySql, rejects } from "../../__tests__/helpers/answerBySql";
 
 function makeApp() {
   const app = express();
@@ -173,10 +174,13 @@ describe("BI_SERVER_BLOCK_v255 — POST /crm/contacts/:id/sms", () => {
   });
 
   it("sends the SMS and logs activity on success", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ phone_e164: "+14165551234" }] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // activity insert
-    sendSmsMock.mockResolvedValueOnce({ sid: "SM999" });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_contacts", { rows: [{ phone_e164: "+14165551234" }] }],
+      ["INSERT INTO bi_contact_activity", { rows: [], rowCount: 1 }],  // activity insert
+    ], queryMock.getMockImplementation()));
+    sendSmsMock.mockImplementation(answerBySql([
+      ["+14165551234", { sid: "SM999" }],
+    ], sendSmsMock.getMockImplementation()));
 
     const r = await request(makeApp())
       .post("/api/v1/bi/crm/crm/contacts/c1/sms")
@@ -198,10 +202,13 @@ describe("BI_SERVER_BLOCK_v255 — POST /crm/contacts/:id/sms", () => {
   });
 
   it("logs failed activity and returns 502 when Twilio throws", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ phone_e164: "+14165551234" }] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
-    sendSmsMock.mockRejectedValueOnce(new Error("twilio_21408"));
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_contacts", { rows: [{ phone_e164: "+14165551234" }] }],
+      ["INSERT INTO bi_contact_activity", { rows: [], rowCount: 1 }],
+    ], queryMock.getMockImplementation()));
+    sendSmsMock.mockImplementation(answerBySql([
+      ["+14165551234", rejects(new Error("twilio_21408"))],
+    ], sendSmsMock.getMockImplementation()));
     const r = await request(makeApp())
       .post("/api/v1/bi/crm/crm/contacts/c1/sms")
       .set("Authorization", `Bearer ${staffToken()}`)

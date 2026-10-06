@@ -1,6 +1,7 @@
 // BI_SERVER_CONTACT_ANALYTICS_v271
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { answerBySql } from "../__tests__/helpers/answerBySql";
 
 vi.mock("../db", () => ({ pool: { query: vi.fn() } }));
 vi.mock("../platform/env", () => ({ env: {} }));
@@ -23,10 +24,11 @@ describe("stage history for a BI contact", () => {
 
 describe("AI summary for a BI contact", () => {
   it("summarises from the contact, its applications and recent activity", async () => {
-    const query = vi.fn()
-      .mockResolvedValueOnce({ rows: [{ full_name: "Walter Voss", email: "w@voss.ca", outreach_stage: "engaged" }] })
-      .mockResolvedValueOnce({ rows: [{ stage: "underwriting", status: "document_review", created_at: "2026-09-01" }] })
-      .mockResolvedValueOnce({ rows: [{ occurred_at: "2026-09-12T15:00:00Z", event_type: "call", outcome: "connected", body: "Asked about premium" }] });
+    const query = vi.fn(answerBySql([
+      ["FROM bi_contacts", { rows: [{ full_name: "Walter Voss", email: "w@voss.ca", outreach_stage: "engaged" }] }],
+      ["FROM bi_applications", { rows: [{ stage: "underwriting", status: "document_review", created_at: "2026-09-01" }] }],
+      ["FROM bi_contact_activity", { rows: [{ occurred_at: "2026-09-12T15:00:00Z", event_type: "call", outcome: "connected", body: "Asked about premium" }] }],
+    ]));
     const model = vi.fn().mockResolvedValue("Walter is in underwriting.");
     expect(await mod.summaryForContact("c1", model, query)).toEqual({ summary: "Walter is in underwriting." });
     const prompt = model.mock.calls[0][0] as string;

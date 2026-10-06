@@ -22,6 +22,8 @@ export default defineConfig({
       JWT_SECRET: "test-shared-secret-min-10",
       JWT_REFRESH_SECRET: "test-refresh-secret-min-10",
     },
+    // BI_SERVER_SQL_CONTENT_MOCKS_v713 - biOutreachCrm.v251 and biOutreachImport.v252 mock the database fully, so
+    // they now run here too.
     exclude: [
       ...configDefaults.exclude,
       // Mirrors the exclusion list in vitest.config.ts.
@@ -29,8 +31,6 @@ export default defineConfig({
       // Need a real database - they call pool.connect() rather than a mock.
       "src/routes/__tests__/biCrmCompanies.v256.test.ts",
       "src/routes/__tests__/biDocumentsFromBf.v249.test.ts",
-      "src/routes/__tests__/biOutreachCrm.v251.test.ts",
-      "src/routes/__tests__/biOutreachImport.v252.test.ts",
       "src/routes/__tests__/biSequencesRoutes.v110.test.ts",
       "src/routes/__tests__/biFromBfDates.v586.test.ts", // BI_SERVER_BLOCK_v586 - real database
       "src/routes/__tests__/biCommissionsSummary.v595.test.ts", // BI_SERVER_BLOCK_v595 - real database

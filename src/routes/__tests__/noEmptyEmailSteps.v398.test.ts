@@ -10,6 +10,7 @@ vi.mock("../../platform/logger", () => ({ logger: { error: vi.fn(), info: vi.fn(
 import marketing from "../biMarketingRoutes";
 import sequences from "../biSequencesRoutes";
 import { emptyStepsMessage } from "../../services/emptyEmailSteps";
+import { answerBySql } from "../../__tests__/helpers/answerBySql";
 
 const app = () => { const a = express(); a.use(express.json()); a.use(marketing); a.use(sequences); return a; };
 
@@ -17,9 +18,10 @@ beforeEach(() => queryMock.mockReset());
 
 describe("a sequence with empty email steps cannot run", () => {
   it("Start is refused with the step numbers", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ position: 0 }, { position: 1 }, { position: 2 }] })
-      .mockResolvedValueOnce({ rows: [{ position: 0 }, { position: 1 }, { position: 2 }, { position: 3 }] });
+    queryMock.mockImplementation(answerBySql([
+      ["SELECT st.position", { rows: [{ position: 0 }, { position: 1 }, { position: 2 }] }],
+      ["SELECT position", { rows: [{ position: 0 }, { position: 1 }, { position: 2 }, { position: 3 }] }],
+    ], queryMock.getMockImplementation()));
     const res = await request(app()).post("/sequences/s1/start");
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe("empty_email_steps");
@@ -28,11 +30,12 @@ describe("a sequence with empty email steps cannot run", () => {
     expect(queryMock.mock.calls.some((c) => String(c[0]).includes("SET status = 'active'"))).toBe(false);
   });
   it("Start goes ahead when every email step has content", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ position: 0 }] })
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: "s1" }] })
-      .mockResolvedValueOnce({ rows: [] });
+    queryMock.mockImplementation(answerBySql([
+      ["SELECT st.position", { rows: [] }],
+      ["SELECT position", { rows: [{ position: 0 }] }],
+      ["UPDATE bi_sequences", { rowCount: 1, rows: [{ id: "s1" }] }],
+      ["UPDATE bi_sequence_enrollments", { rows: [] }],
+    ], queryMock.getMockImplementation()));
     const res = await request(app()).post("/sequences/s1/start");
     expect(res.status).toBe(200);
   });
@@ -42,9 +45,10 @@ describe("a sequence with empty email steps cannot run", () => {
     expect(queryMock).not.toHaveBeenCalled();
   });
   it("a step's template is remembered", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ subject: "Hi", body: "<p>Hello</p>" }] })
-      .mockResolvedValueOnce({ rows: [{ id: "st1" }] });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_email_templates", { rows: [{ subject: "Hi", body: "<p>Hello</p>" }] }],
+      ["INSERT INTO bi_sequence_steps", { rows: [{ id: "st1" }] }],
+    ], queryMock.getMockImplementation()));
     const res = await request(app()).post("/sequences/s1/steps").send({ type: "email", template_id: "t9" });
     expect(res.status).toBe(201);
     const insert = queryMock.mock.calls[1];

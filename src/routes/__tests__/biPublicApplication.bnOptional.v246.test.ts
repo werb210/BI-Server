@@ -16,6 +16,7 @@ vi.mock("../../db", () => ({
 }));
 
 import router from "../biPublicApplicationRoutes";
+import { answerBySql } from "../../__tests__/helpers/answerBySql";
 
 function makeApp() {
   const app = express();
@@ -66,11 +67,10 @@ describe("BI_SERVER_BLOCK_v246_BN_OPTIONAL_SUBMIT_v1", () => {
   });
 
   it("public submit succeeds when business_number is null", async () => {
-    queryMock
-      // initial SELECT
-      .mockResolvedValueOnce({ rows: [baseRow] })
-      // status UPDATE
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_applications", { rows: [baseRow] }],  // initial SELECT
+      ["UPDATE bi_applications", { rows: [], rowCount: 1 }],  // status UPDATE
+    ], queryMock.getMockImplementation()));
 
     const res = await request(makeApp())
       .post("/applications/pub_test/submit")
@@ -80,9 +80,10 @@ describe("BI_SERVER_BLOCK_v246_BN_OPTIONAL_SUBMIT_v1", () => {
   });
 
   it("public submit succeeds when business_number is the empty string", async () => {
-    queryMock
-      .mockResolvedValueOnce({ rows: [{ ...baseRow, business_number: "" }] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_applications", { rows: [{ ...baseRow, business_number: "" }] }],
+      ["UPDATE bi_applications", { rows: [], rowCount: 1 }],
+    ], queryMock.getMockImplementation()));
 
     const res = await request(makeApp())
       .post("/applications/pub_test/submit")
