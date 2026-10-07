@@ -7,7 +7,7 @@ import sgMail from "@sendgrid/mail";
 import jwt from "jsonwebtoken";
 import { pool } from "../db";
 import { env } from "../platform/env";
-import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
+import { sendOtpSafe, verifyOtpSafe, otpSendFailed } from "../services/otpService";
 import { normalizeE164 } from "../util/phoneE164";
 
 const router = express.Router();
@@ -50,7 +50,7 @@ router.post("/api/v1/lender/otp/start", async (req: Request, res: Response) => {
     );
     if (!r.rows[0]) return res.status(404).json({ error: "lender_not_provisioned" });
     const sr = await sendOtpSafe(phone);
-    if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
+    if (!sr.ok) return otpSendFailed(res, sr); // BI_SERVER_OTP_ABUSE_GUARD_v716
     return res.json({ ok: true });
   }
 

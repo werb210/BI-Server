@@ -1,5 +1,7 @@
 import twilio from "twilio";
 import { env } from "../platform/env";
+import type { Response } from "express";
+import { checkOtpSend, OTP_GUARD_MESSAGES, OTP_GUARD_STATUS, type OtpGuardRefusal } from "../lib/otpGuard"; // BI_SERVER_OTP_ABUSE_GUARD_v716
 
 const hasTwilioConfig =
   Boolean(env.TWILIO_ACCOUNT_SID) &&
@@ -58,7 +60,18 @@ export async function verifyEmailOtp(email: string, code: string) {
 }
 
 // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1
-export type OtpSendResult = { ok: true } | { ok: false; error: string };
+export type OtpSendResult = { ok: true } | { ok: false; error: string; refusal?: OtpGuardRefusal };
+
+// BI_SERVER_OTP_ABUSE_GUARD_v716 - one reply for every sign-in route: a guard refusal gets its own
+// status and a clear message; anything else is still a 502 from Twilio.
+export function otpSendFailed(res: Response, sr: { ok: false; error: string; refusal?: OtpGuardRefusal }) {
+  if (sr.refusal) {
+    const status = OTP_GUARD_STATUS[sr.refusal];
+    if (status === 429) res.setHeader("Retry-After", sr.refusal === "otp_busy" ? "300" : "3600");
+    return res.status(status).json({ error: sr.refusal, message: OTP_GUARD_MESSAGES[sr.refusal] });
+  }
+  return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
+}
 export type OtpVerifyResult = { ok: true; approved: boolean } | { ok: false; error: string };
 
 // BI_SERVER_BLOCK_v399_OTP_RESEND_DEBOUNCE_v1
@@ -89,6 +102,9 @@ export async function sendOtpSafe(phone: string): Promise<OtpSendResult> {
       // duplicate verification.
       return { ok: true };
     }
+    // BI_SERVER_OTP_ABUSE_GUARD_v716 - Canada/US only, per-number and hourly caps, before Twilio is called.
+    const guard = checkOtpSend(phone);
+    if (!guard.ok) return { ok: false, error: OTP_GUARD_MESSAGES[guard.reason], refusal: guard.reason };
     recentSendAt.set(phone, now);
     await sendOtp(phone);
     return { ok: true };

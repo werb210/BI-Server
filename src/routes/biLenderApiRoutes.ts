@@ -7,7 +7,7 @@ import { pool } from "../db";
 import { env } from "../platform/env";
 import { pgiScore } from "../services/pgiAdapter"; // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1
 // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1 — typed wrappers
-import { sendOtpSafe, verifyOtpSafe, sendEmailOtpSafe, verifyEmailOtpSafe } from "../services/otpService";
+import { sendOtpSafe, verifyOtpSafe, sendEmailOtpSafe, verifyEmailOtpSafe, otpSendFailed } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
 import { normalizeE164 } from "../util/phoneE164";
 import { generatePublicId } from "../util/publicId";
@@ -358,7 +358,7 @@ router.post("/lender/otp/start", async (req, res) => {
       return res.status(404).json({ error: "lender_not_provisioned" });
     }
     const sr = await sendEmailOtpSafe(email);
-    if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
+    if (!sr.ok) return otpSendFailed(res, sr); // BI_SERVER_OTP_ABUSE_GUARD_v716
     return res.json({ ok: true, channel: "email" });
   }
 
@@ -375,7 +375,7 @@ router.post("/lender/otp/start", async (req, res) => {
     return res.status(404).json({ error: "lender_not_provisioned" });
   }
   const sr = await sendOtpSafe(phone);
-  if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
+  if (!sr.ok) return otpSendFailed(res, sr); // BI_SERVER_OTP_ABUSE_GUARD_v716
   res.json({ ok: true, channel: "sms" });
 });
 

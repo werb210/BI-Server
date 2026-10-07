@@ -3,7 +3,7 @@ import { pool } from "../db";
 import jwt from "jsonwebtoken";
 import { env } from "../platform/env";
 // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1 — typed wrappers
-import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
+import { sendOtpSafe, verifyOtpSafe, otpSendFailed } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
 import { normalizeE164 } from "../util/phoneE164";
 
@@ -14,7 +14,7 @@ router.post("/referrer/otp/start", async (req, res) => {
   const phone = normalizeE164(req.body?.phone);
   if (!phone) return res.status(400).json({ error: "invalid_phone" });
   const sr = await sendOtpSafe(phone);
-  if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
+  if (!sr.ok) return otpSendFailed(res, sr); // BI_SERVER_OTP_ABUSE_GUARD_v716
   res.json({ ok: true });
 });
 // BI_SERVER_BLOCK_v259_REAL_SUBMISSION_FIX_v2 / v278
