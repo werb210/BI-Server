@@ -3,7 +3,7 @@ import bcrypt from "bcrypt";
 import { pool } from "../db";
 import { signStaffToken } from "../platform/auth";
 import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
-import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
+import { sendOtpSafe, verifyOtpSafe, otpSendFailed } from "../services/otpService";
 import { normalizeE164 } from "../util/phoneE164";
 import { calculatePremium } from "../services/premiumService";
 import { badRequest, ok } from "../utils/apiResponse";
@@ -64,7 +64,7 @@ publicRouter.post("/otp/request", async (req, res) => {
 
   try {
     const sr = await sendOtpSafe(phone);
-    if (!sr.ok) return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
+    if (!sr.ok) return otpSendFailed(res, sr); // BI_SERVER_OTP_ABUSE_GUARD_v716
 
     await pool.query(
       `INSERT INTO bi_otp_sessions(phone_e164, purpose, name, email, user_type, requested_ip)

@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import { pool } from "../db";
 import { env } from "../platform/env";
 // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1 — typed wrappers
-import { sendOtpSafe, verifyOtpSafe } from "../services/otpService";
+import { sendOtpSafe, verifyOtpSafe, otpSendFailed } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
 import { normalizeE164 } from "../util/phoneE164";
 import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
@@ -21,6 +21,7 @@ router.post("/applicants/otp/start", async (req, res) => {
   const r = await sendOtpSafe(phone);
   // BI_SERVER_BLOCK_v321_OTP_ERROR_MAPPING_v1
   if (!r.ok) {
+    if (r.refusal) return otpSendFailed(res, r); // BI_SERVER_OTP_ABUSE_GUARD_v716
     const detail = String(r.error ?? "");
     const isRateLimit = /max send attempts|too many|rate.?limit/i.test(detail);
     if (isRateLimit) {
