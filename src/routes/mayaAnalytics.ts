@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { Pool } from "pg";
+import { pool as sharedPool } from "../db"; // BI_SERVER_ONE_POOL_v718 - one pool for the whole server
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import rateLimit from "express-rate-limit";
@@ -9,7 +9,7 @@ import { env } from "../platform/env";
 import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
-const pool = new Pool({ connectionString: env.DATABASE_URL });
+const pool = sharedPool /* BI_SERVER_ONE_POOL_v718 */;
 
 if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);

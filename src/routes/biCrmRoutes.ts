@@ -1,7 +1,7 @@
 import { Router } from "express";
 // BI_SERVER_BLOCK_v254_CRM_CONTACTS_ENHANCED_v1
 import { logger } from "../platform/logger";
-import { Pool } from "pg";
+import { pool as sharedPool } from "../db"; // BI_SERVER_ONE_POOL_v718 - one pool for the whole server
 import { env } from "../platform/env";
 import { requireAuth } from "../platform/auth";
 
@@ -10,7 +10,7 @@ import { hasCapability } from "../platform/capabilities";
 import { suppressContacts, suppressCompanies } from "../services/biCrmSuppression"; // BI_SERVER_BLOCK_v820b_CRM_DELETE_SUPPRESSION
 
 const router = Router();
-const pool = new Pool({ connectionString: env.DATABASE_URL });
+const pool = sharedPool /* BI_SERVER_ONE_POOL_v718 */;
 
 function requireStaffOrAdmin(req: any, res: any, next: any) {
   const role = String((req.user as { role?: string } | undefined)?.role ?? "").toLowerCase();
