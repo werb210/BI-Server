@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { Pool } from "pg";
+import { pool as sharedPool } from "../db"; // BI_SERVER_ONE_POOL_v718 - one pool for the whole server
 import fs from "fs";
 import path from "path";
 import { badRequest, ok } from "../utils/apiResponse";
@@ -19,7 +20,7 @@ import { extractText } from "../services/ocrService";
 import { runOcrForDocument } from "../services/ocrRunner";
 
 const router = Router();
-const pool = new Pool({ connectionString: env.DATABASE_URL });
+const pool = sharedPool /* BI_SERVER_ONE_POOL_v718 */;
 
 // BI_SERVER_BLOCK_v178_DOC_ACCEPT_HARDENING_v1
 // Inline role gate — biDocumentRoutes does not import a role middleware

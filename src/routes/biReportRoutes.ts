@@ -1,11 +1,11 @@
 import { Router } from "express";
-import { Pool } from "pg";
+import { pool as sharedPool } from "../db"; // BI_SERVER_ONE_POOL_v718 - one pool for the whole server
 import { env } from "../platform/env";
 
 import { badRequest, ok } from "../utils/apiResponse";
 
 const router = Router();
-const pool = new Pool({ connectionString: env.DATABASE_URL });
+const pool = sharedPool /* BI_SERVER_ONE_POOL_v718 */;
 
 /* =========================
    BI REPORT SUMMARY

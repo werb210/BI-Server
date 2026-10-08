@@ -1,6 +1,6 @@
 import { Router } from "express";
 import OpenAI from "openai";
-import { Pool } from "pg";
+import { pool as sharedPool } from "../db"; // BI_SERVER_ONE_POOL_v718 - one pool for the whole server
 import twilio from "twilio";
 import sgMail from "@sendgrid/mail";
 import fetch from "node-fetch";
@@ -16,9 +16,7 @@ const openai = env.OPENAI_API_KEY
     })
   : null;
 
-const pool = new Pool({
-  connectionString: env.DATABASE_URL
-});
+const pool = sharedPool /* BI_SERVER_ONE_POOL_v718 */;
 
 const twilioClient = env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN
   ? twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN)
