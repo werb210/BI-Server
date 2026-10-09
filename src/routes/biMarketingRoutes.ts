@@ -196,6 +196,12 @@ router.post("/sequences/:id/start", async (req, res) => {
         WHERE sequence_id = $1 AND status = 'paused'`,
       [req.params.id],
     );
+    // BI_SERVER_BLOCK_v719 - and any 'active' enrollment left with no next step by the old parking.
+    await pool.query(
+      `UPDATE bi_sequence_enrollments SET next_step_at = NOW()
+        WHERE sequence_id = $1 AND status = 'active' AND next_step_at IS NULL`,
+      [req.params.id],
+    );
     return res.json({ ok: true });
   } catch (err) {
     logger.error({ err }, "bi.marketing.sequences.start.failed");
@@ -262,6 +268,8 @@ router.post("/sequences/:id/enroll", async (req, res) => {
           SET status = 'active', current_step = 0, next_step_at = EXCLUDED.next_step_at,
               started_at = NOW(), last_step_at = NULL, completed_at = NULL, paused_reason = NULL
         WHERE bi_sequence_enrollments.status IN ('completed', 'stopped')
+           -- BI_SERVER_BLOCK_v719 - an enrollment stuck 'active' with no next step restarts too
+           OR (bi_sequence_enrollments.status = 'active' AND bi_sequence_enrollments.next_step_at IS NULL)
        RETURNING (xmax = 0) AS fresh`,
       [req.params.id, ids, dueAt],
     );

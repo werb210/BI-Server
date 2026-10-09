@@ -22,7 +22,8 @@ describe("v408 sequence worker visibility", () => {
 
   it("an enrollment on a non-active sequence is parked, not re-claimed forever", () => {
     expect(src).toContain("BI_SERVER_SEQ_PARK_INACTIVE_v408");
-    expect(src).toContain("SET next_step_at = NULL WHERE id = $1");
+    // BI_SERVER_BLOCK_v719 - still cleared, and now parked as paused so Start can revive it.
+    expect(src).toContain("SET next_step_at = NULL, status = 'paused', paused_reason = 'sequence_inactive' WHERE id = $1");
     expect(src).toContain('"marketing.worker.parked_inactive"');
     expect(src).not.toContain('if (!seq || seq.status !== "active") return;');
   });
