@@ -2,6 +2,7 @@ import { pool } from "../db";
 import { logger } from "../platform/logger";
 import { isSendableAt, nextSendableAt, scheduleFromNow, type SendWindow } from "../services/sequenceSchedule";
 import { resolveEmailContent } from "../services/sequenceEmailContent"; // BI_SEQ_EMAIL_TEMPLATE_AT_SEND_v373
+import { mergeFields } from "../services/biSendgridService"; // BI_SERVER_BLOCK_v720
 import { backendTokenProblem, RETRY_DELAY_MINUTES, shouldRetrySend } from "../services/backendToken"; // BI_SERVER_BACKEND_TOKEN_CHECK_v372
 
 const TICK_MS = 60_000;
@@ -38,6 +39,10 @@ type Enrollment = {
   current_step: number;
   variant: string;
   contact_email: string | null;
+  contact_first_name?: string | null; // BI_SERVER_BLOCK_v720
+  contact_last_name?: string | null;
+  contact_full_name?: string | null;
+  contact_company?: string | null;
   contact_phone: string | null;
 };
 
@@ -73,7 +78,9 @@ async function pickDue(limit: number): Promise<Enrollment[]> {
         WHERE e.id = due.id
         RETURNING e.id, e.sequence_id, e.contact_id, e.status, e.current_step, e.variant
      )
-     SELECT claimed.*, c.email AS contact_email, c.phone_e164 AS contact_phone
+     SELECT claimed.*, c.email AS contact_email, c.phone_e164 AS contact_phone,
+            c.first_name AS contact_first_name, c.last_name AS contact_last_name, -- BI_SERVER_BLOCK_v720
+            c.full_name AS contact_full_name, c.organization_name AS contact_company
        FROM claimed
        JOIN bi_contacts c ON c.id = claimed.contact_id`,
     [limit],
@@ -340,7 +347,9 @@ async function processOne(enr: Enrollment): Promise<void> {
       await advanceStep(enr.id, enr.current_step + 1);
       return;
     }
-    const result = await sendEmail(enr.contact_email, content.subject, content.body, sender);
+    // BI_SERVER_BLOCK_v720 - fill {{first_name}} and the other merge fields; they went out as literal text.
+    const merge = sequenceMergeValues(enr);
+    const result = await sendEmail(enr.contact_email, mergeFields(content.subject, merge), mergeFields(content.body, merge), sender);
     if (result.ok) {
       await recordEvent(enr.id, step.id, "sent", "email", sender, { messageId: result.messageId, sentAs: result.sentAs ?? sender });
       await logSequenceTouch(enr.contact_id, "email", `Sequence email: ${content.subject}`, { sequence_id: enr.sequence_id, step_id: step.id, sent_as: result.sentAs ?? sender }); // BI_SERVER_BLOCK_v516
@@ -472,4 +481,14 @@ export function startMarketingWorker(): void {
 
 export function stopMarketingWorker(): void {
   if (timer) { clearInterval(timer); timer = null; }
+}
+
+// BI_SERVER_BLOCK_v720 - the values a sequence email can use: {{first_name}}, {{last_name}}, {{full_name}},
+// {{name}}, {{company}}, {{email}}. A missing first name falls back to the first word of the full name.
+export function sequenceMergeValues(enr: { contact_email?: string | null; contact_first_name?: string | null; contact_last_name?: string | null; contact_full_name?: string | null; contact_company?: string | null }): Record<string, string> {
+  const full = String(enr.contact_full_name ?? "").trim();
+  const first = String(enr.contact_first_name ?? "").trim() || full.split(/\s+/)[0] || "";
+  const last = String(enr.contact_last_name ?? "").trim();
+  const name = full || [first, last].filter(Boolean).join(" ");
+  return { first_name: first, firstname: first, last_name: last, lastname: last, full_name: name, name, company: String(enr.contact_company ?? "").trim(), email: String(enr.contact_email ?? "").trim() };
 }
