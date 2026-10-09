@@ -68,6 +68,35 @@ function actorFrom(req: Request): { id: string | null; name: string | null } {
 
 // GET /crm/outreach/contacts
 // Query params: status, owner, q (search on name/email/phone), limit (default 100, max 500)
+// BI_SERVER_BLOCK_v719 - record a CASL consent basis. Enrolling requires one, and nothing in BI ever set it, so
+// every enrollment was skipped "no CASL consent basis on file". Staff choose the basis; it is stored with who
+// recorded it and when. Implied consent from an existing business relationship lasts two years under CASL.
+export const BI_CONSENT_BASES = ["express", "implied_published", "implied_relationship"] as const;
+router.post("/crm/outreach/contacts/consent", async (req: Request, res: Response) => {
+  const basis = String(req.body?.basis ?? "");
+  if (!(BI_CONSENT_BASES as readonly string[]).includes(basis)) return res.status(400).json({ error: { code: "bad_basis", message: "Choose express, implied_published or implied_relationship." } });
+  const raw: unknown[] = Array.isArray(req.body?.contact_ids) ? req.body.contact_ids : [];
+  const ids = [...new Set(raw.map((v) => String(v).trim()).filter((v) => /^[0-9a-f-]{36}$/i.test(v)))];
+  if (!ids.length) return res.status(400).json({ error: { code: "contact_ids_required" } });
+  const actor = actorFrom(req);
+  try {
+    const r = await pool.query(
+      `UPDATE bi_contacts
+          SET marketing_consent_basis = $2, marketing_consent_at = NOW(),
+              marketing_consent_source = $3,
+              marketing_consent_expires_at = CASE WHEN $2 = 'implied_relationship' THEN NOW() + interval '2 years' ELSE NULL END
+        WHERE id = ANY($1::uuid[])
+        RETURNING id`,
+      [ids, basis, "staff:" + (actor.name ?? actor.id ?? "unknown")],
+    );
+    logger.info({ count: r.rowCount, basis, actor: actor.id }, "bi.outreach.consent_recorded");
+    return res.json({ ok: true, updated: r.rowCount ?? 0 });
+  } catch (err) {
+    logger.error({ err }, "bi.outreach.consent_failed");
+    return res.status(500).json({ error: { code: "consent_failed" } });
+  }
+});
+
 router.get("/crm/outreach/contacts", async (req: Request, res: Response) => {
   const status = s(req.query.status);
   const owner = s(req.query.owner);

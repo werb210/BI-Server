@@ -105,7 +105,9 @@ async function isSuppressed(contactId: string, channel: "sms" | "email", phone: 
     `SELECT 1 FROM bi_suppressions
       WHERE (contact_id = $1
           OR (phone_e164 = $2 AND $2 IS NOT NULL)
-          OR (email      = $3 AND $3 IS NOT NULL))
+          OR (email      = $3 AND $3 IS NOT NULL)
+          -- BI_SERVER_BLOCK_v719 - unsubscribes and CRM deletions are written to identifier, which this never read.
+          OR (identifier IS NOT NULL AND (lower(identifier) = lower($3) OR identifier = $2)))
         AND channel IN ('all', $4)
       LIMIT 1`,
     [contactId, phone, email, channel],
@@ -262,7 +264,9 @@ async function processOne(enr: Enrollment): Promise<void> {
     // it. Enrollments on a paused, archived or deleted sequence were therefore
     // re-claimed every five minutes forever. Clearing next_step_at parks them;
     // resuming a sequence already restores it with COALESCE(next_step_at, NOW()).
-    await pool.query(`UPDATE bi_sequence_enrollments SET next_step_at = NULL WHERE id = $1`, [enr.id]);
+    // BI_SERVER_BLOCK_v719 - parking left the enrollment 'active' with no next step, and Start only revives
+    // 'paused' ones, so it sat there forever. Park it as paused; Start (or Resume) brings it back.
+    await pool.query(`UPDATE bi_sequence_enrollments SET next_step_at = NULL, status = 'paused', paused_reason = 'sequence_inactive' WHERE id = $1`, [enr.id]);
     logger.info(
       { enrollmentId: enr.id, sequenceId: enr.sequence_id, sequenceStatus: seq?.status ?? "missing" },
       "marketing.worker.parked_inactive",
