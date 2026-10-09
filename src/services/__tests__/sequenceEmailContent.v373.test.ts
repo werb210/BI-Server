@@ -34,7 +34,7 @@ describe("wiring", () => {
   it("the worker sends resolved content and does not retry an empty step", () => {
     expect(worker).toContain("await resolveEmailContent(step, loadEmailTemplate)");
     expect(worker).toContain('reason: "empty_email_step"');
-    expect(worker).toContain("sendEmail(enr.contact_email, content.subject, content.body, sender)");
+    expect(worker).toContain("sendEmail(enr.contact_email, mergeFields(content.subject, merge), mergeFields(content.body, merge), sender)" /* BI_SERVER_BLOCK_v720 - merge fields filled */);
   });
   it("step create and edit copy the template in", () => {
     expect(routes.match(/const content = await contentFrom\(req\.body\);/g)?.length).toBe(2);
