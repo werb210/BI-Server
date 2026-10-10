@@ -24,6 +24,7 @@ import { startMarketingWorker } from "./workers/marketingWorker";
 import { startBiSendWorker } from "./services/biMarketingSendRunner";
 import { startAbandonedApplicationNudge } from "./workers/abandonedApplicationNudge"; // BI_SERVER_ABANDONED_NUDGE_v1
 import { startMailboxHealthRollup } from "./workers/mailboxHealthRollup";
+import { startSendgridSuppressionSync } from "./workers/sendgridSuppressionSync"; // BI_SERVER_SENDGRID_SUPPRESSION_SYNC_v721
 import { logSendgridWebhookSigningStatus } from "./routes/biSendgridWebhookRoutes";
 import { workersEnabled } from "./workers/workersSwitch"; // BI_SERVER_BLOCK_v475_ONE_WORKER_SWITCH
 
@@ -57,6 +58,7 @@ const server = app.listen(port, "0.0.0.0", () => {
   } else for (const [name, fn] of [
     ["marketingWorker",     startMarketingWorker],
     ["mailboxHealthRollup", startMailboxHealthRollup],
+    ["sendgridSuppressionSync", startSendgridSuppressionSync],
     ["abandonedApplicationNudge", startAbandonedApplicationNudge], // BI_SERVER_ABANDONED_NUDGE_v1
     ["biSendWorker", () => startBiSendWorker(pool)],
   ] as const) {
