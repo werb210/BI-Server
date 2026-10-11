@@ -44,44 +44,7 @@ describe("BI_SERVER_BLOCK_v260 — schema additions", () => {
   });
 });
 
-describe("BI_SERVER_BLOCK_v260 — biApplicationRoutes computes carrier-path fields", () => {
-  const src = readRoute("biApplicationRoutes.ts");
-
-  it("GET /applications/:id SELECTs all_docs_accepted (computed)", () => {
-    expect(src).toMatch(/AS all_docs_accepted/);
-    // boolean derived from bi_documents review_status
-    expect(src).toMatch(/EXISTS\s*\(\s*SELECT 1 FROM bi_documents/);
-    expect(src).toMatch(/NOT EXISTS\s*\(\s*SELECT 1 FROM bi_documents/);
-    expect(src).toMatch(/COALESCE\(review_status, 'pending'\)/); // BI_UNQUARANTINE_CARRIER_E2E_v1 - operator tightened to NOT IN ('accepted','rejected')
-  });
-
-  it("GET /applications/:id SELECTs effective_stage derived from status", () => {
-    expect(src).toMatch(/AS effective_stage/);
-    expect(src).toMatch(/WHEN a\.status = 'document_review'\s+THEN 'document_review'/);
-    expect(src).toMatch(/all_docs_accepted/); // BI_UNQUARANTINE_CARRIER_E2E_v1 - stage derivation reworded; the field is what the portal reads
-  });
-
-  it("GET /applications/:id overrides stage with effective_stage in payload", () => {
-    // The handler must spread the row then override stage = effective_stage
-    expect(src).toMatch(/stage:\s*row\.effective_stage/);
-  });
-
-  it("GET /applications/:id COALESCEs company_name across three sources", () => {
-    expect(src).toMatch(
-      /COALESCE\(a\.company_name,\s*co\.legal_name,\s*a\.business_name\)\s+AS company_name/
-    );
-  });
-
-  it("GET /applications/:id/documents enriches rows with review state", () => {
-    // Must select doc_type, doc_slot, ocr_status, review_status aliased as status
-    const docsHandler = src.match(/router\.get\("\/applications\/:id\/documents".*?return ok\(res,\s*\{\s*documents\s*\}\);\s*\}\);/s)?.[0];
-    expect(docsHandler, "GET /applications/:id/documents handler not found in expected shape").toBeTruthy();
-    expect(docsHandler!).toMatch(/doc_type::text\s+AS doc_type/);
-    expect(docsHandler!).toMatch(/doc_slot/);
-    expect(docsHandler!).toMatch(/COALESCE\(review_status, 'pending'\) AS status/);
-    expect(docsHandler!).toMatch(/ocr_status::text\s+AS ocr_status/);
-    // Response wrapped in {documents: [...]} (not a bare array) so the
-    // portal's `r.documents` access works.
-    expect(docsHandler!).toMatch(/return ok\(res,\s*\{\s*documents\s*\}\)/);
-  });
-});
+// BI_SERVER_v789 [5]/[37] - the biApplicationRoutes checks that were here (rich
+// listing columns + filters, all_docs_accepted / effective_stage / company_name
+// on the detail, the enriched {documents} list, both PATCH stage paths) are
+// behaviour tests now: src/routes/__tests__/biApplicationRoutes.reads.v789.test.ts.

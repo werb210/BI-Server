@@ -84,60 +84,10 @@ describe("BI_SERVER_BLOCK_v261 — migration", () => {
   });
 });
 
-describe("BI_SERVER_BLOCK_v261 — biApplicationRoutes", () => {
-  const src = readRoute("biApplicationRoutes.ts");
-
-  it("GET /applications listing returns rich columns + supports hide_demo/lender_id", () => {
-    // 15+ columns the portal renders
-    for (const col of [
-      "a.public_id",
-      "a.application_code",
-      "a.source",
-      "a.source_type",
-      "a.is_demo",
-      "a.business_name",
-      "a.guarantor_name",
-      "a.lender_name",
-      "a.loan_amount",
-      "a.pgi_limit",
-      "a.carrier_received_at",
-      "a.carrier_last_event",
-      "a.pgi_application_id",
-    ]) {
-      expect(src, `missing column ${col} in listing`).toContain(col);
-    }
-    // filter params
-    expect(src).toMatch(/req\.query\.hide_demo/);
-    expect(src).toMatch(/req\.query\.lender_id/);
-    // wrap shape
-    expect(src).toMatch(/return ok\(res,\s*\{\s*applications:\s*result\.rows\s*\}\)/);
-  });
-
-  it("GET /applications/:id derives all_docs_accepted + effective_stage via passthrough", () => {
-    expect(src).toMatch(/AS all_docs_accepted/);
-    expect(src).toMatch(/AS effective_stage/); // BI_UNQUARANTINE_CARRIER_E2E_v1 - stage derivation now maps statuses before falling back
-    expect(src).toMatch(/stage:\s*row\.effective_stage/);
-    expect(src).toMatch(
-      /COALESCE\(a\.company_name,\s*co\.legal_name,\s*a\.business_name\)\s+AS company_name/
-    );
-  });
-
-  it("GET /applications/:id/documents enriches rows and wraps in {documents}", () => {
-    const docsHandler = src.match(/router\.get\("\/applications\/:id\/documents".*?\}\);\s*\}\);/s)?.[0];
-    expect(docsHandler, "documents handler not found").toBeTruthy();
-    expect(docsHandler!).toMatch(/doc_type::text\s+AS doc_type/);
-    expect(docsHandler!).toMatch(/doc_slot/);
-    expect(docsHandler!).toMatch(/COALESCE\(review_status, 'pending'\) AS status/);
-    expect(docsHandler!).toMatch(/ocr_status::text\s+AS ocr_status/);
-    expect(docsHandler!).toMatch(/return ok\(res,\s*\{\s*documents\s*\}\)/);
-  });
-
-  it("PATCH stage path is exposed at both /pipeline/:id/stage and /applications/:id/stage", () => {
-    expect(src).toMatch(/router\.patch\("\/pipeline\/:id\/stage",\s*setStageHandler\)/);
-    expect(src).toMatch(/router\.patch\("\/applications\/:id\/stage",\s*setStageHandler\)/);
-  });
-});
-
+// BI_SERVER_v789 [5]/[37] - the biApplicationRoutes checks that were here (rich
+// listing columns + filters, all_docs_accepted / effective_stage / company_name
+// on the detail, the enriched {documents} list, both PATCH stage paths) are
+// behaviour tests now: src/routes/__tests__/biApplicationRoutes.reads.v789.test.ts.
 // BI_SERVER_v789 [5]/[37] - behaviour test (was a source-text grep): the
 // notes GET answers with a `notes` array (never `items`), staff only.
 describe("BI_SERVER_BLOCK_v261 — biNotesRoutes returns {notes}", () => {
