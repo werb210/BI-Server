@@ -1,13 +1,22 @@
 // BI_SERVER_CONTACT_ANALYTICS_v271
-import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import request from "supertest";
+import jwt from "jsonwebtoken";
 import { answerBySql } from "../__tests__/helpers/answerBySql";
 
-vi.mock("../db", () => ({ pool: { query: vi.fn() } }));
-vi.mock("../platform/env", () => ({ env: {} }));
-vi.mock("../platform/logger", () => ({ logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } }));
+// v789: the wiring case runs against the real app, so the db mock carries the
+// whole pool surface and env/logger are the real modules.
+const queryMock = vi.hoisted(() => vi.fn());
+vi.mock("../db", () => ({
+  pool: {
+    query: (...a: unknown[]) => queryMock(...a),
+    connect: async () => ({ query: (...a: unknown[]) => queryMock(...a), release: () => undefined }),
+  },
+  runMigrations: async () => undefined,
+}));
 
 const mod = await import("../routes/biContactAnalyticsRoutes");
+const { default: app } = await import("../server");
 
 describe("stage history for a BI contact", () => {
   it("reads both kinds of stage event from the contact's applications", async () => {
@@ -42,9 +51,17 @@ describe("AI summary for a BI contact", () => {
   });
 });
 
+// v789 [5]/[37]: was a grep of server.ts; now requests against the real app.
 describe("wiring", () => {
-  it("is mounted behind auth at /api/v1/bi", () => {
-    const server = readFileSync("src/server.ts", "utf-8");
-    expect(server).toContain('app.use("/api/v1/bi", requireAuth, biContactAnalyticsRoutes);');
+  it("is mounted behind auth at /api/v1/bi", async () => {
+    queryMock.mockReset();
+    queryMock.mockImplementation(answerBySql([]));
+    const path = "/api/v1/bi/crm/contacts/11111111-1111-4111-8111-111111111111/stage-events";
+    expect((await request(app).get(path)).status).toBe(401);
+    const staff = jwt.sign({ sub: "staff-1", role: "Staff" }, process.env.JWT_SECRET as string);
+    const r = await request(app).get(path).set("Authorization", `Bearer ${staff}`);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([]);
+    expect(String(queryMock.mock.calls.at(-1)?.[0])).toContain("ap.primary_contact_id = $1");
   });
 });

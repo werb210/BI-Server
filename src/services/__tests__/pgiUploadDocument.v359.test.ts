@@ -4,7 +4,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const adapterSrc = fs.readFileSync(path.resolve(__dirname, "../pgiAdapter.ts"), "utf8");
-const lenderRoute = fs.readFileSync(path.resolve(__dirname, "../../routes/biLenderApiRoutes.ts"), "utf8");
 const docRoute = fs.readFileSync(path.resolve(__dirname, "../../routes/biDocumentRoutes.ts"), "utf8");
 
 describe("v359 — pgiUploadDocument", () => {
@@ -25,17 +24,10 @@ describe("v359 — pgiUploadDocument", () => {
   });
 });
 
-describe("v359 — lender upload forwards to PGI when pgi_application_id is set", () => {
-  it("imports pgiUploadDocument dynamically", () => {
-    expect(lenderRoute).toMatch(/pgiUploadDocument/);
-  });
-  it("updates bi_documents.pgi_document_id + forwarded_to_carrier_at after forward", () => {
-    expect(lenderRoute).toMatch(/UPDATE bi_documents SET pgi_document_id/);
-  });
-  it("forward failure is non-fatal (warn + continue)", () => {
-    expect(lenderRoute).toMatch(/pgi_doc_forward_failed/);
-  });
-});
+// BI_SERVER_v789 - the lender upload forwarding checks (forwards when
+// pgi_application_id is set, records pgi_document_id + forwarded_to_carrier_at,
+// a forward failure is non-fatal) are behaviour tests now, for both lender
+// uploads: src/routes/__tests__/lenderUpload.v789.test.ts.
 
 describe("v359 — staff accept-all backfills any pending forwards", () => {
   it("backfill loop fires when public auto-submit succeeds", () => {

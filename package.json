@@ -3,7 +3,7 @@
   "version": "1.0.2",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "dev": "tsx watch src/index.ts",
     "build": "tsc && mkdir -p dist/assets && cp src/boreal_risk_management_email_logo_1200x300.png dist/assets/ && mkdir -p dist/db/migrations && find src/db/migrations -maxdepth 1 -name \"*.sql\" -exec cp {} dist/db/migrations/ \\; && mkdir -p dist/db/baseline && cp -R src/db/baseline/. dist/db/baseline/",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",

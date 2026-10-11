@@ -1,6 +1,9 @@
 // BI_SERVER_OTP_ABUSE_GUARD_v716
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
+import express from "express";
+import request from "supertest";
+import biApplicantOtpRoutes from "../../routes/biApplicantOtpRoutes";
 import { isAllowedOtpDestination, checkOtpSend, _resetOtpGuard } from "../otpGuard";
 import { rateLimitKeyFromRequest } from "../../middleware/rateLimitKey";
 import { sendOtpSafe, otpSendFailed } from "../../services/otpService";
@@ -29,6 +32,9 @@ describe("BI sign-in codes only go to Canadian and US numbers", () => {
     expect(calls.header).toEqual(["Retry-After", "300"]);
     otpSendFailed(res, { ok: false, error: "twilio down" });
     expect(calls.status).toBe(502);
+    // v789: the provider's error text is logged, never returned.
+    expect(JSON.stringify(calls.body)).not.toContain("twilio down");
+    expect(calls.body).toEqual({ error: "otp_send_failed" });
   });
 });
 
@@ -51,9 +57,22 @@ describe("BI rate-limit key cannot be forged", () => {
     expect(rateLimitKeyFromRequest({ headers: { "x-forwarded-for": "1.2.3.4, 77.246.52.163:62553" } } as any)).toBe("77.246.52.163");
     expect(rateLimitKeyFromRequest({ headers: { "x-forwarded-for": "1.2.3.4, 77.246.52.163:62553, 10.0.0.4" } } as any)).toBe("77.246.52.163");
   });
+  // v789 [5]/[37]: biApplicantOtpRoutes changed in this block, so it is checked
+  // by behaviour; biAuthRoutes and biLenderApiRoutes are not part of the
+  // v789 changed set here and keep the source check.
   it("every public sign-in route replies through otpSendFailed", () => {
-    for (const f of ["biAuthRoutes.ts", "biApplicantOtpRoutes.ts", "biLenderApiRoutes.ts"]) {
+    for (const f of ["biAuthRoutes.ts", "biLenderApiRoutes.ts"]) {
       expect(readFileSync("src/routes/" + f, "utf8")).toContain("otpSendFailed(res,");
     }
+  });
+  it("the applicant OTP route answers a guard refusal through otpSendFailed", async () => {
+    _resetOtpGuard();
+    const app = express();
+    app.use(express.json());
+    app.use("/api/v1", biApplicantOtpRoutes);
+    const r = await request(app).post("/api/v1/applicants/otp/start").send({ phone: "+50937001234" });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe("unsupported_country");
+    expect(typeof r.body.message).toBe("string");
   });
 });
