@@ -36,7 +36,7 @@ async function enqueuePurgeIfTerminal(applicationId: string, stage: string) {
 // column is never written by the public flow.
 router.get("/applications", async (req, res) => {
   const hideDemo = String(req.query.hide_demo ?? "").toLowerCase() === "true";
-  // BI_SERVER_BLOCK_v268_CLEANUP_v1 — F-1: validate UUID format before
+  // BI_SERVER_BLOCK_v268_CLEANUP_v1 - F-1: validate UUID format before
   // letting it reach the $2::uuid cast, which throws 22P02 and 500s
   // the whole listing if a malformed value comes in.
   const UUID_RE_v268 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -116,7 +116,7 @@ router.get("/applications", async (req, res) => {
   return ok(res, { applications: result.rows });
 });
 
-// BI_SERVER_BLOCK_v302_APPLICATION_DELETE_ADMIN_v1 — proper application-
+// BI_SERVER_BLOCK_v302_APPLICATION_DELETE_ADMIN_v1 - proper application-
 // level DELETE so the BF-portal BI Dashboard's Delete button stops being
 // hijacked by biDocumentRoutes.delete("/:id"). Admin role only per operator
 // locked decision. Hard delete; FK CASCADE handles bi_documents, bi_activity,
@@ -165,7 +165,7 @@ router.get("/pipeline", async (req, res) => {
 // BI_SERVER_BLOCK_v261_CARRIER_PATH_E2E_FIX_v2
 // The portal's biPipelineAdapter.move POSTs PATCH to
 // /api/v1/bi/applications/:id/stage. The pre-existing handler lived
-// at /pipeline/:id/stage which didn't match — the Kanban drag-and-drop
+// at /pipeline/:id/stage which didn't match - the Kanban drag-and-drop
 // hit 404 silently. Expose both paths via a shared handler.
 async function setStageHandler(req: any, res: any) {
   const id = req.params.id;
@@ -194,9 +194,9 @@ router.patch("/applications/:id/stage", setStageHandler);
 // GET /applications/:id must return all_docs_accepted (boolean) and an
 // effective stage so the portal's "Forward to carrier" button works.
 //
-// (1) all_docs_accepted: TRUE iff there's ≥1 bi_documents row AND
+// (1) all_docs_accepted: TRUE iff there's >=1 bi_documents row AND
 //     every (non-purged) row has review_status='accepted'. Without
-//     this the portal's gate is undefined → falsy → button hidden.
+//     this the portal's gate is undefined -> falsy -> button hidden.
 //
 // (2) effective_stage: the public flow only writes the `status` TEXT
 //     column, never the `stage` ENUM. The portal reads `app.stage`.
@@ -217,9 +217,9 @@ router.get("/applications/:id", async (req, res) => {
             COALESCE(a.company_name, co.legal_name, a.business_name) AS company_name,
             COALESCE(pa.data->>'status', a.stage::text) AS pgi_status,
             -- BI_SERVER_BLOCK_v276_REJECTED_DOCS_DONT_BLOCK_GATE_v1
-            -- Gate flips TRUE iff there's ≥1 accepted doc AND no
+            -- Gate flips TRUE iff there's >=1 accepted doc AND no
             -- doc is still pending review. 'rejected' rows are
-            -- neither — they stay visible to staff but a replacement
+            -- neither - they stay visible to staff but a replacement
             -- + accept on the new doc lets the gate flip.
             (EXISTS (
                SELECT 1 FROM bi_documents
@@ -420,7 +420,7 @@ router.get("/application/by-phone", async (req, res) => {
 export default router;
 
 
-// BI_PGI_ALIGNMENT_v56 — PGI-aligned submission routes.
+// BI_PGI_ALIGNMENT_v56 - PGI-aligned submission routes.
 // BI_LENDER_SUBMIT_V2_VALIDATOR_v1
 // The legacy validator checked four fields and passed everything else
 // straight through to the carrier: coverage cap, 1M maximum, allowed
@@ -443,7 +443,7 @@ async function persistApplication(submission: ReturnType<typeof validatePgiSubmi
 router.post("/applications/lender", async (req, res) => { const userId = (req as { user?: { staffUserId?: string } }).user?.staffUserId; if (!userId) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" }); const lenderRow = (await (await import("../db")).pool.query<{ id: string }>(`SELECT id FROM bi_lenders WHERE user_id = $1 AND is_active = TRUE LIMIT 1`, [userId])).rows[0]; if (!lenderRow) return res.status(403).json({ ok: false, error: "NOT_A_LENDER" }); const v = validatePgiSubmissionV2(req.body); if (!v.ok) return res.status(400).json({ ok: false, error: "PGI_VALIDATION_FAILED", issues: v.issues }); try { const id = await persistApplication(v, "lender", lenderRow.id, null); const formData = v.value.form_data; await mirrorToContact({ source: "applicant", full_name: formData.q2_full_name, email: formData.q7_email, company_name: formData.q15_business_legal_name, lifecycle_stage: "applicant", extra_tags: [`application:${id}`, `lender:${lenderRow.id}`] }); const result = await submitApplicationToPGI(id); return res.status(201).json({ ok: true, application_id: id, source: "lender", pgi: result }); } catch (err) { return res.status(500).json({ ok: false, error: "SUBMIT_FAILED", requestId: logHiddenError(req, err, "SUBMIT_FAILED") }); }});
 router.post("/applications/:id/submit-to-carrier", async (req, res) => {
   // BI_SERVER_BLOCK_v160_SUBMIT_TO_CARRIER_HARDENING_v1
-  // V1 spec §7 (Send to Carrier button) + §8 (acceptance tests 2-9).
+  // V1 spec S7 (Send to Carrier button) + S8 (acceptance tests 2-9).
   // Required controls in order:
   //   (1) admin role only
   //   (2) source_type='public' (lender submissions auto-forward)
@@ -505,7 +505,7 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
     return res.status(409).json({ ok: false, error: "ALREADY_LOCKED" });
   }
 
-  // (5) all required docs accepted — v342: use spec-correct check that
+  // (5) all required docs accepted - v342: use spec-correct check that
   // is per-slot and respects formation-date-variant requirements.
   const formationRow = await pool.query<{ formation_date: string | null }>(
     `SELECT (data->>'formation_date') AS formation_date FROM bi_applications WHERE id = $1 LIMIT 1`,
@@ -523,14 +523,14 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
     });
   }
 
-  // (6) LOCK application — REMOVED in BI_SERVER_BLOCK_v379_TEST1_FIX_PACK_v1
+  // (6) LOCK application - REMOVED in BI_SERVER_BLOCK_v379_TEST1_FIX_PACK_v1
   // (Bug E). submitApplicationToPGI at biPgiSubmissionService.ts:80-90
-  // already does its own atomic claim (UPDATE … WHERE submission_locked
-  // = FALSE … SET submission_locked = TRUE). v270 added that claim;
+  // already does its own atomic claim (UPDATE ... WHERE submission_locked
+  // = FALSE ... SET submission_locked = TRUE). v270 added that claim;
   // this route's pre-lock from BI_SERVER_BLOCK_v160 was never removed
   // to match. The pre-lock flipped submission_locked TRUE first, so
   // the service's claim updated 0 rows and the service returned
-  // { alreadySubmitted: true } without ever calling the carrier —
+  // { alreadySubmitted: true } without ever calling the carrier -
   // route responded 200 OK while the row stayed at status=document_review
   // and pgi_application_id=NULL forever.
   // The earlier idempotency check at step (4) (`if row.submission_locked
@@ -628,4 +628,4 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
   }
 });
 
-// BI_AUDIT_FIX_v58 — /applications/public moved to biPublicApplicationRoutes.ts
+// BI_AUDIT_FIX_v58 - /applications/public moved to biPublicApplicationRoutes.ts

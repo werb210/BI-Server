@@ -8,7 +8,7 @@ import { badRequest, ok } from "../utils/apiResponse";
 import { notifyBiClient } from "../services/notifyBiClient"; // BI_SERVER_BLOCK_v588_APP_FIRST
 import { requireAuth } from "../platform/auth";
 import { env } from "../platform/env";
-// BI_HARDENING_v44 — switch BI document storage from local disk to the Azure
+// BI_HARDENING_v44 - switch BI document storage from local disk to the Azure
 // Blob abstraction. Memory storage so multer doesn't write to disk first.
 import { getStorage } from "../lib/storage";
 import { fetchBfDocumentFile } from "../services/bfDocumentFile"; // BI_SERVER_BF_DOC_FILE_v4
@@ -25,7 +25,7 @@ const router = Router();
 const pool = sharedPool /* BI_SERVER_ONE_POOL_v718 */;
 
 // BI_SERVER_BLOCK_v178_DOC_ACCEPT_HARDENING_v1
-// Inline role gate — biDocumentRoutes does not import a role middleware
+// Inline role gate - biDocumentRoutes does not import a role middleware
 // (auth.ts only exports requireAuth). Reject non-staff/non-admin.
 function requireStaffOrAdmin(req: any, res: any, next: any) {
   const role = String((req.user as { role?: string } | undefined)?.role ?? "").toLowerCase();
@@ -39,7 +39,7 @@ function requireStaffOrAdmin(req: any, res: any, next: any) {
 // pre-blob documents written before this block deployed. New uploads no longer
 // land here.
 const legacyUploadDir = path.join(__dirname, "../../uploads/bi");
-// BI_BOOT_FIX_v63_DOC_DIR — wwwroot can be read-only on Azure when
+// BI_BOOT_FIX_v63_DOC_DIR - wwwroot can be read-only on Azure when
 // WEBSITE_RUN_FROM_PACKAGE=1 is set. mkdirSync would throw at module
 // load and crash the entire BI-Server boot. Tolerate the failure;
 // uploads have moved to Azure Blob anyway.
@@ -49,20 +49,20 @@ try {
   }
 } catch (err) {
   // eslint-disable-next-line no-console
-  console.warn("[BI_BOOT_FIX_v63_DOC_DIR] legacy upload dir not creatable (ok — Azure Blob is primary):", err instanceof Error ? err.message : err);
+  console.warn("[BI_BOOT_FIX_v63_DOC_DIR] legacy upload dir not creatable (ok - Azure Blob is primary):", err instanceof Error ? err.message : err);
 }
 
-// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — 5 MB per file per PGI carrier policy.
+// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER - 5 MB per file per PGI carrier policy.
 // Image / PDF / Excel / Word / screenshots all accepted. Per user: do not
-// reject by MIME — store everything, OCR figures out what to do.
+// reject by MIME - store everything, OCR figures out what to do.
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
 });
 
 router.post("/:id/documents", upload.array("files"), async (req, res) => {
-  // BI_HARDENING_v44 — uploads go to Azure Blob (storage abstraction).
-  // PGI auto-forward removed from this handler — it now fires from /:id/accept
+  // BI_HARDENING_v44 - uploads go to Azure Blob (storage abstraction).
+  // PGI auto-forward removed from this handler - it now fires from /:id/accept
   // when every required document for the application has been accepted (BI-7).
   const { id } = req.params;
   const files = (req.files as Express.Multer.File[]) ?? [];
@@ -98,14 +98,14 @@ router.post("/:id/documents", upload.array("files"), async (req, res) => {
       [id, `Document uploaded: ${file.originalname}`]
     );
 
-    // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — fire-and-forget OCR.
+    // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER - fire-and-forget OCR.
     void runOcrForDocument(docId, file).catch((err) => { logger.warn({ err, docId }, "ocr_run_failed"); });
   }
 
   ok(res, { success: true, files: created });
 });
 
-// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — required-doc catalog endpoint.
+// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER - required-doc catalog endpoint.
 // Mounted at /api/v1/bi/required-documents (see OP 5 for the secondary mount).
 router.get("/required-documents", async (_req, res) => {
   const result = await pool.query(
@@ -128,7 +128,7 @@ router.get("/:id", async (req, res, next) => {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id ?? "")) {
     return next();
   }
-  // BI_HARDENING_v44 — prefer blob_name (new uploads); fall back to legacy disk
+  // BI_HARDENING_v44 - prefer blob_name (new uploads); fall back to legacy disk
   // path for documents written before this block.
   const result = await pool.query(
     `SELECT original_filename, storage_key, blob_name, mime_type, bf_document_id FROM bi_documents WHERE id=$1 AND purged_at IS NULL LIMIT 1`,
@@ -196,8 +196,8 @@ router.post("/:id/accept", requireAuth, requireStaffOrAdmin, async (req, res) =>
   );
 
   // BI_HARDENING_v44 / BI_SERVER_BLOCK_v276_REJECTED_DOCS_DONT_BLOCK_GATE_v1
-  // Accept-all gate. ≥1 accepted doc AND no pending docs. 'rejected'
-  // rows are neither — they stay visible in the docs tab so staff
+  // Accept-all gate. >=1 accepted doc AND no pending docs. 'rejected'
+  // rows are neither - they stay visible in the docs tab so staff
   // can see the rejection history but don't block the gate after a
   // replacement is accepted.
   const counts = await pool.query<{ pending: string; accepted: string; total: string }>(
@@ -432,7 +432,7 @@ router.get("/:id/download", async (req, res, next) => {
   return fs.createReadStream(fullPath).pipe(res);
 });
 
-// GET /:id/file-url — returns a JSON envelope with a URL the staff portal can window.open.
+// GET /:id/file-url - returns a JSON envelope with a URL the staff portal can window.open.
 // BI_SERVER_BLOCK_v387_FILE_URL_ABSOLUTE_v1
 // Return an absolute URL so the portal's window.open() doesn't resolve
 // against staff.boreal.financial (the Static Web App host) and 404. The
@@ -488,7 +488,7 @@ router.delete("/:id", requireAuth, requireStaffOrAdmin, async (req, res) => {
 
 // BI_SERVER_BLOCK_v273_PUBLIC_UPLOAD_OCR_v1
 // Local runOcrForDocument moved to src/services/ocrRunner.ts.
-// Module-local `pool` here is the legacy per-route Pool — runOcrForDocument
+// Module-local `pool` here is the legacy per-route Pool - runOcrForDocument
 // uses the shared db pool (see ocrRunner.ts).
 
 export default router;

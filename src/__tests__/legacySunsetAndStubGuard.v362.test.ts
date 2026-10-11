@@ -3,22 +3,14 @@ import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const adapterSrc = fs.readFileSync(path.resolve(__dirname, "../services/pgiAdapter.ts"), "utf8");
 const serverSrc = fs.readFileSync(path.resolve(__dirname, "../server.ts"), "utf8");
 
 // BI_SERVER_v789 - the legacy-shape sunset (410 legacy_shape_removed with the
 // docs + openapi links, no Deprecation/Sunset header) is a behaviour test now:
 // src/routes/__tests__/lenderApiCarrierAlignment.v354.test.ts.
 
-describe("v362 — STUB default is env-aware", () => {
-  it("STUB is computed via IIFE that branches on NODE_ENV", () => {
-    expect(adapterSrc).toMatch(/process\.env\.NODE_ENV !== "production"/);
-  });
-  it("explicit USE_PGI_STUB=false beats NODE_ENV check", () => {
-    expect(adapterSrc).toMatch(/raw === "false"/);
-  });
-});
-
+// BI_SERVER_v789 [5]/[37] - "STUB default is env-aware" is a behaviour test
+// now: src/services/__tests__/pgiAdapter.timeouts.v789.test.ts.
 describe("v362 — production boot guard", () => {
   it("server.ts hard-fails on USE_PGI_STUB=true in production", () => {
     expect(serverSrc).toMatch(/USE_PGI_STUB=true in production/);

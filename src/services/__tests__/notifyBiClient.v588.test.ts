@@ -25,9 +25,11 @@ describe("notifyBiClient - app first, SMS fallback", () => {
     expect((await notifyBiClient(notice, { push: async () => 0, sms: async () => { throw new Error("twilio"); } })).channel).toBe("none");
   });
   it("every applicant notice goes through it", () => {
-    for (const f of ["src/routes/biDocumentRoutes.ts", "src/services/pgiOnApprovedHook.ts", "src/routes/biPublicApplicationRoutes.ts", "src/routes/biJobs.ts", "src/workers/abandonedApplicationNudge.ts"]) {
+    // BI_SERVER_v789 [5]/[37] - biDocumentRoutes (document rejected) and biJobs
+    // (docs reminder) are behaviour tests now: src/__tests__/carrierWiring.v789.test.ts
+    // and src/routes/__tests__/cronColumnFix.v361.test.ts.
+    for (const f of ["src/services/pgiOnApprovedHook.ts", "src/routes/biPublicApplicationRoutes.ts", "src/workers/abandonedApplicationNudge.ts"]) {
       expect(readFileSync(f, "utf8")).toContain("notifyBiClient");
     }
-    expect(readFileSync("src/routes/biDocumentRoutes.ts", "utf8")).not.toContain("sendDocumentRejectedSms");
   });
 });

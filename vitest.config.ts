@@ -1,4 +1,4 @@
-// BI_SERVER_BLOCK_v356_TEST_DB_HARNESS — vitest configuration.
+// BI_SERVER_BLOCK_v356_TEST_DB_HARNESS - vitest configuration.
 import { defineConfig, configDefaults } from "vitest/config";
 
 const TEST_DB = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "";

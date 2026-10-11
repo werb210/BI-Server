@@ -658,7 +658,7 @@ router.post("/:id/documents/:docId/reject", requireStaffOrAdmin, async (req: Req
   return rejectDocumentLogic(req, res, req.params.id, req.params.docId);
 });
 
-// POST /:id/documents/:docId/review — single endpoint that dispatches to accept or reject
+// POST /:id/documents/:docId/review - single endpoint that dispatches to accept or reject
 // based on body.action. Portal uses this instead of two separate URLs.
 router.post("/:id/documents/:docId/review", requireStaffOrAdmin, async (req: Request, res: Response) => {
   const action = String((req.body ?? {}).action ?? "").toLowerCase().trim();

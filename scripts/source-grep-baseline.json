@@ -1,4 +1,4 @@
 {
   "_comment": "Ceiling for scripts/check-source-grep-tests.mjs (test files that assert on source text). Only ever lower it.",
-  "maxSourceGrepTests": 82
+  "maxSourceGrepTests": 75
 }

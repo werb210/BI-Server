@@ -19,11 +19,8 @@ describe("bi-server referral unified into BF", () => {
     expect(routes).toContain("SET referrer_code = $1");
   });
 
-  it("notifies BF at policy bind", () => {
-    const hook = read("../pgiWebhookRoutes.ts");
-    expect(hook).toContain("notifyBfReferralConversion");
-    expect(hook).toContain("annual_premium");
-  });
+  // BI_SERVER_v789 [5]/[37] - "notifies BF at policy bind" is a behaviour test
+  // now: src/__tests__/carrierWiring.v789.test.ts.
 
   it("no longer mounts the BI referrer self-service routes", () => {
     const server = read("../../server.ts");

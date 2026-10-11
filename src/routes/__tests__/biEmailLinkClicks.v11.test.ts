@@ -19,7 +19,6 @@ vi.mock("../../db", () => ({
 
 import biMarketingRoutes from "../biMarketingRoutes";
 
-const hook = fs.readFileSync(path.resolve(__dirname, "../biSendgridWebhookRoutes.ts"), "utf8");
 const migration = fs.readFileSync(
   path.resolve(__dirname, "../../db/migrations/2026_08_05_bi_email_link_clicks.sql"), "utf8");
 
@@ -29,17 +28,9 @@ describe("BI email link click capture", () => {
     expect(migration).not.toMatch(/REFERENCES/i);
   });
 
-  it("keeps the clicked URL on the event ledger detail", () => {
-    expect(hook).toContain("url: typeof ev?.url === \"string\"");
-  });
-
-  it("records one ledger row per clicked link", () => {
-    expect(hook).toContain("INSERT INTO bi_email_link_clicks (job_id, contact_id, email, url)");
-  });
-
-  it("still always answers 200 so SendGrid does not replay the batch", () => {
-    expect(hook).toContain("res.json({ ok: true, received: events.length, suppressed, logged, linkClicks });");
-  });
+  // BI_SERVER_v789 [5]/[37] - the webhook checks (clicked URL kept on the ledger
+  // detail, one bi_email_link_clicks row per click, always 200 with counts) are
+  // behaviour tests now: src/__tests__/carrierWiring.v789.test.ts.
 
   it("exposes the same route shape as BF so one panel serves both silos", async () => {
     const byUrl = { url: "https://boreal.insure/pg", clicks: 7, contacts: 3, last_clicked: "2026-10-01T10:00:00Z" };

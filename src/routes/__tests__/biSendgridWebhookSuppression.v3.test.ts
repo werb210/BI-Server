@@ -81,9 +81,20 @@ describe("BI_SENDGRID_WEBHOOK_SUPPRESSION_FIX_v3", () => {
     expect(sql).not.toMatch(/DROP\s+(TABLE|COLUMN)/i);
   });
 
-  it("no longer discards a ledger failure without a word", () => {
-    const source = readFileSync(join(process.cwd(), "src/routes/biSendgridWebhookRoutes.ts"), "utf8");
-    expect(source).not.toContain(".catch(() => undefined)");
-    expect(source).toContain("event ledger insert failed");
+  // BI_SERVER_v789 [5]/[37] - behaviour test (was a source-text grep).
+  it("no longer discards a ledger failure without a word, and still suppresses", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      queryMock.mockImplementation(async (sql: string) => {
+        if (/INSERT INTO bi_marketing_send_events/.test(sql)) throw new Error("ledger down");
+        return { rowCount: 1 };
+      });
+      const res = await post(makeApp(), hardBounce).expect(200);
+      expect(res.body.suppressed).toBe(1);
+      expect(res.body.logged).toBe(0);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes("event ledger insert failed"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
