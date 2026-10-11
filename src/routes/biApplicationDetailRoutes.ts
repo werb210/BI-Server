@@ -149,8 +149,8 @@ async function acceptDocumentLogic(req: Request, res: Response, idParam: string,
               declarations: r.declarations ?? {},
             });
             if (sub?.pgi_error) {
+              // lenderCarrierSubmit already wrote carrier_submission_failed.
               logger.warn({ appId }, "[v391] auto-submit failed at the carrier");
-              await recordCarrierSubmissionFailed(appId, new Error(sub.pgi_error), { path: "auto_submit_on_last_accept" });
             }
           } catch (err) {
             logger.warn({ err, appId }, "[v391] auto-submit failed");

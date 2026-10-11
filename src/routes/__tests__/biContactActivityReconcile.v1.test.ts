@@ -8,8 +8,8 @@ import { join } from "node:path";
 
 const queryMock = vi.fn();
 vi.mock("pg", () => ({ Pool: class { query(...args: unknown[]) { return queryMock(...args); } } }));
-const SECRET = "test-shared-secret-min-10";
-vi.mock("../../platform/env", () => ({ env: { JWT_SECRET: "test-shared-secret-min-10", DATABASE_URL: "postgres://test" } }));
+const SECRET = process.env.JWT_SECRET as string;
+vi.mock("../../platform/env", () => ({ env: { JWT_SECRET: (process.env.JWT_SECRET as string), DATABASE_URL: "postgres://test" } }));
 vi.mock("../../platform/logger", () => ({ logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } }));
 import { requireAuth } from "../../platform/auth";
 import biCrmRoutes from "../biCrmRoutes";

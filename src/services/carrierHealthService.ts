@@ -20,9 +20,9 @@ export async function getCarrierHealth(): Promise<CarrierHealth> {
   const [subs, recv, errs, lastRecv, lastErr] = await Promise.all([
     pool.query<{ n: string }>(`SELECT COUNT(*)::text AS n FROM bi_applications WHERE created_at >= ${since}`),
     pool.query<{ n: string }>(`SELECT COUNT(*)::text AS n FROM bi_applications WHERE carrier_received_at >= ${since}`),
-    pool.query<{ n: string }>(`SELECT COUNT(*)::text AS n FROM bi_activity WHERE event_type IN ('carrier_submission_failed','pgi_webhook_failed') AND created_at >= ${since}`),
+    pool.query<{ n: string }>(`SELECT COUNT(*)::text AS n FROM bi_events WHERE type IN ('carrier_submission_failed','pgi_webhook_failed') AND created_at >= ${since}`),
     pool.query<{ t: string | null }>(`SELECT MAX(carrier_received_at)::text AS t FROM bi_applications`),
-    pool.query<{ t: string | null }>(`SELECT MAX(created_at)::text AS t FROM bi_activity WHERE event_type IN ('carrier_submission_failed','pgi_webhook_failed')`),
+    pool.query<{ t: string | null }>(`SELECT MAX(created_at)::text AS t FROM bi_events WHERE type IN ('carrier_submission_failed','pgi_webhook_failed')`),
   ]);
   const submissions = Number(subs.rows[0]?.n || "0");
   const received = Number(recv.rows[0]?.n || "0");

@@ -8,7 +8,7 @@ import jwt from "jsonwebtoken";
 // Move shared values into vi.hoisted() so they exist at factory time.
 const { queryMock, SECRET } = vi.hoisted(() => ({
   queryMock: vi.fn(),
-  SECRET: "test-shared-secret-min-10",
+  SECRET: (process.env.JWT_SECRET as string),
 }));
 vi.mock("../../db", () => ({
   pool: { query: (...args: unknown[]) => queryMock(...args) },

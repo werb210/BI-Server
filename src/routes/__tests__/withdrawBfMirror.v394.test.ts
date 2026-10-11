@@ -4,7 +4,7 @@ import express from "express";
 import request from "supertest";
 import jwt from "jsonwebtoken";
 
-const { queryMock, SECRET } = vi.hoisted(() => ({ queryMock: vi.fn(), SECRET: "test-shared-secret-min-10" }));
+const { queryMock, SECRET } = vi.hoisted(() => ({ queryMock: vi.fn(), SECRET: (process.env.JWT_SECRET as string) }));
 vi.mock("../../db", () => ({ pool: { query: (...args: unknown[]) => queryMock(...args) } }));
 vi.mock("../../platform/env", () => ({ env: { JWT_SECRET: SECRET } }));
 vi.mock("../../platform/logger", () => ({ logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } }));

@@ -14,7 +14,7 @@ function app() {
   a.use("/api/v1/bi", router);
   return a;
 }
-const token = () => jwt.sign({ kind: "service", source: "bf-server" }, process.env.JWT_SECRET || "test-shared-secret-min-10");
+const token = () => jwt.sign({ kind: "service", source: "bf-server" }, process.env.JWT_SECRET as string);
 
 describe("from-bf handoff with partial dates (real database)", () => {
   it("creates the application when the start date is only a year", async () => {

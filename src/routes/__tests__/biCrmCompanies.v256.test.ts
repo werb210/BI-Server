@@ -10,7 +10,7 @@ import { requireAuth } from "../../platform/auth";
 import biCrmRoutes from "../biCrmRoutes";
 import { resetDb, seedCompany, seedContact } from "../../test-support/integrationDb";
 
-const SECRET = process.env.JWT_SECRET || "test-shared-secret-min-10";
+const SECRET = process.env.JWT_SECRET as string;
 
 function makeApp() {
   const app = express();
