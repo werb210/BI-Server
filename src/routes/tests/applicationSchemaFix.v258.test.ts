@@ -14,7 +14,6 @@ vi.mock("../../services/otpService", () => ({
   verifyOtpSafe: vi.fn(async () => ({ ok: true, approved: true })),
 }));
 
-import { requireAuth } from "../../platform/auth";
 import biLenderApiRoutes from "../biLenderApiRoutes";
 import biReferrerRoutes from "../biReferrerRoutes";
 import biLenderApplicationCreate from "../biLenderApplicationCreate";
@@ -23,8 +22,10 @@ import { answerBySql, inTurn } from "../../__tests__/helpers/answerBySql";
 function makeApp() {
   const app = express();
   app.use(express.json());
-  app.use("/api/v1/lender", requireAuth, biLenderApiRoutes);
-  app.use("/api/v1/lender", requireAuth, biLenderApplicationCreate);
+  // BI_SERVER_v784_STAFF_ONLY_AUTH - lender routes authenticate lenders
+  // themselves; the staff-only requireAuth would reject a lender token.
+  app.use("/api/v1/lender", biLenderApiRoutes);
+  app.use("/api/v1/lender", biLenderApplicationCreate);
   app.use("/api/v1/referrer", biReferrerRoutes);
   return app;
 }

@@ -3,7 +3,7 @@ import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { rateLimitKeyFromRequest } from "../middleware/rateLimitKey"; // BI_SERVER_DEVICE_SIGN_IN_KEYGEN_v305
 import { pool } from "../db";
-import { env } from "../platform/env";
+import { getJwtSecret } from "../platform/jwtSecret"; // BI_SERVER_v784_JWT_SECRET
 import { authApplicant, type ApplicantReq } from "./applicantAuth";
 import { enrollApplicantDevice, revokeApplicantDevices, signInApplicantDevice } from "../services/biApplicantDeviceSignIn";
 
@@ -23,7 +23,7 @@ router.post("/applicants/device-sign-in/enroll", authApplicant, async (req: Appl
 
 router.post("/applicants/device-sign-in", limiter, async (req, res) => {
   try {
-    const result = await signInApplicantDevice(q, String(req.body?.credentialId ?? ""), String(req.body?.secret ?? ""), env.JWT_SECRET || "dev-missing-jwt-secret");
+    const result = await signInApplicantDevice(q, String(req.body?.credentialId ?? ""), String(req.body?.secret ?? ""), getJwtSecret());
     if (!result.ok) {
       console.warn(JSON.stringify({ event: "applicant_device_sign_in_rejected", reason: result.reason }));
       return res.status(401).json({ error: result.reason === "expired" ? "device_sign_in_expired" : "device_sign_in_invalid" });

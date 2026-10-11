@@ -8,6 +8,7 @@ import { normalizeE164 } from "../util/phoneE164"; // BI_SERVER_BLOCK_v414_LENDE
 import crypto from "node:crypto";
 // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1
 import twilio from "twilio";
+import { revokeLenderApiKey } from "../services/lenderApiKeyRevoke"; // BI_SERVER_v784_LENDER_KEY_REVOKE
 const router = Router(); const COUNTRY_RE = /^(CA|US)$/;
 
 // BI_SERVER_BLOCK_v183_ADMIN_LENDER_ROLE_GATE_v1
@@ -297,15 +298,10 @@ router.post("/admin/lenders/:id/api-keys", async (req, res) => {
 // column lives only in the duplicate CREATE TABLE in 2026_05_03 which
 // is a no-op. Also set revoked_at so audit matches bulk revoke (see
 // revokeLenderKeys helper earlier in this file).
+// BI_SERVER_v784_LENDER_KEY_REVOKE - logic lives in services/lenderApiKeyRevoke.
 router.post("/admin/lenders/:id/api-keys/:keyId/revoke", async (req, res) => {
-  const r = await pool.query(
-    `UPDATE bi_lender_api_keys
-        SET is_active = FALSE, revoked_at = NOW()
-      WHERE id = $1 AND lender_id = $2 AND is_active = TRUE
-    RETURNING id`,
-    [req.params.keyId, req.params.id]
-  );
-  return ok(res, { revoked: (r.rowCount ?? 0) > 0 });
+  const result = await revokeLenderApiKey(req.params.id, req.params.keyId);
+  return ok(res, { revoked: result === "revoked" });
 });
 
 

@@ -11,6 +11,15 @@ vi.mock("../../db", () => ({
 }));
 
 import webhookRoutes from "../biSendgridWebhookRoutes";
+import { createSendgridSigner } from "../../__tests__/helpers/sendgridSign";
+
+// BI_SERVER_v784_SENDGRID_SIGNED_ONLY - unsigned events are now refused, so
+// every request here is signed with a test key.
+const signer = createSendgridSigner();
+function post(app: express.Express, payload: unknown) {
+  const raw = JSON.stringify(payload);
+  return request(app).post("/api/v1/bi/webhooks/sendgrid").set("Content-Type", "application/json").set(signer.sign(raw)).send(raw);
+}
 
 function makeApp() {
   const app = express();
@@ -23,7 +32,7 @@ const hardBounce = [{ email: "Dead.Address@example.com", event: "bounce", type: 
 describe("BI_SENDGRID_WEBHOOK_SUPPRESSION_FIX_v3", () => {
   beforeEach(() => {
     queryMock.mockReset();
-    delete process.env.SENDGRID_WEBHOOK_PUBLIC_KEY;
+    process.env.SENDGRID_WEBHOOK_PUBLIC_KEY = signer.publicKeyBase64;
   });
 
   function statements() {
@@ -32,7 +41,7 @@ describe("BI_SENDGRID_WEBHOOK_SUPPRESSION_FIX_v3", () => {
 
   it("no longer relies on a unique constraint that may not exist", async () => {
     queryMock.mockResolvedValue({ rowCount: 1 });
-    await request(makeApp()).post("/api/v1/bi/webhooks/sendgrid").set("Content-Type", "application/json").send(JSON.stringify(hardBounce)).expect(200);
+    await post(makeApp(), hardBounce).expect(200);
     const suppression = statements().find((sql) => /INSERT INTO bi_suppressions/.test(sql));
     expect(suppression).toBeDefined();
     expect(suppression).not.toMatch(/ON CONFLICT/i);
@@ -41,7 +50,7 @@ describe("BI_SENDGRID_WEBHOOK_SUPPRESSION_FIX_v3", () => {
 
   it("dedupes on the same predicate the audience query excludes on", async () => {
     queryMock.mockResolvedValue({ rowCount: 1 });
-    await request(makeApp()).post("/api/v1/bi/webhooks/sendgrid").set("Content-Type", "application/json").send(JSON.stringify(hardBounce)).expect(200);
+    await post(makeApp(), hardBounce).expect(200);
     const suppression = statements().find((sql) => /INSERT INTO bi_suppressions/.test(sql))!;
     expect(suppression).toContain("lower(email) = lower($1)");
     expect(suppression).toContain("channel IN ('email', 'all')");
@@ -49,19 +58,19 @@ describe("BI_SENDGRID_WEBHOOK_SUPPRESSION_FIX_v3", () => {
 
   it("reports a suppression only when a row was actually written", async () => {
     queryMock.mockResolvedValue({ rowCount: 0 });
-    const res = await request(makeApp()).post("/api/v1/bi/webhooks/sendgrid").set("Content-Type", "application/json").send(JSON.stringify(hardBounce)).expect(200);
+    const res = await post(makeApp(), hardBounce).expect(200);
     expect(res.body.suppressed).toBe(0);
   });
 
   it("counts a first-time suppression", async () => {
     queryMock.mockResolvedValue({ rowCount: 1 });
-    const res = await request(makeApp()).post("/api/v1/bi/webhooks/sendgrid").set("Content-Type", "application/json").send(JSON.stringify(hardBounce)).expect(200);
+    const res = await post(makeApp(), hardBounce).expect(200);
     expect(res.body.suppressed).toBe(1);
   });
 
   it("still ignores soft bounces", async () => {
     queryMock.mockResolvedValue({ rowCount: 1 });
-    await request(makeApp()).post("/api/v1/bi/webhooks/sendgrid").set("Content-Type", "application/json").send(JSON.stringify([{ email: "full@example.com", event: "bounce", type: "blocked" }])).expect(200);
+    await post(makeApp(), [{ email: "full@example.com", event: "bounce", type: "blocked" }]).expect(200);
     expect(statements().some((sql) => /INSERT INTO bi_suppressions/.test(sql))).toBe(false);
   });
 

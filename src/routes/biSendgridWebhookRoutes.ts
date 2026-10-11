@@ -23,14 +23,13 @@ import { pool } from "../db";
 
 const router: Router = Router();
 const SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
-let unsignedRequestWarningLogged = false;
 
 export function logSendgridWebhookSigningStatus(): void {
   if (process.env.SENDGRID_WEBHOOK_PUBLIC_KEY) {
     console.info("[bi_sendgrid_webhook] signature verification enabled");
     return;
   }
-  console.warn("[bi_sendgrid_webhook] WARNING: SENDGRID_WEBHOOK_PUBLIC_KEY is unset; webhook accepts unsigned writes");
+  console.error("[bi_sendgrid_webhook] ERROR: SENDGRID_WEBHOOK_PUBLIC_KEY is unset; webhook will answer 503 until it is configured");
 }
 
 // Events that mean "never email this address again".
@@ -56,9 +55,8 @@ function isHardBounce(ev: any): boolean {
 
 function verify(rawBody: Buffer, signature: string, timestamp: string): boolean {
   const key = process.env.SENDGRID_WEBHOOK_PUBLIC_KEY;
-  // Not configured -> accept, matching BF-Server's behaviour. Set the key in
-  // Azure to enforce; until then anyone who finds the URL can post events.
-  if (!key) return true;
+  // BI_SERVER_v784_SENDGRID_SIGNED_ONLY - never accept unsigned writes.
+  if (!key) return false;
   if (!signature || !timestamp) return false;
   const timestampSeconds = Number(timestamp);
   const timestampFresh = Number.isFinite(timestampSeconds)
@@ -80,9 +78,12 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
   const sig = String(req.header("X-Twilio-Email-Event-Webhook-Signature") ?? "");
   const ts = String(req.header("X-Twilio-Email-Event-Webhook-Timestamp") ?? "");
 
-  if (!process.env.SENDGRID_WEBHOOK_PUBLIC_KEY && !unsignedRequestWarningLogged) {
-    unsignedRequestWarningLogged = true;
-    console.warn("[bi_sendgrid_webhook] accepting unsigned request because SENDGRID_WEBHOOK_PUBLIC_KEY is unset");
+  // BI_SERVER_v784_SENDGRID_SIGNED_ONLY - an unset key used to mean "accept
+  // anything", letting anyone who found the URL write suppressions.
+  if (!process.env.SENDGRID_WEBHOOK_PUBLIC_KEY) {
+    console.error("[bi_sendgrid_webhook] rejecting event: SENDGRID_WEBHOOK_PUBLIC_KEY is unset");
+    res.status(503).json({ ok: false, error: "webhook_not_configured" });
+    return;
   }
 
   if (!verify(rawBody, sig, ts)) {
