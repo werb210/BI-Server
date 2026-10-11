@@ -357,7 +357,19 @@ app.use("/api/v1", biCors, biApplicantMessageRoutes); // BI_SERVER_BLOCK_v607
 // endpoints. Mounted under /api/v1 alongside other public routes; auth
 // is enforced per-route via JOB_AUTH_TOKEN bearer (see biJobs.ts).
 app.use("/api/v1", biCors, biJobs);
-app.use("/api/v1", biCors, requireAuth, biScoreRoutes);
+// BI_SERVER_v784_STAFF_ONLY_AUTH - no mount-level requireAuth on the bare
+// "/api/v1" prefix: it ran for every later /api/v1 request and blocked the
+// applicant and contact-form routes mounted below. biScoreRoutes applies
+// requireAuth on each of its own routes.
+app.use("/api/v1", biCors, biScoreRoutes);
+
+// BI_SERVER_v784_STAFF_ONLY_AUTH - requireAuth is staff-only now, so routers
+// that authenticate lenders and applicants with their own tokens must sit
+// above the staff mounts on "/api/v1/bi" or those tokens get 403.
+// BI_V1_FINAL_v47 - lender direct API (authLender per route: lender JWT or API key).
+app.use("/api/v1/bi", biCors, biLenderApiRoutes);
+// Legacy applicant draft/submit (tokens from /api/v1/otp/verify) - per-route requireAnyAuth.
+app.use("/api/v1/bi", biCors, biAppApplicantRoutes);
 
 // Authenticated BI endpoints — every BI route lives under /api/v1/bi
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biRoutes);
@@ -381,7 +393,6 @@ app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biCompaniesFromBfR
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, biMayaStaffRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biApplicationRoutes);
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biEventsRoutes);
-app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biAppApplicantRoutes);
 // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — biDocumentRoutes serves both per-
 // application document handlers (under /applications/:id/...) AND the
 // required-doc catalog (under /required-documents). Mount both places.
@@ -431,9 +442,7 @@ app.use("/api/v1/bi/underwriting", requireAuth, biUnderwritingRoutes);
 // mount at /api/v1 (line 213) handles /quote/calculate; this second
 // mount produced /api/v1/bi/quote/quote/calculate — dead.
 
-// BI_V1_FINAL_v47 — lender direct API. Admin endpoints inside require staff auth;
-// the public submission endpoint authenticates via X-API-Key header.
-app.use("/api/v1/bi", biLenderApiRoutes);
+// BI_V1_FINAL_v47 - lender direct API: mounted above the staff mounts (v784).
 // BI_V1_FINAL_v47 — application-scoped notes (BI silo).
 app.use("/api/v1/bi/applications/:id/notes", requireAuth, biNotesRoutes);
 // BI_APOLLO_REMOVAL_v1 - Apollo retired. The unauthenticated webhook that

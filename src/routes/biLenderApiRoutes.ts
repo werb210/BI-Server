@@ -4,7 +4,8 @@ import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit"; // BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1
 import { notifyStaff } from "../services/staffNotifyService"; // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1
 import { pool } from "../db";
-import { env } from "../platform/env";
+import { getJwtSecret } from "../platform/jwtSecret"; // BI_SERVER_v784_JWT_SECRET
+import { revokeLenderApiKey } from "../services/lenderApiKeyRevoke"; // BI_SERVER_v784_LENDER_KEY_REVOKE
 import { pgiScore } from "../services/pgiAdapter"; // BI_SERVER_BLOCK_v241_PRE_LAUNCH_FIXES_v1
 // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1 — typed wrappers
 import { sendOtpSafe, verifyOtpSafe, sendEmailOtpSafe, verifyEmailOtpSafe, otpSendFailed } from "../services/otpService";
@@ -71,7 +72,7 @@ async function authLender(req: any, res: any, next: any) {
   // Try lender JWT first — JWTs have exactly two dots; API keys do not.
   if (bearerToken && bearerToken.split(".").length === 3) {
     try {
-      const claims: any = jwt.verify(bearerToken, env.JWT_SECRET || "dev-missing-jwt-secret");
+      const claims: any = jwt.verify(bearerToken, getJwtSecret());
       if (claims && claims.kind === "lender" && claims.id) {
         req.lenderId = claims.id;
         if (claims.user_id || claims.contactId) req.lenderUserId = String(claims.user_id || claims.contactId);
@@ -441,7 +442,7 @@ router.post("/lender/otp/verify", async (req, res) => {
     if (cr.rows[0]) row = cr.rows[0];
     if (!row) return res.status(404).json({ error: "lender_not_found" });
 
-    const secret = process.env.JWT_SECRET || "dev-missing-jwt-secret";
+    const secret = getJwtSecret();
     const token = jwt.sign(
       { kind: "lender", id: row.lender_id, contactId: row.contact_id, role: row.role },
       secret,
@@ -462,7 +463,7 @@ router.post("/lender/otp/verify", async (req, res) => {
   const vr = await verifyOtpSafe(phone, code);
   if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
   if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
-  const token = jwt.sign({ kind: "lender", id: row.lender_id, user_id: row.contact_id }, env.JWT_SECRET || "dev-missing-jwt-secret", { expiresIn: "7d" });
+  const token = jwt.sign({ kind: "lender", id: row.lender_id, user_id: row.contact_id }, getJwtSecret(), { expiresIn: "7d" });
   res.json({ token, lender: { id: row.lender_id, company_name: row.company_name }, user: { id: row.contact_id, full_name: row.full_name, email: row.email, role: row.role } });
 });
 
@@ -596,6 +597,14 @@ router.get("/lender/api-keys", authLender, async (req: any, res) => {
     [req.lenderId],
   );
   res.json({ items: r.rows });
+});
+
+// BI_SERVER_v784_LENDER_KEY_REVOKE - lender revokes one of its own keys.
+// Keys of any other lender answer 404, never 403, so ids are not probeable.
+router.post("/lender/api-keys/:id/revoke", authLender, lenderRateLimit, async (req: any, res) => {
+  const result = await revokeLenderApiKey(String(req.lenderId), String(req.params.id));
+  if (result === "not_found") return res.status(404).json({ error: "api_key_not_found" });
+  return res.json({ ok: true, id: req.params.id, revoked: result === "revoked", already_revoked: result === "already_revoked" });
 });
 
 // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1 — lender asks staff for live-key approval.

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcrypt";
 import { pool } from "../db";
-import { signStaffToken } from "../platform/auth";
+import { requireAnyAuth, signStaffToken } from "../platform/auth";
 import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
 import { sendOtpSafe, verifyOtpSafe, otpSendFailed } from "../services/otpService";
 import { normalizeE164 } from "../util/phoneE164";
@@ -209,7 +209,9 @@ publicRouter.post("/staff/login", async (req, res) => {
   return ok(res, { token, tokenType: "Bearer", expiresIn: 28800 });
 });
 
-biAppApplicantRoutes.post("/application/draft", async (req, res) => {
+// BI_SERVER_v784_STAFF_ONLY_AUTH - per-route auth: these accept the legacy
+// applicant tokens from /otp/verify, which the staff-only requireAuth rejects.
+biAppApplicantRoutes.post("/application/draft", requireAnyAuth, async (req, res) => {
   const userPhone = (req.user as { phone?: string } | undefined)?.phone;
   const { data, createdBy } = req.body;
 
@@ -295,7 +297,7 @@ biAppApplicantRoutes.post("/application/draft", async (req, res) => {
   return ok(res, created.rows[0]);
 });
 
-biAppApplicantRoutes.post("/application/submit", async (req, res) => {
+biAppApplicantRoutes.post("/application/submit", requireAnyAuth, async (req, res) => {
   const { applicationId, facilityType, loanAmount, bankruptcy } = req.body;
 
   if (!applicationId || !facilityType || typeof loanAmount !== "number") {

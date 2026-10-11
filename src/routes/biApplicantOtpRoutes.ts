@@ -2,7 +2,7 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { pool } from "../db";
-import { env } from "../platform/env";
+import { getJwtSecret } from "../platform/jwtSecret"; // BI_SERVER_v784_JWT_SECRET
 // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1 — typed wrappers
 import { sendOtpSafe, verifyOtpSafe, otpSendFailed } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
@@ -88,7 +88,7 @@ router.post("/applicants/otp/verify", async (req, res) => {
 
   const token = jwt.sign(
     { kind: "applicant", phone, ...(contactId ? { contactId } : {}) },
-    env.JWT_SECRET || "dev-missing-jwt-secret",
+    getJwtSecret(),
     { expiresIn: "1h" },
   );
   res.json({ token, phone, contactId });

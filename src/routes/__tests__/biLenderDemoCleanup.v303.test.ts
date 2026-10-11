@@ -22,7 +22,7 @@ function buildApp() {
 }
 
 function lenderToken(lenderId = "11111111-1111-4111-8111-111111111111") {
-  return jwt.sign({ kind: "lender", id: lenderId }, process.env.JWT_SECRET || "dev-missing-jwt-secret");
+  return jwt.sign({ kind: "lender", id: lenderId }, process.env.JWT_SECRET as string);
 }
 
 describe("POST /api/v1/bi/lender/demo/cleanup", () => {

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { pool } from "../db";
 import jwt from "jsonwebtoken";
-import { env } from "../platform/env";
+import { getJwtSecret } from "../platform/jwtSecret"; // BI_SERVER_v784_JWT_SECRET
 // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1 — typed wrappers
 import { sendOtpSafe, verifyOtpSafe, otpSendFailed } from "../services/otpService";
 // BI_SERVER_BLOCK_v208_OTP_PHONE_NORMALIZE_v1
@@ -33,10 +33,10 @@ router.post("/referrer/otp/verify", async (req, res) => {
     r = await pool.query(`SELECT * FROM bi_referrers WHERE phone_e164=$1`, [phone]);
   }
   const ref = r.rows[0];
-  const token = jwt.sign({ kind: "referrer", id: ref.id }, env.JWT_SECRET || "dev-missing-jwt-secret", { expiresIn: "7d" });
+  const token = jwt.sign({ kind: "referrer", id: ref.id }, getJwtSecret(), { expiresIn: "7d" });
   res.json({ token, intake_complete: ref.intake_complete });
 });
-function requireReferrer(req: any, res: any, next: any) { const auth = String(req.headers.authorization ?? ""); if (!auth.startsWith("Bearer ")) return res.status(401).json({ error: "missing_token" }); try { const claims: any = jwt.verify(auth.slice(7), env.JWT_SECRET || "dev-missing-jwt-secret"); if (claims.kind !== "referrer") return res.status(403).json({ error: "wrong_session" }); req.referrerId = claims.id; next(); } catch { return res.status(401).json({ error: "invalid_token" }); } }
+function requireReferrer(req: any, res: any, next: any) { const auth = String(req.headers.authorization ?? ""); if (!auth.startsWith("Bearer ")) return res.status(401).json({ error: "missing_token" }); try { const claims: any = jwt.verify(auth.slice(7), getJwtSecret()); if (claims.kind !== "referrer") return res.status(403).json({ error: "wrong_session" }); req.referrerId = claims.id; next(); } catch { return res.status(401).json({ error: "invalid_token" }); } }
 
 // BI_SERVER_BLOCK_v308_REFERRER_ME_PROFILE_WRAPPER_v1 — restore the
 // { profile: {...} } shape the BI-Website ReferrerPortal has read since

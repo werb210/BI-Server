@@ -27,6 +27,10 @@ import { startMailboxHealthRollup } from "./workers/mailboxHealthRollup";
 import { startSendgridSuppressionSync } from "./workers/sendgridSuppressionSync"; // BI_SERVER_SENDGRID_SUPPRESSION_SYNC_v721
 import { logSendgridWebhookSigningStatus } from "./routes/biSendgridWebhookRoutes";
 import { workersEnabled } from "./workers/workersSwitch"; // BI_SERVER_BLOCK_v475_ONE_WORKER_SWITCH
+import { assertJwtSecretAtStartup } from "./platform/jwtSecret"; // BI_SERVER_v784_JWT_SECRET
+
+// BI_SERVER_v784_JWT_SECRET - no fallback secret; refuse to start without one.
+assertJwtSecretAtStartup();
 
 // eslint-disable-next-line no-console
 console.log("BI process start", new Date().toISOString());
@@ -73,6 +77,13 @@ const server = app.listen(port, "0.0.0.0", () => {
   console.log("BI-Server HTTP server ready");
 });
 
+// BI_SERVER_v784_PROCESS_EXIT - a listener that cannot bind (port in use,
+// permission) leaves a process that answers nothing; exit so the host restarts it.
+server.on("error", (err) => {
+  logger.error({ err }, "BI server failed to start listening");
+  process.exit(1);
+});
+
 // Heartbeat so Azure's log stream proves the process is alive even
 // when no requests are coming in.
 const heartbeat = setInterval(() => {
@@ -102,6 +113,9 @@ process.on("SIGINT",  () => shutdown("SIGINT"));
 process.on("unhandledRejection", (reason) => {
   logger.error({ err: reason }, "BI unhandledRejection");
 });
+// BI_SERVER_v784_PROCESS_EXIT - state after an uncaught exception is undefined;
+// log it and exit so the host restarts a clean process.
 process.on("uncaughtException", (err) => {
   logger.error({ err }, "BI uncaughtException");
+  process.exit(1);
 });

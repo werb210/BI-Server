@@ -10,7 +10,7 @@ import biLenderApiRoutes from "../../routes/biLenderApiRoutes";
 
 const haveDb = !!process.env.DATABASE_URL;
 const ints = haveDb ? describe : describe.skip;
-const JWT_SECRET = process.env.JWT_SECRET || "dev-missing-jwt-secret";
+const JWT_SECRET = process.env.JWT_SECRET || "test-shared-secret-min-10";
 function makePool(): Pool { return new Pool({ connectionString: process.env.DATABASE_URL }); }
 function randPhone(): string { const tail = String(Math.floor(1000 + Math.random() * 8999)); return `+1587555${tail}`.padEnd(12, "0").slice(0, 12); }
 function randEmail(p = "itest"): string { return `${p}-${crypto.randomBytes(4).toString("hex")}@itest.local`; }

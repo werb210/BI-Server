@@ -38,7 +38,7 @@ describe("BI message routes over HTTP", () => {
     const f = vi.fn(async (_url: string, init: any) => new Response(JSON.stringify({ ok: true, id: "m1", echo: JSON.parse(init.body) }), { status: 201 }));
     vi.stubGlobal("fetch", f);
     const app = express(); app.use(express.json()); app.use("/api/v1", router);
-    const token = jwt.sign({ kind: "applicant", phone: PHONE }, env.JWT_SECRET || "dev-missing-jwt-secret");
+    const token = jwt.sign({ kind: "applicant", phone: PHONE }, env.JWT_SECRET as string);
     const sent = await request(app).post("/api/v1/applicants/messages").set("Authorization", `Bearer ${token}`)
       .field("message", "Here is my contract").attach("files", Buffer.from("%PDF-1.4"), { filename: "c.pdf", contentType: "application/pdf" });
     expect(sent.status).toBe(201);

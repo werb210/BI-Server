@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import { pool } from "../db";
 import { logger } from "../platform/logger"; // BI_SERVER_BLOCK_v520
 import { passesScoreGate, withDateOnlyFields } from "../services/biPublicFormGates"; // BI_SERVER_BF_REFERRAL_FORM_v283
-import { env } from "../platform/env";
+import { getJwtSecret } from "../platform/jwtSecret"; // BI_SERVER_v784_JWT_SECRET
 import { pgiScore } from "../services/pgiAdapter";
 import { generatePublicId } from "../util/publicId";
 // BI_SERVER_BLOCK_v66_PUBLIC_DOCS_AND_MIGRATION_SAFE_v1
@@ -193,7 +193,7 @@ router.post("/applications/score", async (req, res) => {
   try {
     const auth = String(req.headers.authorization ?? "");
     if (auth.startsWith("Bearer ")) {
-      const claims: any = jwt.verify(auth.slice(7).trim(), env.JWT_SECRET || "dev-missing-jwt-secret");
+      const claims: any = jwt.verify(auth.slice(7).trim(), getJwtSecret());
       if (claims && claims.kind === "applicant" && claims.phone) verifiedPhone = String(claims.phone);
     }
   } catch { /* ignore */ }
