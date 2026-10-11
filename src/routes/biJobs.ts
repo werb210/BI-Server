@@ -25,7 +25,7 @@ import { sendOutreachSms } from "../services/smsService";
 import { logger } from "../platform/logger";
 import { env } from "../platform/env";
 
-import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
+import { maskPhone } from "../util/mask"; // BI_SERVER_v789_LOG_MASKING
 const router = Router();
 
 const MAX_REMINDERS = 10;
@@ -37,17 +37,29 @@ export async function runDocsReminderCronTick(): Promise<{ scanned: number; sent
   // Advisory lock so we don't double-fire when multiple BI-Server
   // instances are running. Same pattern v230 uses.
   const ADVISORY_LOCK_KEY = 8273420242;
-  const lockResult = await pool.query<{ locked: boolean }>(
-    `SELECT pg_try_advisory_lock($1) AS locked`,
-    [ADVISORY_LOCK_KEY],
-  );
-  if (lockResult.rows[0]?.locked !== true) {
-    return { scanned: 0, sent: 0, escalated: 0, failed: 0, lockHeld: false };
-  }
+  // BI_SERVER_v789_ADVISORY_LOCK_ONE_CLIENT - a session advisory lock belongs
+  // to the connection that took it. pool.query() for the lock and again for
+  // the unlock usually lands on two different pooled connections: the unlock
+  // is a no-op and the lock stays held on the first connection until it is
+  // recycled, so later ticks skip. Take and release it on ONE client.
+  const client = await pool.connect();
   try {
-    return await runDocsReminderCronTickInner();
+    const lockResult = await client.query<{ locked: boolean }>(
+      `SELECT pg_try_advisory_lock($1) AS locked`,
+      [ADVISORY_LOCK_KEY],
+    );
+    if (lockResult.rows[0]?.locked !== true) {
+      return { scanned: 0, sent: 0, escalated: 0, failed: 0, lockHeld: false };
+    }
+    try {
+      return await runDocsReminderCronTickInner();
+    } finally {
+      await client.query(`SELECT pg_advisory_unlock($1)`, [ADVISORY_LOCK_KEY]).catch((err: unknown) => {
+        logger.warn({ err }, "docs_reminder_advisory_unlock_failed");
+      });
+    }
   } finally {
-    await pool.query(`SELECT pg_advisory_unlock($1)`, [ADVISORY_LOCK_KEY]).catch(loggedFallback("biJobs", undefined));
+    client.release();
   }
 }
 
@@ -136,7 +148,7 @@ async function runDocsReminderCronTickInner(): Promise<{ scanned: number; sent: 
           );
           escalated += 1;
         } catch (e: unknown) {
-          logger.error({ err: e, phone: escalationPhone }, "bi_escalation_sms_failed");
+          logger.error({ err: e, phone: maskPhone(escalationPhone) }, "bi_escalation_sms_failed");
         }
       }
 
@@ -152,7 +164,7 @@ async function runDocsReminderCronTickInner(): Promise<{ scanned: number; sent: 
       );
     } catch (e: unknown) {
       failed += 1;
-      logger.error({ err: e, phone, publicId }, "bi_docs_reminder_send_failed");
+      logger.error({ err: e, phone: maskPhone(phone), publicId }, "bi_docs_reminder_send_failed");
     }
   }
 

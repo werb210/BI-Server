@@ -8,6 +8,7 @@ import sgMail from "@sendgrid/mail";
 import crypto from "crypto";
 import { env } from "../platform/env";
 import { badRequest, ok } from "../utils/apiResponse";
+import { createAttemptCounter } from "../lib/attemptCounter"; // BI_SERVER_v789_ADMIN_OTP_LIMIT
 
 const router = Router();
 const pool = sharedPool /* BI_SERVER_ONE_POOL_v718 */;
@@ -116,8 +117,26 @@ router.post("/admin-login", loginLimiter, async (req, res) => {
   return ok(res, { step: "otp_required" });
 });
 
+// BI_SERVER_v789_ADMIN_OTP_LIMIT - a 6-digit code could be brute-forced: there
+// was no limit at all on this route. Every attempt counts (successful AND
+// failed), keyed by the admin email (lower-cased, trimmed): at most 5 per 15
+// minutes, after that 429 until the window that started with the first
+// attempt has passed. In-memory, per instance.
+export const ADMIN_OTP_MAX_ATTEMPTS = 5;
+export const ADMIN_OTP_WINDOW_MS = 15 * 60 * 1000;
+export const adminOtpAttempts = createAttemptCounter({ max: ADMIN_OTP_MAX_ATTEMPTS, windowMs: ADMIN_OTP_WINDOW_MS });
+
 router.post("/admin-verify-otp", async (req, res) => {
-  const { email, code } = req.body;
+  const { email, code } = req.body ?? {};
+
+  if (typeof email !== "string" || !email.trim() || code === undefined || code === null || code === "") {
+    return badRequest(res, "Invalid or expired code");
+  }
+  const attempt = adminOtpAttempts.hit(email.trim().toLowerCase());
+  if (!attempt.allowed) {
+    res.setHeader("Retry-After", String(Math.ceil(attempt.retryAfterMs / 1000)));
+    return res.status(429).json({ status: "error", error: "too_many_attempts" });
+  }
 
   const result = await pool.query(
     `SELECT * FROM admin_otp_codes
@@ -142,6 +161,9 @@ router.post("/admin-verify-otp", async (req, res) => {
     `SELECT role FROM admin_users WHERE email=$1`,
     [email]
   );
+  if (!user.rows[0]) {
+    return badRequest(res, "Invalid or expired code");
+  }
 
   const token = signBiToken({ role: user.rows[0].role, email }, "8h", getJwtSecret());
 

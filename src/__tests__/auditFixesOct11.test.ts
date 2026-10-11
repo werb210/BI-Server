@@ -96,18 +96,21 @@ describe("1. staff-only requireAuth", () => {
     expect(isStaffOrServiceClaims("a-string-payload")).toBe(false);
   });
 
-  it("does not mount requireAuth on the bare /api/v1 prefix", () => {
-    const server = readFileSync("src/server.ts", "utf8");
-    const bare = server.split("\n").filter((l) => /app\.use\("\/api\/v1",/.test(l) && l.includes("requireAuth"));
-    expect(bare).toEqual([]);
+  // v789: behaviour instead of reading server.ts.
+  it("does not mount requireAuth on the bare /api/v1 prefix", async () => {
+    // An unknown /api/v1 path falls through every router to 404; a bare
+    // requireAuth mount would answer 401 first.
+    const r = await request(app).get("/api/v1/definitely-not-a-route-v789");
+    expect(r.status).toBe(404);
   });
 
-  it("mounts the lender API above every staff /api/v1/bi mount", () => {
-    const lines = readFileSync("src/server.ts", "utf8").split("\n");
-    const lenderLine = lines.findIndex((l) => l.includes('app.use("/api/v1/bi"') && l.includes("biLenderApiRoutes"));
-    const firstStaff = lines.findIndex((l) => l.includes('app.use("/api/v1/bi') && l.includes("requireAuth"));
-    expect(lenderLine).toBeGreaterThan(-1);
-    expect(lenderLine).toBeLessThan(firstStaff);
+  it("mounts the lender API above every staff /api/v1/bi mount", async () => {
+    // A lender token on a lender route under /api/v1/bi must reach the lender
+    // auth, not the staff-only requireAuth (which answers 403 staff_only).
+    const r = await request(app)
+      .get("/api/v1/bi/lender/applications")
+      .set("Authorization", bearer({ kind: "lender", id: LENDER_ID }));
+    expect(r.body?.error).not.toBe("staff_only");
   });
 });
 

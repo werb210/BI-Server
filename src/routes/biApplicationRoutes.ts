@@ -4,6 +4,8 @@ import { classifyBiDocument, labelForDetectedType } from "../services/biDocument
 import { pool } from "../db";
 import { submitApplicationToPGI, assertDocsReadyForCarrier, forwardAcceptedDocsToCarrier } from "../services/biPgiSubmissionService";
 import { badRequest, ok } from "../utils/apiResponse";
+import { logger } from "../platform/logger";
+import { truncateForLog } from "../util/mask";
 
 const router = Router();
 
@@ -351,8 +353,9 @@ router.post("/application/:id/submit-pgi", async (req, res) => {
     const result = await submitApplicationToPGI(id);
     return ok(res, { success: true, ...result });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to submit to PGI";
-    return badRequest(res, message);
+    // BI_SERVER_v789_NO_ERR_MESSAGE - a code, never the error text.
+    const requestId = logHiddenError(req, error, "PGI_SUBMIT_FAILED");
+    return res.status(400).json({ status: "error", error: "PGI_SUBMIT_FAILED", requestId });
   }
 });
 
@@ -545,7 +548,7 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
       [id]
     )
     .then((rs) => rs.rows[0]?.data ?? {})
-    .catch(() => ({}));
+    .catch((err) => { logger.warn({ err, applicationId: id }, "submit_to_carrier_snapshot_failed"); return {}; });
 
   const logResult = await pool
     .query<{ id: string }>(
@@ -574,30 +577,38 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
             WHERE id = $1`,
           [logId, JSON.stringify(result)]
         )
-        .catch(() => {});
+        .catch((err) => { logger.warn({ err, applicationId: id, logId }, "submission_log_success_update_failed"); });
     }
     // BI_SERVER_BLOCK_v383_CARRIER_PAYLOAD_AND_DOC_FORWARDING_v1
     // Forward accepted documents to PGI. Non-fatal: a failed forward
     // doesn't fail the submit. Staff can retry per-doc from the staff UI.
     const fwd = await forwardAcceptedDocsToCarrier(id, result.externalId).catch((e) => {
-      // eslint-disable-next-line no-console
-      console.warn("[v383] post-submit doc forwarding threw", { app_id: id, error: (e as Error)?.message });
+      logger.warn({ err: e, applicationId: id }, "[v383] post-submit doc forwarding threw");
       return { forwarded: 0, skipped: 0, failed: 0 };
     });
     return res.status(200).json({ ok: true, pgi: result, docs_forwarded: fwd });
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    // Release lock and revert to document_review.
+    // Stored on the internal submission log only (never in the response), truncated.
+    const errorMessage = truncateForLog(err instanceof Error ? err.message : String(err), 500);
+    // Release lock and revert. BI_SERVER_v789_STAGE_ENUM - 'document_review'
+    // is a STATUS value, not a bi_pipeline_stage enum value, so writing it to
+    // stage made this UPDATE fail (and the failure was swallowed): the lock
+    // was never released. stage goes back to 'documents_pending' (a real enum
+    // value) and status back to 'document_review'. Only rows that never
+    // reached the carrier are reverted.
     await pool
       .query(
         `UPDATE bi_applications
             SET submission_locked = FALSE,
-                stage = 'document_review',
+                stage = 'documents_pending',
+                status = 'document_review',
                 updated_at = NOW()
-          WHERE id = $1`,
+          WHERE id = $1
+            AND pgi_application_id IS NULL
+            AND pgi_external_id IS NULL`,
         [id]
       )
-      .catch(() => {});
+      .catch((releaseErr) => { logger.error({ err: releaseErr, applicationId: id }, "submit_to_carrier_lock_release_failed"); });
     if (logId) {
       await pool
         .query(
@@ -607,7 +618,7 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
             WHERE id = $1`,
           [logId, errorMessage]
         )
-        .catch(() => {});
+        .catch((logErr) => { logger.warn({ err: logErr, applicationId: id, logId }, "submission_log_failure_update_failed"); });
     }
     return res.status(500).json({
       ok: false,

@@ -4,6 +4,8 @@ import { pgiSubmitV2, pgiUploadDocument, type BIApplication } from "./pgiAdapter
 import { requiredSlotsFor, type BiDocSlot } from "../lib/biDocumentRequirements";
 import { getStorage } from "../lib/storage";
 import { fetchBfDocumentFile } from "./bfDocumentFile"; // BI_SERVER_BF_DOC_FILE_v4
+import { logger } from "../platform/logger";
+import { recordCarrierSubmissionFailed } from "./biCarrierEvents"; // BI_SERVER_v789_CARRIER_EVENTS
 // BI_PGI_ALIGNMENT_v56 — reads from bi_applications.data which now contains the full PGI form_data shape.
 // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — adds documents_text bundle to PGI submission.
 
@@ -74,7 +76,14 @@ function buildBIApplicationFromRow(row: ApplicationRow): BIApplication {
   };
 }
 
-export async function submitApplicationToPGI(applicationId: string): Promise<{ externalId: string; status: string; alreadySubmitted: boolean }> {
+// BI_SERVER_v789_SUBMIT_LOCK - opts.payload lets a caller that has already
+// built and validated the carrier payload (biScoreRoutes admin submit) go
+// through the same atomic claim, failure event and success bookkeeping
+// instead of calling the carrier directly.
+export async function submitApplicationToPGI(
+  applicationId: string,
+  opts: { payload?: Record<string, unknown> } = {},
+): Promise<{ externalId: string; status: string; alreadySubmitted: boolean }> {
   // BI_SERVER_BLOCK_v270_ORCHESTRATOR_RACE_CLAIM_v1
   // Atomic claim: only one request can flip submission_locked=FALSE→TRUE
   // for a row that hasn't already been carrier-submitted. Closes the
@@ -147,7 +156,7 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
       `UPDATE bi_applications SET submission_locked = FALSE
          WHERE id = $1 AND pgi_application_id IS NULL AND pgi_external_id IS NULL`,
       [applicationId]
-    ).catch(() => {});
+    ).catch((err) => { logger.warn({ err, applicationId }, "pgi_submit_claim_release_failed"); });
     throw new Error("Application not found");
   }
 
@@ -181,7 +190,7 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
     guarantor_address: flattenAddress(appAny.guarantor_address),
     business_address: flattenAddress(appAny.business_address),
   };
-  const payload = buildCarrierPayloadV2(
+  const payload = opts.payload ?? buildCarrierPayloadV2(
     v2Row,
     (appAny.form_data as Record<string, unknown>) ?? {},
     (appAny.declarations as Record<string, unknown>) ?? {},
@@ -212,7 +221,11 @@ export async function submitApplicationToPGI(applicationId: string): Promise<{ e
       `UPDATE bi_applications SET submission_locked = FALSE, updated_at = NOW()
          WHERE id = $1 AND pgi_application_id IS NULL AND pgi_external_id IS NULL`,
       [applicationId]
-    ).catch(() => {});
+    ).catch((releaseErr) => { logger.warn({ err: releaseErr, applicationId }, "pgi_submit_claim_release_failed"); });
+    // BI_SERVER_v789_CARRIER_EVENTS - the one place a carrier submission
+    // failure is recorded; every route that submits goes through here.
+    logger.error({ err, applicationId }, "pgi_submit_failed");
+    await recordCarrierSubmissionFailed(applicationId, err, { path: "submitApplicationToPGI" });
     throw err;
   }
 
@@ -387,9 +400,11 @@ export async function assertDocsReadyForCarrier(applicationId: string, formation
 // Shared by:
 //   - src/routes/biApplicationRoutes.ts staff "Send to Purbeck" handler
 //     (calls this AFTER submitApplicationToPGI returns externalId)
-//   - src/routes/biApplicationDetailRoutes.ts auto-fire-on-last-accept
-//     handler (still has its v359-era inline copy of this logic;
-//     a follow-up cleanup block can collapse to this helper).
+//   - src/routes/biDocumentRoutes.ts and biApplicationDetailRoutes.ts
+//     auto-submit-on-last-accept handlers (via flushAcceptedDocsAfterSubmit;
+//     BI_SERVER_v789 replaced their inline copies, which ordered by the
+//     non-existent bi_documents.uploaded_at column and failed every time)
+//   - src/routes/biScoreRoutes.ts admin submit-to-pgi
 const FORWARDABLE_DOC_TYPES = new Set<string>([
   "loan_agreement",
   "profit_loss",
@@ -453,14 +468,28 @@ export async function forwardAcceptedDocsToCarrier(
       );
       forwarded += 1;
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("[v383] forwardAcceptedDocsToCarrier doc forward failed", {
-        doc_id: d.id,
-        doc_type: d.doc_type,
-        error: (e as Error)?.message,
-      });
+      logger.warn({ err: e, doc_id: d.id, doc_type: d.doc_type, applicationId }, "[v383] forwardAcceptedDocsToCarrier doc forward failed");
       failed += 1;
     }
   }
   return { forwarded, skipped, failed };
+}
+
+// BI_SERVER_v789_DOC_FLUSH - after a submit lands at the carrier, forward the
+// accepted documents that were uploaded before the carrier id existed. Never
+// throws: a forwarding failure must not turn a successful submit into an error
+// (staff can re-forward later). Skips when there is no carrier id yet (a
+// concurrent submit is still in flight).
+export async function flushAcceptedDocsAfterSubmit(
+  applicationId: string,
+  pgiApplicationId: string | null | undefined,
+): Promise<{ forwarded: number; skipped: number; failed: number }> {
+  const empty = { forwarded: 0, skipped: 0, failed: 0 };
+  if (!pgiApplicationId) return empty;
+  try {
+    return await forwardAcceptedDocsToCarrier(applicationId, pgiApplicationId);
+  } catch (err) {
+    logger.warn({ err, applicationId }, "post_submit_doc_flush_failed");
+    return empty;
+  }
 }

@@ -14,6 +14,19 @@ export function httpLogLevel(req: any, res: any, err?: unknown): "silent" | "inf
   return "info";
 }
 
+// BI_SERVER_v789_HEADER_REDACTION - also x-api-key, x-service-token, x-job-token
+// and any header whose name contains "token", "key" or "secret".
+const ALWAYS_REDACT = new Set(["authorization", "cookie", "set-cookie", "x-backend-token", "x-api-key", "x-service-token", "x-job-token"]);
+const SENSITIVE_NAME = /token|key|secret/i;
+
+export function redactHeaders(input: unknown): Record<string, unknown> {
+  const headers: Record<string, unknown> = { ...((input as Record<string, unknown>) ?? {}) };
+  for (const name of Object.keys(headers)) {
+    if (ALWAYS_REDACT.has(name.toLowerCase()) || SENSITIVE_NAME.test(name)) headers[name] = "[redacted]";
+  }
+  return headers;
+}
+
 export const httpLogger = pinoHttp({
   logger,
   autoLogging: true,
@@ -24,11 +37,7 @@ export const httpLogger = pinoHttp({
   // log stream, where anyone with log access could replay it for its lifetime.
   serializers: {
     req: (req: any) => {
-      const headers = { ...(req?.headers ?? {}) };
-      for (const key of ["authorization", "cookie", "x-backend-token"]) {
-        if (headers[key] !== undefined) headers[key] = "[redacted]";
-      }
-      return { ...req, headers };
+      return { ...req, headers: redactHeaders(req?.headers) };
     },
   },
 });

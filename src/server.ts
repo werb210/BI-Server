@@ -188,7 +188,8 @@ app.use(express.json({ limit: "10mb" }));
 app.use(limiter);
 app.use(helmet());
 app.use(compression());
-app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
+// BI_SERVER_v789_INTERNAL_AUTH - the API docs are staff-only.
+app.use("/docs", requireAuth, swaggerUi.serve, swaggerUi.setup(openApiSpec));
 app.use("/health", biCors, healthRoutes); // BI_SERVER_BLOCK_v222_CORS_AZURESTATICAPPS_AND_HEALTH_v1
 
 // BI_SERVER_BLOCK_v376_AZURE_HEALTH_AND_BOOT_v1 — Azure App Service Linux's
@@ -290,6 +291,19 @@ app.use("/api/v1/bi", biCors, biLenderApiRoutes);
 // Legacy applicant draft/submit (tokens from /api/v1/otp/verify) - per-route requireAnyAuth.
 app.use("/api/v1/bi", biCors, biAppApplicantRoutes);
 
+// BI_SERVER_v789_NAICS_PUBLIC - the public NAICS lookup must sit above the
+// staff-only requireAuth mount on "/api/v1/bi" (it used to be mounted after
+// it, so every anonymous lookup got 401). Rate limited per client IP.
+const naicsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: rateLimitKeyFromRequest,
+});
+app.use("/api/v1/bi/naics", naicsLimiter);
+app.use("/api/v1/bi", biCors, biNaicsRoutes); // public NAICS lookup
+
 // Authenticated BI endpoints — every BI route lives under /api/v1/bi
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biRoutes);
 // BI_SERVER_BLOCK_v262_CARRIER_PATH_E2E_FIX_v3 — Removed the duplicate
@@ -369,7 +383,6 @@ app.use("/api/v1/bi/applications/:id/notes", requireAuth, biNotesRoutes);
 // BI_PGI_ALIGNMENT_v56
 app.use("/api/v1/bi", requireAuth, biAdminLenderRoutes);
 app.use("/api/v1", biContactFormRoutes);  // public — no auth
-app.use("/api/v1/bi", biCors, biNaicsRoutes); // public NAICS lookup
 
 app.use(errorHandler);
 
@@ -385,6 +398,40 @@ function bootstrapDeadline<T>(work: Promise<T>): Promise<T> {
       setTimeout(() => reject(new Error("bootstrap deadline exceeded")), BOOTSTRAP_TIMEOUT_MS),
     ),
   ]);
+}
+
+// BI_SERVER_v789_PGI_MODE_LOG - matches pgiAdapter.ts: USE_PGI_STUB unset with
+// NODE_ENV=production means STUB=false, i.e. live carrier calls.
+export const PGI_STUB_UNSET_IN_PRODUCTION_WARNING =
+  "[v375] WARN: USE_PGI_STUB is unset in production. pgiAdapter runs in LIVE mode " +
+  "(real PGI API at PGI_BASE_URL, needs PGI_API_KEY). Set USE_PGI_STUB=true for stub responses, " +
+  "or USE_PGI_STUB=false to make live mode explicit and silence this warning.";
+
+/**
+ * Boot-time PGI mode check (v375 matrix, production only):
+ *   USE_PGI_STUB=true                       -> warn, stub responses
+ *   USE_PGI_STUB unset                      -> warn, pgiAdapter runs LIVE
+ *   USE_PGI_STUB=false, PGI creds missing   -> fatal (exit 1)
+ *   USE_PGI_STUB=false, PGI creds present   -> nothing
+ */
+export function pgiBootCheck(e: NodeJS.ProcessEnv): { warn?: string; fatal?: string } {
+  if (e.NODE_ENV !== "production") return {};
+  if (e.USE_PGI_STUB === "true") {
+    return {
+      warn:
+        "[v375] WARN: USE_PGI_STUB=true in production - stub responses active. " +
+        "OK for launch testing; set USE_PGI_STUB=false when ready to use the real PGI carrier.",
+    };
+  }
+  if (e.USE_PGI_STUB !== "false") return { warn: PGI_STUB_UNSET_IN_PRODUCTION_WARNING };
+  if (!e.PGI_API_KEY || !e.PGI_BASE_URL) {
+    return {
+      fatal:
+        "[v375] FATAL: USE_PGI_STUB=false but PGI_API_KEY and/or PGI_BASE_URL is missing. " +
+        "Either set the carrier credentials, or set USE_PGI_STUB=true to use stub responses.",
+    };
+  }
+  return {};
 }
 
 export async function bootstrap() {
@@ -405,36 +452,17 @@ async function bootstrapInner() {
   // the container every ~10-20 min, OTP intermittently went "Load
   // failed" because requests hit a dead bi-server between restarts.
   // Post-fix matrix:
-  //   USE_PGI_STUB=true   in prod → WARN, boot continues (test mode)
-  //   USE_PGI_STUB unset  in prod → WARN, boot continues (assume stub)
-  //   USE_PGI_STUB=false  in prod, missing PGI creds → FATAL, exit
-  //   USE_PGI_STUB=false  in prod, creds present → boot continues (real PGI)
-  if (process.env.NODE_ENV === "production") {
-    const stubIsOn = process.env.USE_PGI_STUB === "true";
-    const stubIsExplicitlyOff = process.env.USE_PGI_STUB === "false";
-    if (stubIsOn) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        "[v375] WARN: USE_PGI_STUB=true in production — stub responses active. " +
-        "OK for launch testing; set USE_PGI_STUB=false when ready to use the real PGI carrier.",
-      );
-    } else if (!stubIsExplicitlyOff) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        "[v375] WARN: USE_PGI_STUB is unset in production. Treating as stub mode for safety. " +
-        "Set USE_PGI_STUB=true or USE_PGI_STUB=false explicitly to silence this warning.",
-      );
-    } else {
-      // USE_PGI_STUB=false → real PGI carrier required. Credentials are mandatory.
-      if (!process.env.PGI_API_KEY || !process.env.PGI_BASE_URL) {
-        // eslint-disable-next-line no-console
-        console.error(
-          "[v375] FATAL: USE_PGI_STUB=false but PGI_API_KEY and/or PGI_BASE_URL is missing. " +
-          "Either set the carrier credentials, or set USE_PGI_STUB=true to use stub responses.",
-        );
-        process.exit(1);
-      }
-    }
+  //   USE_PGI_STUB=true   in prod -> WARN, boot continues (test mode)
+  //   USE_PGI_STUB unset  in prod -> WARN, boot continues (pgiAdapter: LIVE mode)
+  //   USE_PGI_STUB=false  in prod, missing PGI creds -> FATAL, exit
+  //   USE_PGI_STUB=false  in prod, creds present -> boot continues (real PGI)
+  const pgiCheck = pgiBootCheck(process.env);
+  // eslint-disable-next-line no-console
+  if (pgiCheck.warn) console.warn(pgiCheck.warn);
+  if (pgiCheck.fatal) {
+    // eslint-disable-next-line no-console
+    console.error(pgiCheck.fatal);
+    process.exit(1);
   }
   // BI_BOOT_FIX_v61 — fast DB probe. If the DB isn't reachable in 5s, skip
   // migrations entirely and log loudly. The HTTP server still starts so

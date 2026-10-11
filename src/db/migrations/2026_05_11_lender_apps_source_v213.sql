@@ -1,26 +1,9 @@
 -- BI_SERVER_BLOCK_v213_LENDER_APPLICATIONS_POST_v1
 -- Add source + lender_id columns so lender-submitted apps are distinguishable
 -- and queryable by submitting lender. Idempotent; safe to run repeatedly.
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name='bi_applications' AND column_name='source'
-  ) THEN
-    ALTER TABLE bi_applications ADD COLUMN source TEXT DEFAULT 'public';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name='bi_applications' AND column_name='lender_id'
-  ) THEN
-    ALTER TABLE bi_applications ADD COLUMN lender_id UUID NULL;
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_indexes
-    WHERE tablename='bi_applications' AND indexname='idx_bi_applications_lender_id'
-  ) THEN
-    CREATE INDEX idx_bi_applications_lender_id ON bi_applications(lender_id);
-  END IF;
-END $$;
+-- BI_SERVER_BLOCK_v789_IDEMPOTENT: native IF NOT EXISTS guards (the information_schema /
+-- pg_indexes lookups were not schema-qualified, so a same-named table or index in another
+-- schema could skip the change here and the runner no longer swallows the resulting error).
+ALTER TABLE bi_applications ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'public';
+ALTER TABLE bi_applications ADD COLUMN IF NOT EXISTS lender_id UUID NULL;
+CREATE INDEX IF NOT EXISTS idx_bi_applications_lender_id ON bi_applications(lender_id);

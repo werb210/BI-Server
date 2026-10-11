@@ -2,24 +2,23 @@
 import express, { type Request, type Response } from "express";
 import { verifyBiToken } from "../platform/serviceTokens";
 import { pool } from "../db";
+import { ensureLenderActive, lenderContactIdFromClaims } from "../services/lenderActiveCache";
 
 const router = express.Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function getLenderId(req: Request): string | null {
+// BI_SERVER_v789_LENDER_ACTIVE - lender id + login contact id from the JWT;
+// the route then rejects a deactivated lender or contact.
+function getLenderClaims(req: Request): { lenderId: string; contactId: string | null } | null {
   const auth = req.header("authorization") || "";
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (!m) return null;
   const secret = process.env.JWT_SECRET;
   if (!secret) return null;
-  try {
-    const payload = verifyBiToken(m[1], secret) as any;
-    if (payload?.kind !== "lender" || !payload?.id) return null;
-    return String(payload.id);
-  } catch {
-    return null;
-  }
+  const payload = verifyBiToken(m[1].trim(), secret) as any;
+  if (!payload || payload.kind !== "lender" || !payload.id) return null;
+  return { lenderId: String(payload.id), contactId: lenderContactIdFromClaims(payload) };
 }
 
 function stageOf(status?: string | null): string {
@@ -34,8 +33,10 @@ function stageOf(status?: string | null): string {
 }
 
 router.get("/api/v1/lender/applications/:code", async (req: Request, res: Response) => {
-  const lenderId = getLenderId(req);
-  if (!lenderId) return res.status(401).json({ error: "unauthorized" });
+  const claims = getLenderClaims(req);
+  if (!claims) return res.status(401).json({ error: "unauthorized" });
+  if (!(await ensureLenderActive(req, res, claims.lenderId, claims.contactId))) return;
+  const lenderId = claims.lenderId;
 
   const code = String(req.params.code || "").trim();
   if (!code) return res.status(400).json({ error: "missing_code" });

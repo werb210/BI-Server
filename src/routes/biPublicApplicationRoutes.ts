@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { verifyBiToken } from "../platform/serviceTokens";
 import { pool } from "../db";
 import { logger } from "../platform/logger"; // BI_SERVER_BLOCK_v520
-import { passesScoreGate, withDateOnlyFields } from "../services/biPublicFormGates"; // BI_SERVER_BF_REFERRAL_FORM_v283
+import { passesScoreGate, withDateOnlyFields, evaluatePublicSubmitGates } from "../services/biPublicFormGates"; // BI_SERVER_BF_REFERRAL_FORM_v283
 import { getJwtSecret } from "../platform/jwtSecret"; // BI_SERVER_v784_JWT_SECRET
 import { pgiScore } from "../services/pgiAdapter";
 import { generatePublicId } from "../util/publicId";
@@ -15,10 +15,46 @@ import { getStorage } from "../lib/storage";
 // BI_SERVER_BLOCK_v273_PUBLIC_UPLOAD_OCR_v1
 import { runOcrForDocument } from "../services/ocrRunner";
 import { checkRegion, isSupportedCountry, isValidPostalCode } from "../services/regions"; // BI_SERVER_US_APPLICATIONS_v21
+import { ipRateLimit } from "../lib/ipRateLimit"; // BI_SERVER_v789_PUBLIC_RATE_LIMITS
+import { sniffFileType } from "../lib/fileSniff"; // BI_SERVER_v789_FILE_SNIFF
+import { normalizeE164 } from "../util/phoneE164";
 
 const SUPPORTED_COUNTRIES = ["CA", "US"] as const; // BI_SERVER_US_APPLICATIONS_v21
 
 const router = Router();
+
+// BI_SERVER_v789_PUBLIC_RATE_LIMITS - 30 requests per minute per client IP
+// across the public application routes. Attached to each route below, never
+// router-wide: this router is mounted at "/api/v1" and sees every /api/v1
+// request (staff /applications/:id/score etc. pass through it too).
+export const publicApplicationLimiter = ipRateLimit({ windowMs: 60 * 1000, limit: 30 });
+
+// BI_SERVER_v789_PUBLIC_APP_LOCK - the public link may edit the application
+// only while it is a draft: created by /score, in_progress after /submit
+// (BF referrals are inserted as 'created'). Once documents are under review or
+// staff/carrier have it, the link is read-only.
+export const PUBLIC_EDITABLE_STATUSES = new Set(["", "created", "in_progress"]);
+
+// Stored carrier traffic never goes back over the public link.
+const PUBLIC_HIDDEN_FIELDS = ["carrier_submission_request", "carrier_submission_response", "carrier_submission_error"];
+
+/** Government ID number reduced to its last 3 characters. */
+export function maskIdNumber(raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null;
+  const s = String(raw).trim();
+  if (!s) return s;
+  if (s.length <= 3) return "***";
+  return `***${s.slice(-3)}`;
+}
+
+function samePhone(a: unknown, b: unknown): boolean {
+  const x = String(a ?? "").trim();
+  const y = String(b ?? "").trim();
+  if (x === y) return true;
+  const nx = normalizeE164(x);
+  const ny = normalizeE164(y);
+  return !!nx && nx === ny;
+}
 
 // BI_SERVER_BLOCK_v520_PUBLIC_SUBMIT_REJECTION_LOG - when an applicant presses
 // Submit and the server refuses (missing fields, consents, score, status, caps),
@@ -80,7 +116,7 @@ async function ensureContactAndCompanyForApp(appId: string): Promise<void> {
 }
 
 
-router.post("/applications/score", async (req, res) => {
+router.post("/applications/score", publicApplicationLimiter, async (req, res) => {
   const b = req.body ?? {};
   // BI_SERVER_BLOCK_v364_REFERRAL_SHORT_CODE_v1 (extends v360)
   // Three-way input acceptance:
@@ -262,7 +298,7 @@ router.post("/applications/score", async (req, res) => {
     await pool.query(
       `UPDATE bi_applications SET referrer_code = $1 WHERE id = $2 AND (referrer_code IS NULL OR referrer_code = '')`,
       [rawRef, id]
-    ).catch(() => {});
+    ).catch((err) => { logger.warn({ err, appId: id }, "referrer_code persist failed"); });
   }
 
   // BI_SERVER_BLOCK_v360_REFERRER_ATTRIBUTION_v1 — back-link the referral.
@@ -295,11 +331,14 @@ router.post("/applications/score", async (req, res) => {
       enterprise_value: Number(b.enterprise_value),
     });
   } catch (err: any) {
+    // BI_SERVER_v789_NO_ERR_MESSAGE - score_reason is returned by GET
+    // /applications/:publicId, so it holds a code, never the provider error.
+    const requestId = logHiddenError(req, err, "score_failed");
     await pool.query(
       `UPDATE bi_applications SET score_decision='error', score_reason=$1, score_at=NOW() WHERE id=$2`,
-      [String(err?.message ?? "pgi_unreachable"), id],
+      ["score_failed", id],
     );
-    return res.status(502).json({ error: "score_failed", public_id: publicId });
+    return res.status(502).json({ error: "score_failed", public_id: publicId, requestId });
   }
 
   // BI_SERVER_BLOCK_v164_SCORE_STAGE_FIX_v1
@@ -322,7 +361,7 @@ router.post("/applications/score", async (req, res) => {
   );
 
   // BI_SERVER_BLOCK_v320_LAUNCH_RESCUE_v1
-  void ensureContactAndCompanyForApp(id).catch(() => {});
+  void ensureContactAndCompanyForApp(id).catch((err) => { logger.warn({ err, appId: id }, "ensure contact/company failed"); });
 
   return res.status(201).json({
     public_id: publicId,
@@ -332,18 +371,49 @@ router.post("/applications/score", async (req, res) => {
   });
 });
 
-router.get("/applications/:publicId", async (req, res) => {
+router.get("/applications/:publicId", publicApplicationLimiter, async (req, res) => {
   const r = await pool.query(`SELECT * FROM bi_applications WHERE public_id=$1`, [req.params.publicId]);
   if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
-  return res.json({ application: withDateOnlyFields(r.rows[0]) }); // v283
+  // BI_SERVER_v789_PUBLIC_APP_READ - the government ID number goes out masked
+  // to its last 3 characters and the stored carrier payloads not at all.
+  const row: Record<string, unknown> = { ...r.rows[0] };
+  for (const k of PUBLIC_HIDDEN_FIELDS) delete row[k];
+  if ("q_ca_id_number" in row) row.q_ca_id_number = maskIdNumber(row.q_ca_id_number);
+  // Older rows stored the provider's error text as the score reason.
+  if (String(row.score_decision ?? "").toLowerCase() === "error") row.score_reason = "score_failed";
+  return res.json({ application: withDateOnlyFields(row) }); // v283
 });
 
-router.patch("/applications/:publicId", async (req, res) => {
-  const r = await pool.query(`SELECT id, score_decision, source FROM bi_applications WHERE public_id=$1`, [req.params.publicId]);
+router.patch("/applications/:publicId", publicApplicationLimiter, async (req, res) => {
+  const r = await pool.query(
+    `SELECT id, score_decision, source, status, guarantor_phone, primary_contact_id FROM bi_applications WHERE public_id=$1`,
+    [req.params.publicId],
+  );
   if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
   if (!passesScoreGate(r.rows[0])) return res.status(403).json({ error: "score_not_approved" }); // v283
 
-  const b = req.body ?? {};
+  // BI_SERVER_v789_PUBLIC_APP_LOCK
+  const patchStatus = String(r.rows[0].status ?? "").toLowerCase();
+  if (!PUBLIC_EDITABLE_STATUSES.has(patchStatus)) {
+    return res.status(409).json({ error: "application_locked" });
+  }
+
+  const b = { ...(req.body ?? {}) } as Record<string, any>;
+
+  // BI_SERVER_v789_PUBLIC_APP_LOCK - guarantor_phone owns the application
+  // (applicant sign-in matches on it), so the public link may set it once but
+  // not move it to another number.
+  if ("guarantor_phone" in b) {
+    const stored = String(r.rows[0].guarantor_phone ?? "").trim();
+    if (stored && !samePhone(stored, b.guarantor_phone)) {
+      return res.status(409).json({ error: "phone_locked" });
+    }
+  }
+  // GET returns the ID number masked; an autosave that echoes the mask back
+  // must not overwrite the stored number.
+  if (typeof b.q_ca_id_number === "string" && b.q_ca_id_number.trim().startsWith("*")) {
+    delete b.q_ca_id_number;
+  }
   // BI_SERVER_BLOCK_v360_REFERRER_ATTRIBUTION_v1
   // Optional `ref` from request body OR ?ref= query param. Validated against
   // bi_referrals — must belong to a real referrer, must be in 'invited' status,
@@ -552,7 +622,7 @@ router.patch("/applications/:publicId", async (req, res) => {
   return res.json({ ok: true });
 });
 
-router.post("/applications/:publicId/submit", async (req, res) => {
+router.post("/applications/:publicId/submit", publicApplicationLimiter, async (req, res) => {
   const r = await pool.query(`SELECT * FROM bi_applications WHERE public_id=$1`, [req.params.publicId]);
   const app = r.rows[0];
   if (!app) return res.status(404).json({ error: "not_found" });
@@ -575,66 +645,20 @@ router.post("/applications/:publicId/submit", async (req, res) => {
     });
   }
 
-  // BI_SERVER_BLOCK_v246_BN_OPTIONAL_SUBMIT_v1
-  // Operator decision (PROJECT_PLAN row 2): business_number is now
-  // optional on the PUBLIC application flow. The CRA BN field stays on
-  // the form (BI-Website v169) but the server no longer rejects
-  // submits that lack it. Carrier (PGI) receives null when BN is
-  // missing; if PGI starts flagging missing-BN apps in volume we
-  // revisit (plan §4 decision). Lender flow is unchanged because
-  // it does not enforce BN server-side today.
-  // BI_SERVER_BLOCK_v349_PURBECK_PUBLIC_REQS_v1
-  const required = [
-    "guarantor_name", "guarantor_email", "guarantor_dob", "guarantor_address",
-    "guarantor_phone", "business_name", "business_address",
-    "lender_name", "loan_funding_date", "policy_start_date",
-    "personally_guaranteeing", "consents",
-  ];
-  const missing = required.filter((k) => app[k] === null || app[k] === undefined || app[k] === "");
-  if (missing.length) return res.status(400).json({ error: "missing_fields", fields: missing });
-
-  // BI_SERVER_BLOCK_v357_CONSENT_DERIVATION_v1
-  // info_accurate and business_solvent are functionally covered by the
-  // declarations (section_3_c truthfulness oath; section_6_a solvency).
-  // Derive them at submit time rather than asking the user twice.
-  const decls = (app.declarations ?? {}) as Record<string, unknown>;
-  const c = { ...(app.consents ?? {}) } as Record<string, unknown>;
-  if (c.info_accurate === undefined || c.info_accurate === null) {
-    c.info_accurate = decls.section_3_c === "Agree";
+  // BI_SERVER_v789_SUBMIT_GATES - required fields (business_number optional,
+  // v246), consents derived from the declarations (v357), Quebec block, loan
+  // and PGI caps, eligible loan type (v349). The same function gates the legacy
+  // /bi/application/submit path.
+  const gate = evaluatePublicSubmitGates(app);
+  if (gate.consents) {
+    // Persist the derived consents back to the row so downstream readers (CRM
+    // mirror, audit log, carrier mapper) see the same shape staff sees.
+    await pool.query(
+      `UPDATE bi_applications SET consents = $1::jsonb, updated_at = NOW() WHERE id = $2`,
+      [JSON.stringify(gate.consents), app.id]
+    );
   }
-  if (c.business_solvent === undefined || c.business_solvent === null) {
-    c.business_solvent = decls.section_6_a === "yes";
-  }
-  const consentKeys = [
-    "electronic_signature", "info_accurate", "business_solvent",
-    "no_undisclosed_events", "data_use", "credit_pull", "coverage_understood",
-  ];
-  const unconsented = consentKeys.filter((k) => !c[k]);
-  if (unconsented.length) return res.status(400).json({ error: "missing_consents", fields: unconsented });
-  // Persist the derived consents back to the row so downstream readers (CRM
-  // mirror, audit log, carrier mapper) see the same shape staff sees.
-  await pool.query(
-    `UPDATE bi_applications SET consents = $1::jsonb, updated_at = NOW() WHERE id = $2`,
-    [JSON.stringify(c), app.id]
-  );
-
-  // BI_SERVER_BLOCK_v349_PURBECK_GUARDS_v1
-  if (typeof app.q_business_province === "string" && app.q_business_province.toUpperCase() === "QC") {
-    return res.status(400).json({ error: "quebec_blocked", message: "PGI does not currently write business in Quebec." });
-  }
-  if (Number(app.loan_amount) > 1_000_000) {
-    return res.status(400).json({ error: "loan_amount_over_cap", message: "Loan amount exceeds the 1,000,000 maximum." });
-  }
-  if (Number(app.pgi_limit) > 1_000_000) {
-    return res.status(400).json({ error: "pgi_limit_over_cap", message: "PGI limit exceeds the 1,000,000 maximum." });
-  }
-  const allowedLoanTypes = ["Commercial Mortgage", "Other Secured Loan"];
-  if (app.q_ca_loan_type && !allowedLoanTypes.includes(app.q_ca_loan_type)) {
-    return res.status(400).json({
-      error: "loan_type_ineligible",
-      message: `Loan type '${app.q_ca_loan_type}' is not eligible for PGI coverage. Eligible types are: ${allowedLoanTypes.join(", ")}.`,
-    });
-  }
+  if (!gate.ok) return res.status(400).json(gate.failure);
 
   // BI_SERVER_BLOCK_v168_STAGE_TRANSITION_FIX_v1
   // V1 spec §3: full app submitted advances 'created' -> 'in_progress'.
@@ -665,29 +689,64 @@ router.post("/applications/:publicId/submit", async (req, res) => {
     if (r.channel === "none" && submitSmsTo) console.warn("[v382] submit confirmation failed (non-fatal)", { app_id: app.id, error: r.error });
   }
   // BI_SERVER_BLOCK_v320_LAUNCH_RESCUE_v1
-  void ensureContactAndCompanyForApp(app.id).catch(() => {});
+  void ensureContactAndCompanyForApp(app.id).catch((err) => { logger.warn({ err, appId: app.id }, "ensure contact/company failed"); });
   return res.json({ ok: true, status: "in_progress" });
 });
 
 
+// BI_SERVER_BLOCK_v368_PUBLIC_DOC_ALLOWLIST_v1
+export const ALLOWED_PUBLIC_DOC_TYPES_v368 = new Set([
+  "loan_agreement", "profit_loss", "balance_sheet", "ar_aging", "ap_aging",
+  "founder_cv", "financial_forecast",
+]);
+
 // BI_SERVER_BLOCK_v66_PUBLIC_DOCS_AND_MIGRATION_SAFE_v1 — public doc upload.
 // Authenticates by public_id only (no JWT). Used by the BI-Website applicant
 // flow after submit. Stores files to Azure Blob via the same storage abstraction
-// as the staff-side upload route. 5MB per file per PGI carrier policy.
+// as the staff-side upload route. (Was 5MB per file; v789 sets 25MB.)
 // BI_SERVER_BLOCK_v349_DOC_CONSTRAINTS_v1
+// BI_SERVER_v789_PUBLIC_UPLOAD_LIMITS - at most 10 files of 25 MB each per
+// request. Multer limit errors are answered with a code (413 / 400), never
+// passed on as an unhandled error. The declared MIME type is a first filter
+// only: every file's first bytes are checked against its extension
+// (sniffFileType) before anything is stored.
+export const PUBLIC_UPLOAD_MAX_FILES = 10;
+export const PUBLIC_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+
+class MimeNotAllowedError extends Error {
+  constructor() { super("mime_not_allowed"); }
+}
+
 const publicDocUpload_v66 = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: PUBLIC_UPLOAD_MAX_BYTES, files: PUBLIC_UPLOAD_MAX_FILES },
   fileFilter: (_req, file, cb) => {
     if (PARTNER_ALLOWED_MIME.has(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error(`mime_not_allowed:${file.mimetype}`));
+      cb(new MimeNotAllowedError());
     }
   },
 });
 
-router.post("/applications/:publicId/documents", publicDocUpload_v66.array("files"), async (req, res) => {
+function publicDocUploadFiles(req: any, res: any, next: any) {
+  publicDocUpload_v66.array("files", PUBLIC_UPLOAD_MAX_FILES)(req, res, (err: unknown) => {
+    if (!err) return next();
+    if (err instanceof MimeNotAllowedError) return res.status(400).json({ error: "mime_not_allowed" });
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: "file_too_large", max_bytes: PUBLIC_UPLOAD_MAX_BYTES });
+      }
+      if (err.code === "LIMIT_FILE_COUNT" || (err.code === "LIMIT_UNEXPECTED_FILE" && err.field === "files")) {
+        return res.status(413).json({ error: "too_many_files", max_files: PUBLIC_UPLOAD_MAX_FILES });
+      }
+      return res.status(400).json({ error: "upload_rejected", code: err.code });
+    }
+    return res.status(400).json({ error: "upload_failed", requestId: logHiddenError(req, err, "upload_failed") });
+  });
+}
+
+router.post("/applications/:publicId/documents", publicApplicationLimiter, publicDocUploadFiles, async (req, res) => {
   const r = await pool.query(
     `SELECT id, score_decision, status, source FROM bi_applications WHERE public_id=$1`,
     [req.params.publicId],
@@ -721,13 +780,11 @@ router.post("/applications/:publicId/documents", publicDocUpload_v66.array("file
   const store = getStorage();
   const created: Array<{ id: string; doc_type: string; filename: string }> = [];
 
+  // Validate every file (doc type and content) before storing any of them.
+  const docTypeFor: string[] = [];
   for (const [idx, file] of files.entries()) {
     // BI_SERVER_BLOCK_v368_PUBLIC_DOC_ALLOWLIST_v1
     // Same 7-value allowlist as the lender API path (v354). Anything else 400s.
-    const ALLOWED_PUBLIC_DOC_TYPES_v368 = new Set([
-      "loan_agreement", "profit_loss", "balance_sheet", "ar_aging", "ap_aging",
-      "founder_cv", "financial_forecast",
-    ]);
     const docTypeRaw = typeof docTypes[idx] === "string" ? docTypes[idx].trim() : "";
     if (!docTypeRaw || !ALLOWED_PUBLIC_DOC_TYPES_v368.has(docTypeRaw)) {
       return res.status(400).json({
@@ -737,7 +794,16 @@ router.post("/applications/:publicId/documents", publicDocUpload_v66.array("file
         allowed: Array.from(ALLOWED_PUBLIC_DOC_TYPES_v368),
       });
     }
-    const docType = docTypeRaw;
+    // BI_SERVER_v789_FILE_SNIFF
+    const sniff = sniffFileType(file.buffer, file.originalname);
+    if (!sniff.ok) {
+      return res.status(400).json({ error: sniff.reason, file_index: idx });
+    }
+    docTypeFor.push(docTypeRaw);
+  }
+
+  for (const [idx, file] of files.entries()) {
+    const docType = docTypeFor[idx]!;
     let put;
     try {
       put = await store.put({
@@ -813,7 +879,7 @@ router.post("/applications/:publicId/documents", publicDocUpload_v66.array("file
         `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
          VALUES($1,'system','stage_advance','Auto-advanced to document_review on first doc upload')`,
         [r.rows[0].id]
-      ).catch(() => {});
+      ).catch((err) => { logger.warn({ err }, "stage_advance activity insert failed"); });
     }
   } catch (err) {
     // Non-fatal — uploads succeeded; stage advance can be retried.
@@ -824,7 +890,7 @@ router.post("/applications/:publicId/documents", publicDocUpload_v66.array("file
   return res.json({ ok: true, documents: created });
 });
 
-router.get("/applications/:publicId/documents", async (req, res) => {
+router.get("/applications/:publicId/documents", publicApplicationLimiter, async (req, res) => {
   const r = await pool.query(
     `SELECT id FROM bi_applications WHERE public_id=$1`,
     [req.params.publicId],

@@ -1,27 +1,77 @@
 import { env } from "../platform/env";
 import { logger } from "../platform/logger";
+import { truncateForLog } from "../util/mask";
 
 // BI_BLOCK_PGI_ALIGNMENT_v1 — typed PGI client with USE_PGI_STUB toggle.
 
-// v343: Retry-After aware fetch — single retry on 429/503 honoring the
-// header. Returns the second Response. Falls back to immediate throw
-// if header is absent or unparseable.
-async function fetchWithRetryAfter(url: string, init: RequestInit): Promise<Response> {
-  const first = await fetch(url, init);
-  if (first.status !== 429 && first.status !== 503) return first;
-  const ra = first.headers.get("Retry-After");
-  if (!ra) return first;
+// BI_SERVER_v789_PGI_TIMEOUTS - every carrier call is bounded.
+//   - PGI_TIMEOUT_MS (15 s) caps a whole carrier call: request(s), a
+//     Retry-After wait and reading the body. The AbortController cancels the
+//     socket; the race makes the call fail even if a fetch ignores the signal.
+//   - A Retry-After wait inside one call is capped at 5 s (it used to be up to
+//     60 s, holding the staff request open for a minute).
+//   - Carrier error bodies are truncated to 500 chars before they are logged or
+//     put in an error message.
+export const PGI_TIMEOUT_MS = 15_000;
+export const PGI_RETRY_AFTER_CAP_MS = 5_000;
+
+export class PgiTimeoutError extends Error {
+  readonly code = "PGI_TIMEOUT";
+  constructor(op: string, ms: number) {
+    super(`PGI ${op} timed out after ${ms}ms`);
+    this.name = "PgiTimeoutError";
+  }
+}
+
+async function withCarrierTimeout<T>(op: string, fn: (signal: AbortSignal) => Promise<T>, ms = PGI_TIMEOUT_MS): Promise<T> {
+  const ac = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new PgiTimeoutError(op, ms);
+      ac.abort(err);
+      reject(err);
+    }, ms);
+  });
+  try {
+    return await Promise.race([fn(ac.signal), deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true });
+  });
+}
+
+/** Retry-After header -> wait in ms, capped at PGI_RETRY_AFTER_CAP_MS. 0 when absent/unparseable. */
+export function retryAfterWaitMs(ra: string | null | undefined, now = Date.now()): number {
+  if (!ra) return 0;
   let waitMs = 0;
   const asNum = Number(ra);
   if (Number.isFinite(asNum) && asNum > 0) {
-    waitMs = Math.min(asNum * 1000, 60_000);
+    waitMs = asNum * 1000;
   } else {
     const t = Date.parse(ra);
-    if (Number.isFinite(t)) waitMs = Math.max(0, Math.min(t - Date.now(), 60_000));
+    if (Number.isFinite(t)) waitMs = t - now;
   }
+  return Math.max(0, Math.min(waitMs, PGI_RETRY_AFTER_CAP_MS));
+}
+
+// v343: Retry-After aware fetch - single retry on 429/503 honoring the
+// header. Returns the second Response. Falls back to the first response
+// if the header is absent or unparseable.
+async function fetchWithRetryAfter(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
+  const first = await fetch(url, { ...init, signal });
+  if (first.status !== 429 && first.status !== 503) return first;
+  const waitMs = retryAfterWaitMs(first.headers?.get?.("Retry-After"));
   if (waitMs <= 0) return first;
-  await new Promise((r) => setTimeout(r, waitMs));
-  return fetch(url, init);
+  await sleep(waitMs, signal);
+  if (signal.aborted) throw signal.reason ?? new Error("PGI request aborted");
+  return fetch(url, { ...init, signal });
 }
 
 const PGI_BASE = env.PGI_BASE_URL || "https://api.pgicover.com";
@@ -83,31 +133,37 @@ export async function pgiScore(body: PgiScoreRequest): Promise<PgiScoreResponse>
     }
     return { score_id: `STUB_APPROVE_${Date.now()}`, score: 78, decision: "approve", country: body.country, naics_code: body.naics_code, created_at: new Date().toISOString() };
   }
-  const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/score/`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
-  const data = await r.json();
-  if (!r.ok) {
-    logger.error({ status: r.status, body: data }, "pgi_score_failed");
-    throw new Error(`PGI score failed: ${r.status}`);
-  }
-  return data as PgiScoreResponse;
+  return withCarrierTimeout("score", async (signal) => {
+    const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/score/`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) }, signal);
+    const data = await r.json();
+    if (!r.ok) {
+      logger.error({ status: r.status, body: truncateForLog(data) }, "pgi_score_failed");
+      throw new Error(`PGI score failed: ${r.status}`);
+    }
+    return data as PgiScoreResponse;
+  });
 }
 
 export async function pgiSubmit(body: PgiApplicationSubmitRequest): Promise<PgiApplicationSubmitResponse> {
   if (STUB) return { application_id: `STUB_APP_${Date.now()}`, status: "received", message: "stubbed: pending quote" };
-  const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/applications/`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
-  const data = await r.json();
-  if (!r.ok) {
-    logger.error({ status: r.status, body: data }, "pgi_submit_failed");
-    throw new Error(`PGI submit failed: ${r.status}`);
-  }
-  return data;
+  return withCarrierTimeout("submit", async (signal) => {
+    const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/applications/`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) }, signal);
+    const data = await r.json();
+    if (!r.ok) {
+      logger.error({ status: r.status, body: truncateForLog(data) }, "pgi_submit_failed");
+      throw new Error(`PGI submit failed: ${r.status}`);
+    }
+    return data as PgiApplicationSubmitResponse;
+  });
 }
 
 export async function pgiQuote(quoteId: string): Promise<PgiQuote> {
   if (STUB) return { quote_id: quoteId, underwriter_ref: "STUB_LON_REF", annual_premium: "5000.00", rate: "2.000", coverage_amount: "250000.00", valid_until: new Date(Date.now() + 30 * 86_400_000).toISOString(), quote_status: "active" };
-  const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/quotes/${quoteId}/`, { headers: authHeaders() });
-  if (!r.ok) throw new Error(`PGI quote fetch failed: ${r.status}`);
-  return (await r.json()) as PgiQuote;
+  return withCarrierTimeout("quote", async (signal) => {
+    const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/quotes/${quoteId}/`, { headers: authHeaders() }, signal);
+    if (!r.ok) throw new Error(`PGI quote fetch failed: ${r.status}`);
+    return (await r.json()) as PgiQuote;
+  });
 }
 
 
@@ -184,23 +240,28 @@ export async function pgiUploadDocument(args: {
   fd.append("doc_type", args.docType);
   // node 18+ has native FormData + Blob. Buffer wraps to Blob.
   fd.append("file", new Blob([new Uint8Array(args.buffer)], { type: args.mimeType }), args.filename);
-  const r = await fetchWithRetryAfter(url, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${env.PGI_API_KEY}` }, // NO Content-Type — FormData sets boundary
-    body: fd as any,
+  return withCarrierTimeout("doc_upload", async (signal) => {
+    const r = await fetchWithRetryAfter(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${env.PGI_API_KEY}` }, // NO Content-Type - FormData sets boundary
+      body: fd as any,
+    }, signal);
+    const data = await r.json().catch((err: unknown) => {
+      logger.warn({ err, status: r.status }, "pgi_doc_upload_body_unparseable");
+      return {};
+    });
+    if (!r.ok) {
+      logger.error({ status: r.status, body: truncateForLog(data), pgi_app: args.pgiApplicationId, doc_type: args.docType }, "pgi_doc_upload_failed");
+      throw new Error(`PGI doc upload failed (${args.docType}): ${r.status}`);
+    }
+    return data as PgiDocumentUploadResponse;
   });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    logger.error({ status: r.status, body: data, pgi_app: args.pgiApplicationId, doc_type: args.docType }, "pgi_doc_upload_failed");
-    throw new Error(`PGI doc upload failed (${args.docType}): ${r.status}`);
-  }
-  return data as PgiDocumentUploadResponse;
 }
 
 export class PgiCarrierValidationError extends Error {
   readonly errors: Record<string, string>;
   constructor(errors: Record<string, string>) {
-    super(`PGI 400: ${JSON.stringify(errors)}`);
+    super(`PGI 400: ${truncateForLog(errors)}`);
     this.name = "PgiCarrierValidationError";
     this.errors = errors;
   }
@@ -220,8 +281,23 @@ export async function pgiSubmitV2(payload: CarrierPayloadV2): Promise<{ applicat
   // USE_PGI_STUB=true|1|false|0 and the NODE_ENV-aware default).
   if (STUB) return { application_id: `STUB-${Math.random().toString(36).slice(2, 10).toUpperCase()}`, status: "received", message: "stub" };
   const url = `${PGI_BASE.replace(/\/$/, "")}/api/v2/applications/`;
-  const res = await fetch(url, { method: "POST", headers: authHeaders(), body: JSON.stringify(payload) });
-  if (res.status === 400) { const body = (await res.json().catch(() => ({}))) as { errors?: Record<string, string> }; throw new PgiCarrierValidationError(body.errors ?? { _root: "carrier returned 400 with no errors dict" }); }
-  if (!res.ok) { const text = await res.text().catch(() => ""); throw new Error(`pgi_submit_failed status=${res.status} body=${text.slice(0, 500)}`); }
-  return (await res.json()) as { application_id: string; status: string; message?: string };
+  return withCarrierTimeout("submit_v2", async (signal) => {
+    const res = await fetch(url, { method: "POST", headers: authHeaders(), body: JSON.stringify(payload), signal });
+    if (res.status === 400) {
+      const body = (await res.json().catch((err: unknown) => {
+        logger.warn({ err }, "pgi_submit_v2_400_body_unparseable");
+        return {};
+      })) as { errors?: Record<string, string> };
+      throw new PgiCarrierValidationError(body.errors ?? { _root: "carrier returned 400 with no errors dict" });
+    }
+    if (!res.ok) {
+      const text = await res.text().catch((err: unknown) => {
+        logger.warn({ err }, "pgi_submit_v2_body_unreadable");
+        return "";
+      });
+      logger.error({ status: res.status, body: truncateForLog(text) }, "pgi_submit_v2_failed");
+      throw new Error(`pgi_submit_failed status=${res.status} body=${truncateForLog(text)}`);
+    }
+    return (await res.json()) as { application_id: string; status: string; message?: string };
+  });
 }

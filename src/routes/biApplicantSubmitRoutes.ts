@@ -4,8 +4,9 @@
 // uploaded a contract. This is the review-and-submit end of the flow.
 import { Router } from "express";
 import { pool } from "../db";
-import { authApplicant, type ApplicantReq } from "./applicantAuth";
+import { authApplicant, ownedApplication, type ApplicantReq } from "./applicantAuth";
 import { projectAnswersToData } from "../services/applicationPayload";
+import { logger } from "../platform/logger";
 
 const router = Router();
 
@@ -29,31 +30,6 @@ const COUNTRIES = new Set(["CA", "US"]);
 function normCountry(raw: unknown): "CA" | "US" {
   const v = String(raw ?? "").trim().toUpperCase();
   return COUNTRIES.has(v) ? (v as "CA" | "US") : "CA";
-}
-
-async function ownedApplication(publicIdOrId: string, phone: string) {
-  if (publicIdOrId === "me") {
-    const mine = await pool.query(
-      `SELECT id, public_id, country, status, data, applicant_phone_e164, guarantor_phone
-         FROM bi_applications
-        WHERE (applicant_phone_e164 = $1 OR guarantor_phone = $1)
-          AND status IN ('created','in_progress','ready_for_submission')
-        ORDER BY created_at DESC LIMIT 1`,
-      [phone],
-    );
-    if (!mine.rows[0]) return { app: null as any, error: "not_found" as const };
-    return { app: mine.rows[0], error: null };
-  }
-  const r = await pool.query(
-    `SELECT id, public_id, country, status, data, applicant_phone_e164, guarantor_phone
-       FROM bi_applications WHERE public_id = $1 OR id::text = $1 LIMIT 1`,
-    [publicIdOrId],
-  );
-  const app = r.rows[0];
-  if (!app) return { app: null as any, error: "not_found" as const };
-  const owners = [app.applicant_phone_e164, app.guarantor_phone].filter(Boolean);
-  if (!owners.includes(phone)) return { app: null as any, error: "not_owner" as const };
-  return { app, error: null };
 }
 
 // The same union step 3 uses, reduced to what is still unanswered. Submission
@@ -176,7 +152,7 @@ router.post("/applicants/applications/:id/submit", authApplicant, async (req: Ap
       `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
        VALUES($1,'applicant','application_submitted',$2)`,
       [app.id, `Applicant submitted ${summary.coverages.length} coverage line(s) and ${summary.referrals.length} referral(s) for review`],
-    ).catch(() => {});
+    ).catch((err) => { logger.warn({ err, appId: app.id }, "applicant submit activity insert failed"); });
   }
 
   res.json({ ...(await summaryFor(app)), alreadySubmitted: already });
