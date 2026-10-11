@@ -16,16 +16,15 @@
 import { defineConfig, configDefaults } from "vitest/config";
 
 // BI_SERVER_BLOCK_v789_ENV_SECRETS - same as vitest.config.ts: whatever JWT_SECRET is in the
-// environment wins; the literal is only the fallback when nothing is set.
+// environment wins; the literal is only the fallback when nothing is set. JWT_REFRESH_SECRET is
+// gone: nothing in src reads it.
 const JWT_SECRET = process.env.JWT_SECRET || "test-shared-secret-min-10";
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || "test-refresh-secret-min-10";
 
 export default defineConfig({
   test: {
     environment: "node",
     env: {
       JWT_SECRET,
-      JWT_REFRESH_SECRET,
     },
     // BI_SERVER_SQL_CONTENT_MOCKS_v713 - biOutreachCrm.v251 and biOutreachImport.v252 mock the database fully, so
     // they now run here too.
