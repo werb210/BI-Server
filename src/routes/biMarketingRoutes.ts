@@ -1,6 +1,7 @@
 // BI_SERVER_BLOCK_BI_ROUND8_MARKETING_v1
 // Marketing module endpoints. Mounted under /api/v1/bi/marketing
 // from server.ts. All require authenticated staff.
+import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
 import { pool } from "../db";
@@ -659,7 +660,7 @@ router.post("/templates", async (req, res) => {
     return res.status(201).json({ ...r.rows[0], body: r.rows[0].body_text ?? null,
       html: r.rows[0].body_html ?? null, landingUrl: null, replaced: false });
   } catch (e) {
-    return res.status(500).json({ error: "create_failed", message: e instanceof Error ? e.message : String(e) });
+    return res.status(500).json({ error: "create_failed", requestId: logHiddenError(req, e, "create_failed") });
   }
 });
 
@@ -684,7 +685,7 @@ router.patch("/templates/:id", async (req, res) => {
     if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
     return res.json(r.rows[0]);
   } catch (e) {
-    return res.status(500).json({ error: "update_failed", message: e instanceof Error ? e.message : String(e) });
+    return res.status(500).json({ error: "update_failed", requestId: logHiddenError(req, e, "update_failed") });
   }
 });
 
@@ -738,7 +739,7 @@ router.delete("/templates/:id", async (req, res) => {
     if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
     return res.json({ ok: true });
   } catch (e) {
-    return res.status(500).json({ error: "delete_failed", message: e instanceof Error ? e.message : String(e) });
+    return res.status(500).json({ error: "delete_failed", requestId: logHiddenError(req, e, "delete_failed") });
   }
 });
 
@@ -768,7 +769,7 @@ router.put("/industry-routing-rules", requireMarketing("marketing:admin"), async
     for (const rule of rules) await client.query(`INSERT INTO bi_industry_routing_rules (industry, owner_user_id) VALUES ($1,$2)`, [rule.industry, rule.owner_user_id]);
     await client.query("COMMIT");
     return res.json({ ok: true, count: rules.length });
-  } catch (e) { await client.query("ROLLBACK"); return res.status(400).json({ error: "replace_failed", message: e instanceof Error ? e.message : String(e) }); } finally { client.release(); }
+  } catch (e) { await client.query("ROLLBACK"); return res.status(400).json({ error: "replace_failed", requestId: logHiddenError(req, e, "replace_failed") }); } finally { client.release(); }
 });
 
 export default router;

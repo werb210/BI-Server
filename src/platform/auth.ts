@@ -1,9 +1,9 @@
 import { NextFunction, Request, Response } from "express";
-import jwt from "jsonwebtoken";
-import { getStaffJwtSecret } from "./jwtSecret";
+import { getStaffJwtSecret, getStaffVerifySecrets } from "./jwtSecret";
+import { dedicatedServiceSecret, isServiceClaims, signBiToken, verifyBiToken } from "./serviceTokens";
 
 export function signStaffToken(payload: { staffUserId: string; role: string; phone?: string; userType?: string; capabilities?: string[] }) {
-  return jwt.sign(payload, getStaffJwtSecret(), { expiresIn: "8h" });
+  return signBiToken(payload, "8h", getStaffJwtSecret());
 }
 
 // BI_SERVER_v784_STAFF_ONLY_AUTH
@@ -35,22 +35,31 @@ function verifyBearer(req: Request, res: Response): Record<string, unknown> | st
     return null;
   }
 
-  const token = auth.replace("Bearer ", "");
+  const token = auth.replace(/^Bearer\s+/i, "").trim();
 
-  let secret: string;
+  let secrets: string[];
   try {
-    secret = getStaffJwtSecret();
+    secrets = getStaffVerifySecrets();
   } catch {
     res.status(500).json({ status: "error", error: "jwt_secret_missing" });
     return null;
   }
 
-  try {
-    return jwt.verify(token, secret) as Record<string, unknown> | string;
-  } catch {
+  // BI_SERVER_v789_TOKENS - when BI_SERVICE_JWT_SECRET is set, service tokens
+  // are verified with it alone; a service token signed with JWT_SECRET (or the
+  // staff secret) is rejected.
+  const serviceOnly = dedicatedServiceSecret();
+  if (serviceOnly) {
+    const svc = verifyBiToken(token, serviceOnly);
+    if (svc && isServiceClaims(svc)) return svc;
+  }
+
+  const claims = verifyBiToken(token, secrets);
+  if (!claims || (serviceOnly && isServiceClaims(claims))) {
     res.status(401).json({ status: "error", error: "Invalid token" });
     return null;
   }
+  return claims;
 }
 
 // Verifies the token signature only, with no role check. Used by the legacy

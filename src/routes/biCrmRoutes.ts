@@ -1,3 +1,4 @@
+import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 // BI_SERVER_BLOCK_v254_CRM_CONTACTS_ENHANCED_v1
 import { logger } from "../platform/logger";
@@ -55,12 +56,12 @@ router.get("/crm/contacts/:id/engagement", async (req, res) => {
     );
     return res.json({ events: r.rows });
   } catch (e) {
-    return res.status(500).json({ error: "engagement_query_failed", message: e instanceof Error ? e.message : String(e) });
+    return res.status(500).json({ error: "engagement_query_failed", requestId: logHiddenError(req, e, "engagement_query_failed") });
   }
 });
 
 // BI_SERVER_BLOCK_v349_TAG_LIST — distinct tags in use, for the CRM "View by" filter.
-router.get("/crm/contacts/tag-list", async (_req, res) => {
+router.get("/crm/contacts/tag-list", async (req, res) => {
   try {
     const r = await pool.query(
       `SELECT DISTINCT lower(t) AS tag
@@ -70,7 +71,7 @@ router.get("/crm/contacts/tag-list", async (_req, res) => {
     );
     return res.json({ tags: r.rows.map((row: { tag: string }) => row.tag) });
   } catch (e) {
-    return res.status(500).json({ error: "tag_list_failed", message: e instanceof Error ? e.message : String(e) });
+    return res.status(500).json({ error: "tag_list_failed", requestId: logHiddenError(req, e, "tag_list_failed") });
   }
 });
 
@@ -453,7 +454,7 @@ router.post("/crm/contacts/:id/sms", async (req, res) => {
   }
 
   if (!smsOk) {
-    return res.status(502).json({ error: "sms_failed", detail: smsError });
+    return res.status(502).json({ error: "sms_failed", requestId: req.id }); // v789: provider detail is logged above, not returned
   }
   return res.json({ ok: true, sid });
 });

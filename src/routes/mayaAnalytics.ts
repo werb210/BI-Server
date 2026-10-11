@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { pool as sharedPool } from "../db"; // BI_SERVER_ONE_POOL_v718 - one pool for the whole server
-import jwt from "jsonwebtoken";
+import { signBiToken, verifyBiToken } from "../platform/serviceTokens";
+import { getJwtSecret } from "../platform/jwtSecret";
 import bcrypt from "bcrypt";
 import rateLimit from "express-rate-limit";
 import sgMail from "@sendgrid/mail";
@@ -31,7 +32,8 @@ function authenticateAdmin(
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as { role?: string; email?: string };
+    const decoded = verifyBiToken(token, getJwtSecret()) as { role?: string; email?: string } | null;
+    if (!decoded) return res.status(401).json({ error: "Invalid token" });
     req.admin = decoded;
     return next();
   } catch {
@@ -141,11 +143,7 @@ router.post("/admin-verify-otp", async (req, res) => {
     [email]
   );
 
-  const token = jwt.sign(
-    { role: user.rows[0].role, email },
-    process.env.JWT_SECRET as string,
-    { expiresIn: "8h" }
-  );
+  const token = signBiToken({ role: user.rows[0].role, email }, "8h", getJwtSecret());
 
   return ok(res, { token });
 });

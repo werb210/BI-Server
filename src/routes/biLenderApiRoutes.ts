@@ -1,6 +1,7 @@
+import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 import crypto from "node:crypto";
-import jwt from "jsonwebtoken";
+import { signBiToken, verifyBiToken } from "../platform/serviceTokens";
 import rateLimit from "express-rate-limit"; // BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1
 import { notifyStaff } from "../services/staffNotifyService"; // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1
 import { pool } from "../db";
@@ -72,7 +73,7 @@ async function authLender(req: any, res: any, next: any) {
   // Try lender JWT first — JWTs have exactly two dots; API keys do not.
   if (bearerToken && bearerToken.split(".").length === 3) {
     try {
-      const claims: any = jwt.verify(bearerToken, getJwtSecret());
+      const claims: any = verifyBiToken(bearerToken, getJwtSecret());
       if (claims && claims.kind === "lender" && claims.id) {
         req.lenderId = claims.id;
         if (claims.user_id || claims.contactId) req.lenderUserId = String(claims.user_id || claims.contactId);
@@ -402,10 +403,10 @@ async function demoSessionHandler(req: any, res: any) {
   const secret = process.env.JWT_SECRET || process.env.BI_JWT_SECRET;
   if (!secret) return res.status(500).json({ error: "jwt_secret_missing" });
 
-  const token = jwt.sign(
+  const token = signBiToken(
     { kind: "lender", id: demo.id, is_demo: true, originating_lender_id: req.lenderId },
+    "4h",
     secret,
-    { expiresIn: "4h" }
   );
 
   return res.json({
@@ -429,7 +430,7 @@ router.post("/lender/otp/verify", async (req, res) => {
     const email = String(emailRaw).trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "invalid_email" });
     const vr = await verifyEmailOtpSafe(email, code);
-    if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+    if (!vr.ok) { console.warn("[otp] verify failed", { error: vr.error }); return res.status(502).json({ error: "otp_verify_failed" }); }
     if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
 
     let row: any;
@@ -443,10 +444,10 @@ router.post("/lender/otp/verify", async (req, res) => {
     if (!row) return res.status(404).json({ error: "lender_not_found" });
 
     const secret = getJwtSecret();
-    const token = jwt.sign(
+    const token = signBiToken(
       { kind: "lender", id: row.lender_id, contactId: row.contact_id, role: row.role },
+      "12h",
       secret,
-      { expiresIn: "12h" },
     );
     return res.json({ token, channel: "email", lender: { id: row.lender_id, company_name: row.company_name }, user: { id: row.contact_id, full_name: row.full_name, email: row.email, role: row.role } });
   }
@@ -461,9 +462,9 @@ router.post("/lender/otp/verify", async (req, res) => {
   if (!row) return res.status(401).json({ error: "phone_not_registered" });
   // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1
   const vr = await verifyOtpSafe(phone, code);
-  if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+  if (!vr.ok) { console.warn("[otp] verify failed", { error: vr.error }); return res.status(502).json({ error: "otp_verify_failed" }); }
   if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
-  const token = jwt.sign({ kind: "lender", id: row.lender_id, user_id: row.contact_id }, getJwtSecret(), { expiresIn: "7d" });
+  const token = signBiToken({ kind: "lender", id: row.lender_id, user_id: row.contact_id }, "7d", getJwtSecret());
   res.json({ token, lender: { id: row.lender_id, company_name: row.company_name }, user: { id: row.contact_id, full_name: row.full_name, email: row.email, role: row.role } });
 });
 
@@ -727,7 +728,7 @@ router.post(
       } catch (err) {
         return res.status(502).json({
           error: "storage_failed",
-          detail: String((err as Error)?.message ?? err),
+          requestId: logHiddenError(req, err, "storage_failed"),
         });
       }
 
@@ -761,7 +762,7 @@ router.post(
         return res.status(400).json({
           error: "invalid_doc_type",
           doc_type: docType,
-          detail: String((err as Error)?.message ?? err),
+          requestId: logHiddenError(req, err, "invalid_doc_type"),
         });
       }
 

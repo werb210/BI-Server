@@ -1,3 +1,4 @@
+import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 import { pool } from "../db";
 import { audienceParams, buildAudienceBreakdownSql, buildAudienceCountSql, type AudienceFilter } from "../services/biEmailAudience";
@@ -23,7 +24,7 @@ router.post("/email/audience-count", async (req, res) => {
       withEmail: row.with_email || 0, suppressed: row.suppressed || 0,
       noConsentRecorded: row.no_consent_recorded || 0, consentExpired: row.consent_expired || 0,
     }, sendgridConfigured: sendgridConfigured() });
-  } catch (err) { return res.status(500).json({ error: { code: "internal", message: err instanceof Error ? err.message : String(err) } }); }
+  } catch (err) { return res.status(500).json({ error: { code: "internal", message: "Internal server error" }, requestId: logHiddenError(req, err, "internal") }); }
 });
 
 // BI_SERVER_SEND_TEMPLATE_SINGLE_HANDLER_v2

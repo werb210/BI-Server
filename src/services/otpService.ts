@@ -70,7 +70,9 @@ export function otpSendFailed(res: Response, sr: { ok: false; error: string; ref
     if (status === 429) res.setHeader("Retry-After", sr.refusal === "otp_busy" ? "300" : "3600");
     return res.status(status).json({ error: sr.refusal, message: OTP_GUARD_MESSAGES[sr.refusal] });
   }
-  return res.status(502).json({ error: "otp_send_failed", detail: sr.error });
+  // BI_SERVER_v789_NO_ERR_MESSAGE - the provider's error text is logged, not returned.
+  console.warn("[otp] send failed", { error: sr.error });
+  return res.status(502).json({ error: "otp_send_failed" });
 }
 export type OtpVerifyResult = { ok: true; approved: boolean } | { ok: false; error: string };
 

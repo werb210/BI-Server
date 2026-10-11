@@ -1,6 +1,6 @@
 // BI_SERVER_BLOCK_v215_LENDER_APPLICATION_DETAIL_v1
 import express, { type Request, type Response } from "express";
-import jwt from "jsonwebtoken";
+import { verifyBiToken } from "../platform/serviceTokens";
 import { pool } from "../db";
 
 const router = express.Router();
@@ -14,7 +14,7 @@ function getLenderId(req: Request): string | null {
   const secret = process.env.JWT_SECRET;
   if (!secret) return null;
   try {
-    const payload = jwt.verify(m[1], secret) as any;
+    const payload = verifyBiToken(m[1], secret) as any;
     if (payload?.kind !== "lender" || !payload?.id) return null;
     return String(payload.id);
   } catch {

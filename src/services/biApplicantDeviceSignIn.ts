@@ -2,7 +2,7 @@
 // Applicant Face ID sign-in. The applicant's one-hour session is issued exactly
 // as /applicants/otp/verify issues it; a device secret replaces the text code.
 import crypto from "node:crypto";
-import jwt from "jsonwebtoken";
+import { signBiToken } from "../platform/serviceTokens";
 
 import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 type Query = (sql: string, params: unknown[]) => Promise<{ rows: any[] }>;
@@ -42,7 +42,7 @@ export async function signInApplicantDevice(query: Query, credentialId: string, 
   if (!upd.rows.length) return { ok: false, reason: "invalid" };
   const contact = await query(`SELECT id::text AS id FROM bi_contacts WHERE phone_e164 = $1 LIMIT 1`, [row.phone_e164]).catch(loggedFallback("biApplicantDeviceSignIn", { rows: [] as any[] }));
   const contactId = contact.rows[0]?.id ?? null;
-  const token = jwt.sign({ kind: "applicant", phone: row.phone_e164, ...(contactId ? { contactId } : {}) }, jwtSecret, { expiresIn: "1h" });
+  const token = signBiToken({ kind: "applicant", phone: row.phone_e164, ...(contactId ? { contactId } : {}) }, "1h", jwtSecret);
   return { ok: true, token, phone: row.phone_e164, contactId, secret: rotated };
 }
 

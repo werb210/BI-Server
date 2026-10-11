@@ -70,6 +70,7 @@ import { logger } from "./platform/logger";
 import metricsRoutes from "./platform/metricsRoutes";
 import { requestId } from "./platform/requestId";
 import { badRequest } from "./utils/apiResponse";
+import { FIXED_ALLOWED_ORIGINS, configuredOrigins, isAllowedOrigin } from "./platform/corsOrigins";
 import { httpLogger } from "./utils/httpLogger";
 // BI_V1_FINAL_v47 — lender direct API + bi_notes
 import biLenderApiRoutes from "./routes/biLenderApiRoutes";
@@ -150,101 +151,21 @@ setInterval(() => {
   for (const [k, ts] of spamThrottle) if (ts < cutoff) spamThrottle.delete(k);
 }, 60_000).unref();
 
-// BI_SERVER_BLOCK_v62_CORS_AND_PATCH_ALIGNMENT_v1
-// Hardcoded production fallback so an unset CORS_ALLOWED_ORIGINS env var
-// doesn't silently brick the entire BI silo. Includes:
-//   - staff.boreal.financial          (BF-portal)
-//   - client.boreal.financial         (BF-client; future PGI add-on)
-//   - boreal.financial / www.*        (BF-website)
-//   - delightful-sand-...azurestaticapps.net  (BI-Website production SWA)
-//   - localhost dev origins
-// CORS_ALLOWED_ORIGINS env var still takes precedence and SHOULD be set;
-// this is purely a safety net.
-const PRODUCTION_FALLBACK_ORIGINS = [
-  "https://staff.boreal.financial",
-  "https://client.boreal.financial",
-  "https://boreal.financial",
-  "https://www.boreal.financial",
-  "https://delightful-sand-05a55580f.7.azurestaticapps.net",
-  "https://witty-moss-0886d220f.7.azurestaticapps.net", // BI_SERVER_BLOCK_v222_CORS_AZURESTATICAPPS_AND_HEALTH_v1 — current BI-Website SWA host
-  // BI_SERVER_BLOCK_v239_CORS_BOREAL_INSURE_v1 — public BI-Website now lives at boreal.insure.
-  "https://www.boreal.insure",
-  "https://boreal.insure",
-  // BI_SERVER_CORS_BI_CLIENT_v1 — BI-Client, the subcontractor insurance and
-  // bond application front end for the SLF channel.
-  "https://client.boreal.insure",
-  // BI_SERVER_CORS_CAPACITOR_v20 — BI-Client also ships as iOS and Android
-  // native apps. A Capacitor WebView does NOT send the custom domain as its
-  // Origin: iOS sends capacitor://localhost and Android sends
-  // https://localhost. Without these two the first native build fails every
-  // call including OTP, and it reads as "the server is down" rather than CORS.
-  // https://localhost is the Android WebView origin only — it is not a dev
-  // origin and is safe in production, because nothing but the packaged app
-  // can present it.
-  "capacitor://localhost",
-  "https://localhost",
-];
-const DEV_FALLBACK_ORIGINS = [
-  "http://localhost:5173",
-  "http://localhost:3000",
-];
-
-// BI_SERVER_BLOCK_v349_CORS_UNION_v1
-// Previously env var REPLACED the hardcoded fallback. That regression broke
-// OTP from www.boreal.insure on 2026-05-25: PRODUCTION_FALLBACK_ORIGINS
-// included it (added by v239), but the env var on Azure App Service didn't,
-// and the env var was winning. Switch to UNION: env var can ADD origins
-// (e.g. SWA preview slots) but can never silently delete canonical ones.
-const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || env.CORS_ALLOWED_ORIGINS || "")
-  .split(",")
-  .map((v) => v.trim())
-  .filter(Boolean);
-
-const baseFallback = env.NODE_ENV === "production"
-  ? PRODUCTION_FALLBACK_ORIGINS
-  : DEV_FALLBACK_ORIGINS;
-
-const corsOrigins = Array.from(new Set([...baseFallback, ...configuredOrigins]));
-
-if (configuredOrigins.length === 0) {
-  logger.warn(
-    { fallback_count: corsOrigins.length, env: env.NODE_ENV },
-    "CORS_ALLOWED_ORIGINS not set; using hardcoded fallback only."
-  );
-} else {
-  logger.info(
-    {
-      hardcoded: baseFallback.length,
-      env_added: configuredOrigins.length,
-      total: corsOrigins.length,
-    },
-    "CORS origins unioned (hardcoded ∪ env)"
-  );
-}
-
-// BI_SERVER_BLOCK_v222_CORS_AZURESTATICAPPS_AND_HEALTH_v1 — origin matcher accepts the configured list OR
-// any *.azurestaticapps.net host (so SWA preview/build URL rotations don't
-// silently brick CORS). Server-to-server requests (no Origin header) pass through.
-const AZ_SWA_HOST_RE = /^https:\/\/[a-z0-9-]+\.[0-9]+\.azurestaticapps\.net$/i;
-// BI_SERVER_CORS_NATIVE_APP_v1 - the staff portal also ships as a Capacitor iOS app, whose
-// WebView sends Origin: capacitor://localhost, NOT https://staff.boreal.financial.
-// That origin was in neither the fallback list nor the env var, so every BI call
-// from the iOS app was refused at CORS while the identical call from a desktop
-// browser succeeded. ionic://localhost is the legacy scheme, included so an older
-// build or a capacitor.config iosScheme change cannot silently break this again.
-const NATIVE_APP_ORIGINS = new Set([
-  "capacitor://localhost",
-  "ionic://localhost",
-  "http://localhost",
-]);
-const corsOriginSet = new Set(corsOrigins);
+// BI_SERVER_v789_CORS - exact-origin allowlist (src/platform/corsOrigins.ts).
+// Replaces the v62 fallback list, the v222 *.azurestaticapps.net wildcard and
+// the native-app set (ionic://, http://localhost in production). Requests with
+// no Origin (server-to-server) still pass.
+logger.info(
+  { fixed: FIXED_ALLOWED_ORIGINS.length, env_added: configuredOrigins().length, env: env.NODE_ENV },
+  "CORS exact-origin allowlist loaded",
+);
 const biCors = cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, true); // non-browser / same-origin
-    if (corsOriginSet.has(origin)) return cb(null, true);
-    if (NATIVE_APP_ORIGINS.has(origin)) return cb(null, true); // BI_SERVER_CORS_NATIVE_APP_v1
-    if (AZ_SWA_HOST_RE.test(origin)) return cb(null, true);
-    return cb(new Error(`origin not allowed: ${origin}`));
+    if (isAllowedOrigin(origin)) return cb(null, true);
+    // Not allowed: answer without CORS headers (the browser blocks it) rather
+    // than throwing, so the Origin is never echoed into an error body.
+    return cb(null, false);
   },
   credentials: true,
   // v758 — cache preflights for 24h so browsers stop re-sending an OPTIONS

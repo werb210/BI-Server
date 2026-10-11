@@ -1,6 +1,7 @@
 // BI_SERVER_BLOCK_BI_ROUND8_DETAIL_ENDPOINTS_v1
 // Application detail tab data sources + nested document accept/reject.
 // Mounted at /api/v1/bi/applications by server.ts.
+import { logHiddenError } from "../platform/safeError";
 import { Router, type Request, type Response } from "express";
 import { pool } from "../db";
 import { logger } from "../platform/logger";
@@ -781,7 +782,7 @@ router.post("/:id/products/:productId/send-to-carrier", requireStaffOrAdmin, asy
     return res.json(r);
   } catch (err) {
     logger.error?.({ err: (err as Error).message }, "[send-to-carrier] failed");
-    return res.status(502).json({ error: "send_failed", message: (err as Error).message });
+    return res.status(502).json({ error: "send_failed", requestId: logHiddenError(req, err, "send_failed") });
   }
 });
 

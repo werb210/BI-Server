@@ -103,7 +103,7 @@ publicRouter.post("/otp/verify", async (req, res) => {
 
   try {
     const vr = await verifyOtpSafe(phone, code);
-    if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+    if (!vr.ok) { console.warn("[otp] verify failed", { error: vr.error }); return res.status(502).json({ error: "otp_verify_failed" }); }
     const approved = vr.approved;
 
     if (!approved) {

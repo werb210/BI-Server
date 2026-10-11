@@ -1,3 +1,4 @@
+import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 import { classifyBiDocument, labelForDetectedType } from "../services/biDocumentClassifier"; // BI_SERVER_DOC_CLASSIFICATION_v276
 import { pool } from "../db";
@@ -436,7 +437,7 @@ async function persistApplication(submission: ReturnType<typeof validatePgiSubmi
   const r = await (await import("../db")).pool.query<{ id: string }>(`INSERT INTO bi_applications (created_by_actor, created_by_lender_id, source_type, docs_review_required, applicant_phone_e164, stage, data, guarantor_name, guarantor_email, lender_name) VALUES ($1, $2, $3, $4, $5, $6::bi_pipeline_stage, $7::jsonb, $8, $9, $10) RETURNING id`, [sourceType === "lender" ? "lender" : "applicant", lenderId, sourceType, docsRequired, (/* BI_SERVER_BLOCK_v181_DROP_PLACEHOLDER_PHONE_v1 */ applicantPhoneE164), initialStage, JSON.stringify({ ...formData, business_name: formData.q15_business_legal_name }), formData.q2_full_name, formData.q7_email, null]);
   return r.rows[0]!.id;
 }
-router.post("/applications/lender", async (req, res) => { const userId = (req as { user?: { staffUserId?: string } }).user?.staffUserId; if (!userId) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" }); const lenderRow = (await (await import("../db")).pool.query<{ id: string }>(`SELECT id FROM bi_lenders WHERE user_id = $1 AND is_active = TRUE LIMIT 1`, [userId])).rows[0]; if (!lenderRow) return res.status(403).json({ ok: false, error: "NOT_A_LENDER" }); const v = validatePgiSubmissionV2(req.body); if (!v.ok) return res.status(400).json({ ok: false, error: "PGI_VALIDATION_FAILED", issues: v.issues }); try { const id = await persistApplication(v, "lender", lenderRow.id, null); const formData = v.value.form_data; await mirrorToContact({ source: "applicant", full_name: formData.q2_full_name, email: formData.q7_email, company_name: formData.q15_business_legal_name, lifecycle_stage: "applicant", extra_tags: [`application:${id}`, `lender:${lenderRow.id}`] }); const result = await submitApplicationToPGI(id); return res.status(201).json({ ok: true, application_id: id, source: "lender", pgi: result }); } catch (err) { return res.status(500).json({ ok: false, error: "SUBMIT_FAILED", message: err instanceof Error ? err.message : "unknown" }); }});
+router.post("/applications/lender", async (req, res) => { const userId = (req as { user?: { staffUserId?: string } }).user?.staffUserId; if (!userId) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" }); const lenderRow = (await (await import("../db")).pool.query<{ id: string }>(`SELECT id FROM bi_lenders WHERE user_id = $1 AND is_active = TRUE LIMIT 1`, [userId])).rows[0]; if (!lenderRow) return res.status(403).json({ ok: false, error: "NOT_A_LENDER" }); const v = validatePgiSubmissionV2(req.body); if (!v.ok) return res.status(400).json({ ok: false, error: "PGI_VALIDATION_FAILED", issues: v.issues }); try { const id = await persistApplication(v, "lender", lenderRow.id, null); const formData = v.value.form_data; await mirrorToContact({ source: "applicant", full_name: formData.q2_full_name, email: formData.q7_email, company_name: formData.q15_business_legal_name, lifecycle_stage: "applicant", extra_tags: [`application:${id}`, `lender:${lenderRow.id}`] }); const result = await submitApplicationToPGI(id); return res.status(201).json({ ok: true, application_id: id, source: "lender", pgi: result }); } catch (err) { return res.status(500).json({ ok: false, error: "SUBMIT_FAILED", requestId: logHiddenError(req, err, "SUBMIT_FAILED") }); }});
 router.post("/applications/:id/submit-to-carrier", async (req, res) => {
   // BI_SERVER_BLOCK_v160_SUBMIT_TO_CARRIER_HARDENING_v1
   // V1 spec §7 (Send to Carrier button) + §8 (acceptance tests 2-9).
@@ -611,7 +612,7 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "SUBMIT_FAILED",
-      message: errorMessage,
+      requestId: logHiddenError(req, err, "SUBMIT_FAILED"),
     });
   }
 });

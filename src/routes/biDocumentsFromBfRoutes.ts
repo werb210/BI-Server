@@ -4,8 +4,9 @@
 // bi_documents row tagged with source='bf_mirror' plus the BF
 // provenance ids. Idempotent: if bf_document_id already exists
 // for this BI application, returns the existing row.
+import { logHiddenError } from "../platform/safeError";
 import express, { type Request, type Response } from "express";
-import jwt from "jsonwebtoken";
+import { verifyServiceToken } from "../platform/serviceTokens";
 import { randomUUID } from "node:crypto";
 import { pool } from "../db";
 import { env } from "../platform/env";
@@ -13,18 +14,15 @@ import { logger } from "../platform/logger";
 
 const router = express.Router();
 
-function getSecret(): string {
-  return (env.JWT_SECRET as string | undefined) || process.env.JWT_SECRET || "";
-}
 
 function verifyServiceJwt(req: Request): { source: string } | null {
   const auth = req.header("authorization") || "";
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (!m) return null;
-  const secret = getSecret();
-  if (!secret) return null;
   try {
-    const p = jwt.verify(m[1], secret) as { kind?: string; source?: string };
+    // BI_SERVER_v789_TOKENS - service secret, HS256 only, aud checked.
+    const p = verifyServiceToken(m[1]) as { kind?: string; source?: string } | null;
+    if (!p) return null;
     if (p?.kind !== "service" || !p?.source) return null;
     return { source: String(p.source) };
   } catch {
@@ -187,7 +185,7 @@ router.post("/applications/:public_id/documents/from-bf", async (req: Request, r
   } catch (e: any) {
     await client.query("ROLLBACK").catch(() => undefined);
     logger.error({ err: e, bfDocumentId, biApplicationId }, "docs_from_bf_insert_failed");
-    return res.status(500).json({ ok: false, error: "insert_failed", detail: e?.message });
+    return res.status(500).json({ ok: false, error: "insert_failed", requestId: logHiddenError(req, e, "insert_failed") });
   } finally {
     client.release();
   }

@@ -8,9 +8,10 @@
 //   lender apps). Also adds POST /api/v1/lender/applications/:code/documents
 //   for the BI-Website lender form's post-create doc upload step
 //   (previously 404'd because no server route handled that path).
+import { logHiddenError } from "../platform/safeError";
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
-import jwt from "jsonwebtoken";
+import { verifyBiToken } from "../platform/serviceTokens";
 import { notifyStaff } from "../services/staffNotifyService";
 import { pool } from "../db";
 import { logger } from "../platform/logger";
@@ -22,8 +23,8 @@ const router = express.Router();
 function genCode(): string { const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let out = ""; for (let i = 0; i < 8; i++) out += chars[Math.floor(Math.random() * chars.length)]; return out; }
 function num(v: any): number | null { if (v === null || v === undefined || v === "") return null; const n = Number(String(v).replace(/[,$\s]/g, "")); return Number.isFinite(n) ? n : null; }
 function bool(v: any): boolean { if (v === true || v === false) return v; if (typeof v === "string") return v.toLowerCase() === "yes" || v.toLowerCase() === "true"; return Boolean(v); }
-function getLenderId(req: Request): string | null { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return null; const secret = process.env.JWT_SECRET; if (!secret) return null; try { const payload = jwt.verify(m[1], secret) as any; if (payload?.kind !== "lender" || !payload?.id) return null; return String(payload.id); } catch { return null; } }
-function getLenderUserId(req: Request): string | null { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return null; const secret = process.env.JWT_SECRET; if (!secret) return null; try { const payload = jwt.verify(m[1], secret) as any; if (payload?.kind !== "lender" || !payload?.user_id) return null; return String(payload.user_id); } catch { return null; } }
+function getLenderId(req: Request): string | null { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return null; const secret = process.env.JWT_SECRET; if (!secret) return null; try { const payload = verifyBiToken(m[1], secret) as any; if (payload?.kind !== "lender" || !payload?.id) return null; return String(payload.id); } catch { return null; } }
+function getLenderUserId(req: Request): string | null { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return null; const secret = process.env.JWT_SECRET; if (!secret) return null; try { const payload = verifyBiToken(m[1], secret) as any; if (payload?.kind !== "lender" || !payload?.user_id) return null; return String(payload.user_id); } catch { return null; } }
 // BI_SERVER_BLOCK_v244_DEMO_REFERRER_STORAGE_v1 — JWT carries is_demo
 // for demo sessions (minted by /lender/demo/session). Reading the flag
 // from the token rather than re-querying bi_lenders.is_demo is the
@@ -34,7 +35,7 @@ function getLenderUserId(req: Request): string | null { const auth = req.header(
 // while showing up in the real pipeline as soon as the user hit
 // "Exit demo". Trusting the JWT claim makes the demo flag depend
 // solely on which session the user is in, not on row drift.
-function getLenderIsDemo(req: Request): boolean { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return false; const secret = process.env.JWT_SECRET; if (!secret) return false; try { const payload = jwt.verify(m[1], secret) as any; return payload?.is_demo === true; } catch { return false; } }
+function getLenderIsDemo(req: Request): boolean { const auth = req.header("authorization") || ""; const m = auth.match(/^Bearer\s+(.+)$/i); if (!m) return false; const secret = process.env.JWT_SECRET; if (!secret) return false; try { const payload = verifyBiToken(m[1], secret) as any; return payload?.is_demo === true; } catch { return false; } }
 
 router.post("/api/v1/lender/applications", async (req: Request, res: Response, next: NextFunction) => {
   if (!req.body || typeof req.body !== "object" || !req.body.guarantor || typeof req.body.guarantor !== "object") {
@@ -269,7 +270,7 @@ router.post(
       try {
         put = await store.put({ buffer: file.buffer, filename: file.originalname, contentType: file.mimetype, pathPrefix: `applications/${app.id}` }); // BI_SERVER_BLOCK_v262
       } catch (err) {
-        return res.status(502).json({ error: "storage_failed", detail: String((err as Error)?.message ?? err) }); // BI_SERVER_BLOCK_v262
+        return res.status(502).json({ error: "storage_failed", requestId: logHiddenError(req, err, "storage_failed") }); // BI_SERVER_BLOCK_v262
       }
       let inserted;
       try {
@@ -281,7 +282,7 @@ router.post(
           [app.id, docType, file.originalname, put.blobName, put.blobName, put.url, put.hash, file.mimetype, put.sizeBytes, docType]
         );
       } catch (err) {
-        return res.status(400).json({ error: "invalid_doc_type", doc_type: docType, detail: String((err as Error)?.message ?? err) });
+        return res.status(400).json({ error: "invalid_doc_type", doc_type: docType, requestId: logHiddenError(req, err, "invalid_doc_type") });
       }
       created.push({ id: inserted.rows[0].id, doc_type: docType, filename: file.originalname });
       await pool.query(`INSERT INTO bi_activity(application_id, actor_type, event_type, summary) VALUES($1,'lender','document_uploaded',$2)`, [app.id, `Document uploaded: ${file.originalname}`]).catch(loggedFallback("biLenderApplicationCreate activity", undefined));

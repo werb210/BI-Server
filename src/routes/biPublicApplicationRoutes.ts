@@ -1,6 +1,7 @@
+import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 import crypto from "node:crypto";
-import jwt from "jsonwebtoken";
+import { verifyBiToken } from "../platform/serviceTokens";
 import { pool } from "../db";
 import { logger } from "../platform/logger"; // BI_SERVER_BLOCK_v520
 import { passesScoreGate, withDateOnlyFields } from "../services/biPublicFormGates"; // BI_SERVER_BF_REFERRAL_FORM_v283
@@ -193,7 +194,7 @@ router.post("/applications/score", async (req, res) => {
   try {
     const auth = String(req.headers.authorization ?? "");
     if (auth.startsWith("Bearer ")) {
-      const claims: any = jwt.verify(auth.slice(7).trim(), getJwtSecret());
+      const claims: any = verifyBiToken(auth.slice(7).trim(), getJwtSecret());
       if (claims && claims.kind === "applicant" && claims.phone) verifiedPhone = String(claims.phone);
     }
   } catch { /* ignore */ }
@@ -746,7 +747,7 @@ router.post("/applications/:publicId/documents", publicDocUpload_v66.array("file
         pathPrefix: `applications/${r.rows[0].id}`,
       });
     } catch (err) {
-      return res.status(502).json({ error: "storage_failed", detail: String((err as Error)?.message ?? err) });
+      return res.status(502).json({ error: "storage_failed", requestId: logHiddenError(req, err, "storage_failed") });
     }
     let inserted;
     try {
@@ -776,7 +777,7 @@ router.post("/applications/:publicId/documents", publicDocUpload_v66.array("file
         [r.rows[0].id, docType, file.originalname, put.blobName, put.blobName, put.url, put.hash, file.mimetype, put.sizeBytes],
       );
     } catch (err) {
-      return res.status(400).json({ error: "invalid_doc_type", doc_type: docType, detail: String((err as Error)?.message ?? err) });
+      return res.status(400).json({ error: "invalid_doc_type", doc_type: docType, requestId: logHiddenError(req, err, "invalid_doc_type") });
     }
     created.push({ id: inserted.rows[0].id as string, doc_type: docType, filename: file.originalname });
     // BI_SERVER_BLOCK_v273_PUBLIC_UPLOAD_OCR_v1

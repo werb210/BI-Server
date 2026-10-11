@@ -1,4 +1,5 @@
 // BI_BLOCK_PGI_ALIGNMENT_v1 — score + submit-to-pgi handlers.
+import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 import { pool } from "../db";
 import { requireAuth } from "../platform/auth";
@@ -48,7 +49,7 @@ router.post("/applications/:id/score", requireAuth, async (req, res) => {
     return res.json({ score });
   } catch (err: any) {
     await pool.query(`UPDATE bi_applications SET score_decision='error', score_reason=$1, score_at=NOW() WHERE id=$2`, [String(err?.message ?? "unknown"), id]);
-    return res.status(502).json({ error: "pgi_score_failed", detail: String(err?.message) });
+    return res.status(502).json({ error: "pgi_score_failed", requestId: logHiddenError(req, err, "pgi_score_failed") });
   }
 });
 
@@ -160,7 +161,7 @@ router.post("/applications/:id/submit-to-pgi", requireAuth, async (req, res) => 
       `UPDATE bi_applications SET score_decision='error', score_reason=$1, score_at=NOW() WHERE id=$2`,
       [String((err as Error)?.message ?? "unknown"), id],
     );
-    return res.status(502).json({ error: "pgi_submit_failed", detail: String((err as Error)?.message) });
+    return res.status(502).json({ error: "pgi_submit_failed", requestId: logHiddenError(req, err, "pgi_submit_failed") });
   }
 });
 

@@ -3,6 +3,7 @@
 // the resolved paths are /api/v1/bi/crm/outreach/*.
 // Auth: requireAuth (staff JWT). All writes capture req.user.staffUserId
 // as the actor so the activity timeline shows who did what.
+import { logHiddenError } from "../platform/safeError";
 import express, { type Request, type Response } from "express";
 import multer from "multer";
 import { readFirstSheetObjects } from "../lib/spreadsheet"; // BI_SERVER_SPREADSHEET_EXCELJS_v376
@@ -478,7 +479,7 @@ router.post(
       rows = parsed;
     } catch (e: any) {
       logger.error({ err: e, file: file.originalname }, "outreach_import_parse_failed");
-      return res.status(400).json({ ok: false, error: "parse_failed", detail: e?.message });
+      return res.status(400).json({ ok: false, error: "parse_failed", requestId: logHiddenError(req, e, "parse_failed") });
     }
 
     if (!rows.length) {
@@ -623,7 +624,7 @@ router.post(
         results.push({ row: i + 2, ok: true, id: contactId });
       } catch (e: any) {
         logger.error({ err: e, row: i + 2 }, "outreach_import_row_failed");
-        results.push({ row: i + 2, ok: false, error: e?.message ?? "insert_failed" });
+        results.push({ row: i + 2, ok: false, error: "insert_failed" });
         skipped++;
       }
     }
@@ -736,7 +737,7 @@ Book a time: ${bookingsUrl}`
     }
 
     if (!smsOk) {
-      return res.status(502).json({ ok: false, error: "sms_failed", detail: smsError });
+      return res.status(502).json({ ok: false, error: "sms_failed", requestId: req.id }); // v789: provider detail is logged above, not returned
     }
 
     // Auto-bump status if appropriate.
@@ -906,7 +907,7 @@ router.post("/crm/outreach/contacts/bulk-action", async (req: Request, res: Resp
   } catch (e: any) {
     await client.query("ROLLBACK").catch(() => {});
     logger.error({ err: e }, "outreach_bulk_delete_failed");
-    return res.status(500).json({ ok: false, error: "delete_failed", detail: e?.message });
+    return res.status(500).json({ ok: false, error: "delete_failed", requestId: logHiddenError(req, e, "delete_failed") });
   } finally {
     client.release();
   }
@@ -1003,7 +1004,7 @@ router.post(
       rows = parsed;
     } catch (e: any) {
       logger.error({ err: e, file: file.originalname }, "company_import_parse_failed");
-      return res.status(400).json({ ok: false, error: "parse_failed", detail: e?.message });
+      return res.status(400).json({ ok: false, error: "parse_failed", requestId: logHiddenError(req, e, "parse_failed") });
     }
     if (!rows.length) return res.status(400).json({ ok: false, error: "no_rows" });
 
@@ -1121,7 +1122,7 @@ router.post(
         results.push({ row: i + 2, ok: true });
       } catch (e: any) {
         logger.error({ err: e, row: i + 2 }, "company_import_row_failed");
-        results.push({ row: i + 2, ok: false, error: e?.message ?? "row_failed" });
+        results.push({ row: i + 2, ok: false, error: "row_failed" });
         skipped++;
       }
     }
