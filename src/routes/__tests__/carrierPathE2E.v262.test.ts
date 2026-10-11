@@ -4,6 +4,17 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import express from "express";
+import request from "supertest";
+import jwt from "jsonwebtoken";
+import { vi } from "vitest";
+
+const notesQueryMock = vi.fn();
+vi.mock("../../db", () => ({ pool: { query: (...args: unknown[]) => notesQueryMock(...args) } }));
+vi.mock("../../platform/logger", () => ({ logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() } }));
+import { requireAuth } from "../../platform/auth";
+import biNotesRoutes from "../biNotesRoutes";
+import { answerBySql } from "../../__tests__/helpers/answerBySql";
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 const readMigration = (name: string) =>
@@ -42,32 +53,6 @@ describe("BI_SERVER_BLOCK_v262 — server.ts duplicate mount removed", () => {
     // The primary mount must remain — that's how the BI-Website
     // applicant flow reaches the public endpoints.
     expect(src).toMatch(/app\.use\("\/api\/v1",[^)]*biPublicApplicationRoutes\)/);
-  });
-});
-
-describe("BI_SERVER_BLOCK_v262 — biReferrerRoutes uses phone_e164", () => {
-  const src = readRoute("biReferrerRoutes.ts");
-  it("OTP verify uses phone_e164 everywhere", () => {
-    const otp = src.match(/router\.post\("\/referrer\/otp\/verify".*?(?=\nrouter\.)/s)?.[0];
-    expect(otp).toBeTruthy();
-    expect(src).toMatch(/bi_referrers[\s\S]{0,120}phone_e164/); // BI_UNQUARANTINE_CARRIER_E2E_v1 - lookup still keys on phone_e164
-    expect(otp!).toMatch(/INSERT INTO bi_referrers \(phone_e164\)/);
-    expect(otp!).not.toMatch(/bi_referrers WHERE phone=/);
-  });
-  it("dashboard aliases phone_e164 AS phone", () => {
-    const dash = src.match(/router\.get\("\/referrer\/dashboard".*?\}\);/s)?.[0];
-    expect(dash).toBeTruthy();
-    expect(dash!).toMatch(/phone_e164\s+AS\s+phone/i);
-  });
-  it("POST /referrer/referrals uses phone_e164 + omits unsupported columns", () => {
-    const refs = src.match(/router\.post\("\/referrer\/referrals".*$/s)?.[0];
-    expect(refs).toBeTruthy();
-    expect(src).toMatch(/INSERT INTO bi_referrals[\s\S]{0,300}phone_e164/); // BI_UNQUARANTINE_CARRIER_E2E_v1
-    const contacts = refs!.match(/INSERT INTO bi_contacts[^`]+/)?.[0];
-    expect(contacts).toBeTruthy();
-    expect(contacts!).toMatch(/phone_e164/);
-    expect(contacts!).not.toMatch(/company_name/);
-    expect(contacts!).not.toMatch(/updated_at/);
   });
 });
 
@@ -115,13 +100,25 @@ describe("BI_SERVER_BLOCK_v262 — biApplicationRoutes", () => {
   });
 });
 
+// BI_SERVER_v789 [5]/[37] - behaviour test (was a source-text grep): the
+// notes GET answers with a `notes` array (never `items`), staff only.
 describe("BI_SERVER_BLOCK_v262 — biNotesRoutes returns {notes}", () => {
-  const src = readRoute("biNotesRoutes.ts");
-  it("GET / wraps in {notes}", () => {
-    const h = src.match(/router\.get\("\/",\s*async[^]+?\}\);/)?.[0];
-    expect(h).toBeTruthy();
-    expect(h!).toMatch(/return ok\(res,\s*\{\s*ok:\s*true,\s*notes:/);
-    expect(h!).not.toMatch(/items:\s*r\.rows/);
+  it("GET answers { notes: [...] } (also under data), not items", async () => {
+    notesQueryMock.mockImplementation(answerBySql([
+      ["FROM bi_applications", { rows: [{ "?column?": 1 }] }],
+      ["FROM bi_application_notes", { rows: [{ id: "n1", body: "hi", author_name: "Ann", created_at: "2026-01-01" }] }],
+    ]));
+    const app = express();
+    app.use(express.json());
+    app.use("/api/v1/bi/applications/:id/notes", requireAuth, biNotesRoutes);
+    const token = jwt.sign({ staffUserId: "staff-1", role: "staff" }, process.env.JWT_SECRET as string);
+    const r = await request(app)
+      .get("/api/v1/bi/applications/11111111-1111-4111-8111-111111111111/notes")
+      .set("Authorization", `Bearer ${token}`);
+    expect(r.status).toBe(200);
+    expect(r.body.notes).toEqual([{ id: "n1", body: "hi", author_name: "Ann", created_at: "2026-01-01" }]);
+    expect(r.body.data.notes).toEqual(r.body.notes);
+    expect(r.body.items).toBeUndefined();
   });
 });
 

@@ -103,6 +103,9 @@ import { workersEnabled } from "./workers/workersSwitch"; // BI_SERVER_BLOCK_v47
 // path. See block intent for rationale.
 
 import biNotesRoutes from "./routes/biNotesRoutes";
+import biInternalServiceRoutes from "./routes/biInternalServiceRoutes"; // BI_SERVER_v789 [31]
+import biCompanyActivityRoutes from "./routes/biCompanyActivityRoutes"; // BI_SERVER_v789 [89]
+import biContactMergeRoutes from "./routes/biContactMergeRoutes"; // BI_SERVER_v789 [90]
 // BI_PGI_ALIGNMENT_v56
 import biAdminLenderRoutes from "./routes/biAdminLenderRoutes";
 import biContactFormRoutes from "./routes/biContactFormRoutes";
@@ -254,6 +257,9 @@ app.use("/api/v1/bi", biCors, biVisitorTrackRoutes); // BI_SERVER_BLOCK_v568 - p
 // BI_SERVER_BUILD_TRUTH_v18 - public and above all matching auth middleware.
 app.use("/api/v1", biCors, biInternalBuildRoutes);
 app.use("/api/v1/bi", biCors, biInternalBuildRoutes);
+// BI_SERVER_v789 [31] - BF-Server service-only router (requireBfServiceToken inside).
+// Above every staff requireAuth mount on /api/v1/bi so service tokens reach it.
+app.use("/api/v1/bi/internal", biCors, biInternalServiceRoutes);
 
 app.use("/api/v1", biCors, chatRoutes);
 app.use("/api/v1", biCors, mayaAnalyticsRoutes);
@@ -340,6 +346,8 @@ app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
 // BF-portal calls /api/v1/bi/crm/contacts and friends; mount at /api/v1/bi
 // so the absolute URL matches the router's path.
 app.use("/api/v1/bi", requireAuth, biCrmRoutes);
+app.use("/api/v1/bi", requireAuth, biCompanyActivityRoutes); // BI_SERVER_v789 [89] staff-only per route
+app.use("/api/v1/bi", requireAuth, biContactMergeRoutes); // BI_SERVER_v789 [90] staff-only per route
 app.use("/api/v1/bi", requireAuth, biContactAnalyticsRoutes); // BI_SERVER_CONTACT_ANALYTICS_v271
 // BI_EMAIL_ASSET_UPLOAD_v1 - email clients fetch image assets without bearer authentication.
 // BI_SERVER_BLOCK_BI_ROUND8_MARKETING_v1

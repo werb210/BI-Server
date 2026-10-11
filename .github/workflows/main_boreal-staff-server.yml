@@ -1,14 +1,19 @@
-# BI_BOOT_FIX_v64_WORKFLOW — pruned package, build metadata, /health
+# BI_BOOT_FIX_v64_WORKFLOW - pruned package, build metadata, /health
 # probe, and Windows iisnode config (server.js + web.config). NO
-# startup-command — that's incompatible with publish-profile auth and
+# startup-command - that's incompatible with publish-profile auth and
 # Windows web apps.
 name: Build and deploy Node.js app to Azure Web App - BI-Server
 
 on:
-  # BI_SERVER_BLOCK_v415_AUTO_DEPLOY_TO_STAGING — merges to main auto-deploy to the
+  # BI_SERVER_BLOCK_v415_AUTO_DEPLOY_TO_STAGING - merges to main auto-deploy to the
   # STAGING slot (publish-profile secret = AZURE_WEBAPP_PUBLISH_PROFILE_STAGING).
   # Production is updated only by a manual Swap in the Azure portal.
-  push:
+  # BI_SERVER_BLOCK_v789_DEPLOY_AFTER_GUARDRAILS - a push to main no longer deploys directly. The
+  # deploy runs when the "guardrails" workflow (unit + integration jobs) COMPLETES for a push to
+  # main, and only if it succeeded; it then builds exactly the commit guardrails tested.
+  workflow_run:
+    workflows: ["guardrails"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 # BI_SERVER_DEPLOY_QUEUE_v3: queue staging deploys instead of cancelling them. With
@@ -27,10 +32,16 @@ env:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-24.04
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v5
+        with:
+          # The commit guardrails tested (workflow_run); a manual run builds the selected ref.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -55,16 +66,24 @@ jobs:
           test -f web.config    || { echo "::error::web.config missing at root"; exit 1; }
           echo "dist/ contents:" && ls -la dist | head -30
 
-      - name: Copy SQL migrations into dist
+      # BI_SERVER_BLOCK_v789_BASELINE_IN_DIST - runMigrations resolves ../baseline relative to the
+      # migrations dir, so the schema baseline must ship next to dist/db/migrations. npm run build
+      # already copies both; this re-asserts it and fails the deploy if either is missing.
+      - name: Copy SQL migrations and schema baseline into dist
         run: |
-          mkdir -p dist/db/migrations
-          cp -R src/db/migrations/. dist/db/migrations/ 2>/dev/null || true
-          ls -la dist/db/migrations | head -10 || true
+          mkdir -p dist/db/migrations dist/db/baseline
+          find src/db/migrations -maxdepth 1 -name "*.sql" -exec cp {} dist/db/migrations/ \;
+          cp -R src/db/baseline/. dist/db/baseline/
+          ls dist/db/migrations/*.sql >/dev/null || { echo "::error::no migrations in dist/db/migrations"; exit 1; }
+          test -f dist/db/baseline/000000_baseline.sql || { echo "::error::dist/db/baseline/000000_baseline.sql missing"; exit 1; }
+          ls -la dist/db/baseline
 
       - name: Stamp build metadata
         run: |
-          BUILD_TAG="v64-$(date -u +%Y%m%d%H%M%S)"
-          COMMIT_SHA="${GITHUB_SHA:0:8}"
+          # BI_SERVER_BLOCK_v789: no fixed version prefix - the tag is the build time.
+          BUILD_TAG="$(date -u +%Y%m%d%H%M%S)"
+          FULL_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          COMMIT_SHA="${FULL_SHA:0:8}"
           echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
           echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_ENV
           echo "build_tag=$BUILD_TAG" > BUILD_META
@@ -100,7 +119,7 @@ jobs:
           # profile (not the production app's). Manual workflow runs deploy
           # to the staging slot only; production is updated by a manual Swap in
           # the Azure portal once the slot is verified healthy.
-          # BI_SERVER_BLOCK_v414_DEPLOY_USES_STAGING_SECRET — deploy to the staging slot
+          # BI_SERVER_BLOCK_v414_DEPLOY_USES_STAGING_SECRET - deploy to the staging slot
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE_STAGING }}
           package: .
           # NOTE: NO startup-command. Windows web apps + publish-profile
@@ -109,7 +128,7 @@ jobs:
       - name: Post-deploy /health probe
         # BI_SERVER_BLOCK_v189_PROBE_FQDN_AND_NON_FATAL_v1
         # Smoke test only. The deploy step is the source of truth.
-        # Probe failure must NOT fail the workflow — Azure cold-start
+        # Probe failure must NOT fail the workflow - Azure cold-start
         # plus DB warmup can exceed 5 minutes on the smaller plan.
         continue-on-error: true
         run: |
@@ -128,7 +147,7 @@ jobs:
           echo "::warning::BI-Server /health did not return 200 within 5 minutes after deploy."
           echo "Last response body (if any):"
           cat /tmp/h.txt 2>/dev/null || true
-          # Exit 0 — continue-on-error already protects the workflow,
+          # Exit 0 - continue-on-error already protects the workflow,
           # but also being explicit so the step itself is green when
           # the probe times out. The deploy already happened.
           exit 0

@@ -31,8 +31,8 @@ export default defineConfig({
     // they now run here too.
     exclude: [
       ...configDefaults.exclude,
-      // Mirrors the exclusion list in vitest.config.ts.
-      "src/__tests__/integration/carrier.contract.integration.test.ts",
+      // BI_SERVER_BLOCK_v789: the PGI carrier contract test is no longer excluded; it skips
+      // itself without DATABASE_URL and runs against the stub in the integration job.
       // Need a real database - they call pool.connect() rather than a mock.
       "src/routes/__tests__/biCrmCompanies.v256.test.ts",
       "src/routes/__tests__/biDocumentsFromBf.v249.test.ts",

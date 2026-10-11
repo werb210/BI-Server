@@ -26,6 +26,7 @@ import { authApplicant } from "../routes/applicantAuth";
 import sendgridRoutes from "../routes/biSendgridWebhookRoutes";
 import smsInboundRoutes from "../routes/biSmsInboundRoutes";
 import { revokeLenderApiKey } from "../services/lenderApiKeyRevoke";
+import { resetLenderActiveCache } from "../services/lenderActiveCache";
 
 const SECRET = process.env.JWT_SECRET as string;
 const sign = (claims: Record<string, unknown>) => jwt.sign(claims, SECRET);
@@ -34,6 +35,9 @@ const bearer = (claims: Record<string, unknown>) => `Bearer ${sign(claims)}`;
 const LENDER_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_LENDER_ID = "22222222-2222-4222-8222-222222222222";
 const KEY_ID = "33333333-3333-4333-8333-333333333333";
+// BI_SERVER_v789_LENDER_ACTIVE - lender auth checks bi_lenders.is_active (and
+// the login contact) before letting a lender token through.
+const ACTIVE_LENDER_RULE: [RegExp, unknown] = [/FROM bi_lenders l\s+LEFT JOIN bi_lender_login_contacts/, { rows: [{ lender_active: true, contact_active: null }], rowCount: 1 }];
 
 beforeEach(() => {
   queryMock.mockReset();
@@ -145,11 +149,15 @@ describe("1b. applicant, lender and public routes keep working with their own to
   });
 
   it("accepts a lender token on /api/v1/bi/lender routes", async () => {
+    resetLenderActiveCache();
+    queryMock.mockImplementation(answerBySql([ACTIVE_LENDER_RULE]));
     const r = await request(app).get("/api/v1/bi/lender/api-keys").set("Authorization", bearer({ kind: "lender", id: LENDER_ID }));
     expect(r.status).toBe(200);
   });
 
   it("accepts a lender token on /api/v1/lender routes", async () => {
+    resetLenderActiveCache();
+    queryMock.mockImplementation(answerBySql([ACTIVE_LENDER_RULE]));
     const r = await request(app).get("/api/v1/lender/api-keys").set("Authorization", bearer({ kind: "lender", id: LENDER_ID }));
     expect(r.status).toBe(200);
   });
@@ -349,7 +357,9 @@ describe("7. GET/PATCH /api/v1/bi/me", () => {
 
 describe("8. lender API key revoke", () => {
   function keyStore(owner: string, active = true) {
+    resetLenderActiveCache();
     return answerBySql([
+      ACTIVE_LENDER_RULE,
       [/UPDATE bi_lender_api_keys/, (_s: string, p: unknown[]) => (p[0] === KEY_ID && p[1] === owner && active ? { rows: [{ id: KEY_ID }], rowCount: 1 } : { rows: [], rowCount: 0 })],
       [/SELECT id FROM bi_lender_api_keys/, (_s: string, p: unknown[]) => (p[0] === KEY_ID && p[1] === owner ? { rows: [{ id: KEY_ID }], rowCount: 1 } : { rows: [], rowCount: 0 })],
     ]);

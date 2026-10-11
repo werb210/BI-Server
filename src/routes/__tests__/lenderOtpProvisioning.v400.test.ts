@@ -1,29 +1,65 @@
 // BI_SERVER_BLOCK_v400_LENDER_OTP_PROVISIONING_404_v1
-import { describe, it, expect } from "vitest";
-import * as fs from "node:fs";
-import * as path from "node:path";
+// /lender/otp/start answers 404 lender_not_provisioned for an unknown phone or
+// email and sends nothing; a provisioned identifier gets its code.
+// Behaviour test (BI_SERVER_v789: rewritten from a source-text test).
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import express from "express";
+import request from "supertest";
+import { answerBySql } from "../../__tests__/helpers/answerBySql";
 
-const src = fs.readFileSync(
-  path.resolve(__dirname, "../biLenderApiRoutes.ts"),
-  "utf8",
-);
+const h = vi.hoisted(() => ({ queryMock: vi.fn(), sendSms: vi.fn(), sendEmail: vi.fn() }));
+vi.mock("../../db", () => ({ pool: { query: (...a: unknown[]) => h.queryMock(...a) } }));
+vi.mock("../../services/otpService", () => ({
+  sendOtpSafe: (...a: unknown[]) => h.sendSms(...a),
+  sendEmailOtpSafe: (...a: unknown[]) => h.sendEmail(...a),
+  verifyOtpSafe: vi.fn(),
+  verifyEmailOtpSafe: vi.fn(),
+  otpSendFailed: (res: any) => res.status(502).json({ error: "otp_send_failed" }),
+}));
 
-describe("v400 — /lender/otp/start surfaces lender_not_provisioned", () => {
-  it("returns 404 lender_not_provisioned for unprovisioned SMS identifiers", () => {
-    // The SMS handler must explicitly 404 when no row matches, not silently
-    // return ok and skip the Twilio send.
-    expect(src).toMatch(/if \(!r\.rows\[0\]\) {\s*\n?\s*return res\.status\(404\)\.json\(\{ error: "lender_not_provisioned" \}\)/);
+import biLenderApiRoutes from "../biLenderApiRoutes";
+
+let provisioned = false;
+function app() {
+  const a = express();
+  a.use(express.json());
+  a.use("/api/v1", biLenderApiRoutes);
+  return a;
+}
+beforeEach(() => {
+  provisioned = false;
+  h.sendSms.mockReset();
+  h.sendSms.mockResolvedValue({ ok: true });
+  h.sendEmail.mockReset();
+  h.sendEmail.mockResolvedValue({ ok: true });
+  h.queryMock.mockReset();
+  h.queryMock.mockImplementation(answerBySql([
+    ["FROM bi_lender_login_contacts", () => ({ rows: provisioned ? [{ id: "c-1" }] : [], rowCount: provisioned ? 1 : 0 })],
+  ]));
+});
+
+describe("v400 - /lender/otp/start surfaces lender_not_provisioned", () => {
+  it("unprovisioned SMS identifier: 404, no SMS sent", async () => {
+    const r = await request(app()).post("/api/v1/lender/otp/start").send({ phone: "+14035550188" });
+    expect(r.status).toBe(404);
+    expect(r.body).toEqual({ error: "lender_not_provisioned" });
+    expect(h.sendSms).not.toHaveBeenCalled();
   });
 
-  it("returns 404 lender_not_provisioned for unprovisioned email identifiers", () => {
-    expect(src).toMatch(/if \(!contact\.rows\[0\]\) {\s*\n?\s*return res\.status\(404\)\.json\(\{ error: "lender_not_provisioned" \}\)/);
+  it("unprovisioned email identifier: 404, no email sent", async () => {
+    const r = await request(app()).post("/api/v1/lender/otp/start").send({ email: "who@example.com", channel: "email" });
+    expect(r.status).toBe(404);
+    expect(r.body).toEqual({ error: "lender_not_provisioned" });
+    expect(h.sendEmail).not.toHaveBeenCalled();
   });
 
-  it("no longer wraps sendOtpSafe in an `if (rows[0])` guard that swallows the send", () => {
-    // The pre-fix shape was: if (r.rows[0]) { sendOtpSafe... }
-    // followed by an unconditional res.json({ ok: true }). That allowed
-    // unprovisioned numbers to get 200 with no SMS dispatched.
-    expect(src).not.toMatch(/if \(r\.rows\[0\]\) \{\s*\n\s*const sr = await sendOtpSafe/);
-    expect(src).not.toMatch(/if \(contact\.rows\[0\]\) \{\s*\n\s*const sr = await sendEmailOtpSafe/);
+  it("provisioned identifiers get a code (the send is not swallowed)", async () => {
+    provisioned = true;
+    const sms = await request(app()).post("/api/v1/lender/otp/start").send({ phone: "+14035550188" });
+    expect(sms.status).toBe(200);
+    expect(h.sendSms).toHaveBeenCalledWith("+14035550188");
+    const email = await request(app()).post("/api/v1/lender/otp/start").send({ email: "who@example.com", channel: "email" });
+    expect(email.status).toBe(200);
+    expect(h.sendEmail).toHaveBeenCalledWith("who@example.com");
   });
 });

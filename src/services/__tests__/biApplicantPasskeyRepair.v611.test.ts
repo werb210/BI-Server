@@ -3,12 +3,14 @@ import { describe, it, expect, vi } from "vitest";
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import jwt from "jsonwebtoken";
+import { verifyBiToken } from "../../platform/serviceTokens";
 import { beginApplicantPasskeyRegistration, beginApplicantPasskeySignIn, finishApplicantPasskeyRegistration, finishApplicantPasskeySignIn } from "../biApplicantPasskeys";
 
 const RP = "client.boreal.insure";
 const ORIGIN = "https://client.boreal.insure";
 const PHONE = "+17805551212";
-const SECRET = "test-shared-secret-min-10";
+// v789: tokens are signed with the secret the suite runs with (vitest env), never a literal.
+const SECRET = process.env.JWT_SECRET as string;
 
 function head(major: number, n: number): Buffer {
   if (n < 24) return Buffer.from([(major << 5) | n]);
@@ -80,7 +82,9 @@ describe("BI passkeys - standard browser payloads", () => {
     expect(keys[0].public_key_pem).toContain("BEGIN PUBLIC KEY");
     const lo: any = await beginApplicantPasskeySignIn(query as any);
     const r: any = await finishApplicantPasskeySignIn(query as any, dev.get(lo.challenge), SECRET, RP, ORIGIN);
-    expect(jwt.verify(r.token, SECRET)).toMatchObject({ kind: "applicant", phone: PHONE, contactId: "contact-7" });
+    expect(verifyBiToken(r.token, SECRET)).toMatchObject({ kind: "applicant", phone: PHONE, contactId: "contact-7" });
+    // v789: signed through signBiToken - BI issuer and audience.
+    expect(jwt.decode(r.token)).toMatchObject({ iss: "bi-server", aud: "bi-server" });
     expect(keys[0].sign_count).toBe(1);
     await expect(finishApplicantPasskeySignIn(query as any, dev.get(lo.challenge), SECRET, RP, ORIGIN)).rejects.toThrow("invalid_challenge");
   });

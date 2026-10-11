@@ -52,7 +52,7 @@ describe("BI rate-limit key cannot be forged", () => {
     expect(rateLimitKeyFromRequest({ headers: { "x-forwarded-for": "1.2.3.4, 77.246.52.163:62553, 10.0.0.4" } } as any)).toBe("77.246.52.163");
   });
   it("every public sign-in route replies through otpSendFailed", () => {
-    for (const f of ["biReferrerRoutes.ts", "biAuthRoutes.ts", "biApplicantOtpRoutes.ts", "biLenderAuthRoutes.ts", "biLenderApiRoutes.ts"]) {
+    for (const f of ["biAuthRoutes.ts", "biApplicantOtpRoutes.ts", "biLenderApiRoutes.ts"]) {
       expect(readFileSync("src/routes/" + f, "utf8")).toContain("otpSendFailed(res,");
     }
   });

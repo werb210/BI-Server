@@ -125,6 +125,11 @@ router.post("/maya-chat", mayaChatMinuteLimiter, mayaChatDayLimiter, async (req,
     const email = extractEmail(message);
     const referral = extractReferral(message);
 
+    // BI_SERVER_v789_MAYA_EMAIL_ONCE - the first address the visitor states as
+    // their own (on any message) becomes the conversation's address.
+    const conv = conversationState(conversationKey(body, ip), Date.now());
+    if (!conv.ownEmail) conv.ownEmail = ownEmailFrom(body, String(message));
+
     if (email) {
       const insert = await pool.query(
         `INSERT INTO maya_leads
@@ -172,8 +177,6 @@ router.post("/maya-chat", mayaChatMinuteLimiter, mayaChatDayLimiter, async (req,
       }
 
       // BI_SERVER_v789_MAYA_EMAIL_ONCE
-      const conv = conversationState(conversationKey(body, ip), Date.now());
-      if (!conv.ownEmail) conv.ownEmail = ownEmailFrom(body, String(message));
       const recipient = email.toLowerCase();
       if (
         process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM &&

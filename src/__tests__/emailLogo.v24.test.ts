@@ -1,11 +1,19 @@
 // BI_SERVER_EMAIL_LOGO_v24
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
+import request from "supertest";
+
+vi.mock("../db", () => ({
+  pool: {
+    query: async () => ({ rows: [], rowCount: 0 }),
+    connect: async () => ({ query: async () => ({ rows: [], rowCount: 0 }), release: () => undefined }),
+  },
+  runMigrations: async () => undefined,
+}));
+
+import app from "../server";
 import { BI_EMAIL_LOGO_FILENAME } from "../routes/biPublicBrandRoutes";
 import { renderEmailTemplate } from "../services/emailTemplateRender";
-
-const serverSrc = readFileSync("src/server.ts", "utf8");
-const lines = serverSrc.split("\n");
 
 describe("the BI email header logo", () => {
   it("no longer points at BF-Server", () => {
@@ -55,20 +63,19 @@ describe("the uploaded asset", () => {
   });
 });
 
+// v789 [5]/[37]: was a grep of server.ts; now fetched through the real app
+// with no Authorization header, as a mail client or image proxy would.
 describe("route mounting", () => {
-  const brandLine = lines.findIndex((line) => line.includes("biPublicBrandRoutes") && line.includes("app.use"));
-
-  it("is mounted without requireAuth", () => {
-    expect(brandLine).toBeGreaterThan(-1);
-    expect(lines[brandLine]).not.toContain("requireAuth");
+  it("is mounted without requireAuth", async () => {
+    const r = await request(app).get("/api/v1/bi/public/email/logo.png");
+    expect(r.status).toBe(200);
+    expect(r.headers["content-type"]).toContain("image/png");
+    expect(Buffer.from(r.body).subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
   });
 
-  it("precedes every requireAuth mount on a matching prefix", () => {
-    const guards = lines
-      .map((line, index) => ({ line, index }))
-      .filter(({ line }) => line.includes("app.use(") && line.includes("requireAuth") && line.includes('"/api/v1'))
-      .map(({ index }) => index);
-    expect(guards.length).toBeGreaterThan(0);
-    for (const guard of guards) expect(brandLine).toBeLessThan(guard);
+  it("precedes every requireAuth mount on a matching prefix", async () => {
+    // Other /api/v1/bi paths are guarded, yet the logo is still served.
+    expect((await request(app).get("/api/v1/bi/marketing/templates")).status).toBe(401);
+    expect((await request(app).get("/api/v1/bi/public/email/logo.png")).status).toBe(200);
   });
 });

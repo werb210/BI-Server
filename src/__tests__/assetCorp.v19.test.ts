@@ -1,10 +1,32 @@
 // BI_SERVER_ASSET_CORP_CROSS_ORIGIN_v19
-import { describe, expect, it } from "vitest";
+// v789 [5]/[37]: the server.ts grep (helmet) and the handler greps now run as
+// requests against the real app. The comment check on the (unchanged) asset
+// route file stays a source read: it pins documentation, not behaviour.
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
+import request from "supertest";
+import { answerBySql } from "./helpers/answerBySql";
+
+const queryMock = vi.fn();
+vi.mock("../db", () => ({
+  pool: {
+    query: (...a: unknown[]) => queryMock(...a),
+    connect: async () => ({ query: (...a: unknown[]) => queryMock(...a), release: () => undefined }),
+  },
+  runMigrations: async () => undefined,
+}));
+
+import app from "../server";
 import { PUBLIC_ASSET_HEADERS } from "../routes/biMarketingEmailAssetRoutes.js";
 
 const assetSrc = readFileSync("src/routes/biMarketingEmailAssetRoutes.ts", "utf8");
-const serverSrc = readFileSync("src/server.ts", "utf8");
+
+beforeEach(() => {
+  queryMock.mockReset();
+  queryMock.mockImplementation(answerBySql([
+    ["FROM bi_email_assets", { rows: [{ content_type: "image/jpeg", content: Buffer.from([0xff, 0xd8, 0xff, 0xe0]) }], rowCount: 1 }],
+  ]));
+});
 
 describe("public marketing asset headers", () => {
   it("opts out of helmet's same-origin resource policy", () => {
@@ -19,23 +41,27 @@ describe("public marketing asset headers", () => {
     expect(PUBLIC_ASSET_HEADERS["Cache-Control"]).toContain("immutable");
   });
 
-  it("applies the headers on the public GET handler", () => {
-    expect(assetSrc).toContain("...PUBLIC_ASSET_HEADERS");
+  it("applies the headers on the public GET handler", async () => {
+    const r = await request(app).get("/api/v1/bi/marketing/email/assets/a1");
+    expect(r.status).toBe(200);
+    expect(r.headers["cross-origin-resource-policy"]).toBe("cross-origin");
+    expect(r.headers["cache-control"]).toContain("immutable");
   });
 
-  it("does not let Content-Type be overwritten by the shared header set", () => {
+  it("does not let Content-Type be overwritten by the shared header set", async () => {
     expect(PUBLIC_ASSET_HEADERS["Content-Type"]).toBeUndefined();
-    const spread = assetSrc.indexOf("...PUBLIC_ASSET_HEADERS");
-    const contentType = assetSrc.indexOf('"Content-Type": result.rows[0].content_type');
-    expect(spread).toBeLessThan(contentType);
+    const r = await request(app).get("/api/v1/bi/marketing/email/assets/a1");
+    expect(r.headers["content-type"]).toContain("image/jpeg");
   });
 });
 
 describe("why the override is needed", () => {
-  it("helmet is still applied globally", () => {
+  it("helmet is still applied globally", async () => {
     // If helmet is ever removed, this override becomes harmless rather than
     // wrong - but the comment explaining it would go stale, so fail loudly.
-    expect(serverSrc).toContain("app.use(helmet())");
+    const r = await request(app).get("/");
+    expect(r.headers["cross-origin-resource-policy"]).toBe("same-origin");
+    expect(r.headers["x-content-type-options"]).toBe("nosniff");
   });
 
   it("documents that a browser tab cannot reproduce the failure", () => {

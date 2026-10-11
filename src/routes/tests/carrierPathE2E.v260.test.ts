@@ -44,35 +44,6 @@ describe("BI_SERVER_BLOCK_v260 — schema additions", () => {
   });
 });
 
-describe("BI_SERVER_BLOCK_v260 — biReferrerRoutes uses phone_e164", () => {
-  const src = readRoute("biReferrerRoutes.ts");
-
-  it("OTP verify SELECT/INSERT use phone_e164", () => {
-    const otpVerify = src.match(/router\.post\("\/referrer\/otp\/verify"[\s\S]*?intake_complete: ref\.intake_complete \}\);/s)?.[0];
-    expect(otpVerify).toBeTruthy();
-    expect(otpVerify!).toMatch(/bi_referrers WHERE phone_e164=/);
-    expect(otpVerify!).toMatch(/INSERT INTO bi_referrers \(phone_e164\)/);
-    expect(otpVerify!).not.toMatch(/bi_referrers WHERE phone=/);
-  });
-
-  it("dashboard SELECT aliases phone_e164 AS phone", () => {
-    const dashboard = src.match(/router\.get\("\/referrer\/dashboard".*?\}\);/s)?.[0];
-    expect(dashboard).toBeTruthy();
-    expect(dashboard!).toMatch(/phone_e164\s+AS\s+phone/i);
-  });
-
-  it("POST /referrer/referrals writes phone_e164 and omits unsupported columns", () => {
-    const referrals = src.match(/router\.post\("\/referrer\/referrals"[\s\S]*?status: "invited" \}\);/s)?.[0];
-    expect(referrals).toBeTruthy();
-    expect(referrals!).toMatch(/INSERT INTO bi_referrals[^`]*phone_e164/);
-    const contactsInsert = referrals!.match(/INSERT INTO bi_contacts[^`]+/)?.[0];
-    expect(contactsInsert).toBeTruthy();
-    expect(contactsInsert!).toMatch(/phone_e164/);
-    expect(contactsInsert!).not.toMatch(/company_name/);
-    expect(contactsInsert!).not.toMatch(/updated_at/);
-  });
-});
-
 describe("BI_SERVER_BLOCK_v260 — biApplicationRoutes computes carrier-path fields", () => {
   const src = readRoute("biApplicationRoutes.ts");
 

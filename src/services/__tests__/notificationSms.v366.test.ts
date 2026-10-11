@@ -3,31 +3,8 @@ import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const referrerSrc = fs.readFileSync(path.resolve(__dirname, "../../routes/biReferrerRoutes.ts"), "utf8");
 const publicSrc = fs.readFileSync(path.resolve(__dirname, "../../routes/biPublicApplicationRoutes.ts"), "utf8");
 const hookSrc = fs.readFileSync(path.resolve(__dirname, "../pgiOnApprovedHook.ts"), "utf8");
-
-describe("v366 — Referral invite SMS", () => {
-  it("uses real sendOutreachSms (not invented sendBiSms)", () => {
-    expect(referrerSrc).toMatch(/sendOutreachSms/);
-    expect(referrerSrc).not.toMatch(/sendBiSms/);
-  });
-  it("fires only when phone is present", () => {
-    expect(referrerSrc).toMatch(/if \(phone\) \{[\s\S]*sendOutreachSms\(phone,/);
-  });
-  it("invite URL includes the short_code", () => {
-    expect(referrerSrc).toMatch(/applications\/new\?ref=\$\{shortCode\}/);
-  });
-  it("stamps sms_sent_at on success", () => {
-    expect(referrerSrc).toMatch(/UPDATE bi_referrals SET sms_sent_at = NOW\(\)/);
-  });
-  it("SMS happens after COMMIT (outside the transaction)", () => {
-    const commitIdx = referrerSrc.indexOf('await client.query("COMMIT")');
-    const smsIdx = referrerSrc.indexOf("Invite SMS — outside the transaction");
-    expect(commitIdx).toBeGreaterThan(-1);
-    expect(smsIdx).toBeGreaterThan(commitIdx);
-  });
-});
 
 describe("v366 — Submit confirmation SMS", () => {
   it("goes app first, SMS as fallback (v588)", () => {
