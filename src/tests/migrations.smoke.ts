@@ -1,9 +1,11 @@
-import { Client } from "pg";
-import { runMigrations } from "../db/runMigrations";
+// BI_SERVER_BLOCK_v789: runs the real startup runner (src/startup/runMigrations.ts), the one
+// src/db/index.ts calls at boot. The legacy node-pg-migrate wrapper (src/db/runMigrations.ts) is gone.
+import { Client, Pool } from "pg";
+import { runMigrations } from "../startup/runMigrations";
 
 const url = process.env.DATABASE_URL_TEST;
 if (!url) {
-  console.log("DATABASE_URL_TEST not set — skipping migrations smoke test");
+  console.log("DATABASE_URL_TEST not set - skipping migrations smoke test");
   process.exit(0);
 }
 
@@ -21,7 +23,13 @@ const REQUIRED_BI_APP_COLUMNS = [
 ];
 
 async function main() {
-  await runMigrations(url!);
+  const pool = new Pool({ connectionString: url });
+  try {
+    const result = await runMigrations(pool);
+    console.log(`runMigrations: applied ${result.applied.length}, skipped ${result.skipped.length}`);
+  } finally {
+    await pool.end();
+  }
 
   const client = new Client({ connectionString: url });
   await client.connect();
@@ -51,7 +59,7 @@ async function main() {
     for (const f of failures) console.error("  -", f);
     process.exit(1);
   }
-  console.log(`OK — ${REQUIRED_TABLES.length} tables and ${REQUIRED_BI_APP_COLUMNS.length} columns present.`);
+  console.log(`OK - ${REQUIRED_TABLES.length} tables and ${REQUIRED_BI_APP_COLUMNS.length} columns present.`);
 }
 
 main().catch((e) => {

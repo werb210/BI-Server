@@ -1,58 +1,62 @@
 // BI_SERVER_PUBLIC_ASSET_MOUNT_ORDER_v13
-import { describe, it, expect } from "vitest";
+// v789 [5]/[37]: the mount-order cases were greps of server.ts; they now fetch
+// the asset through the real app with no Authorization header. If any mount
+// carrying requireAuth on "/api/v1" or "/api/v1/bi" ran first, these would be
+// 401 instead of the asset.
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
+import request from "supertest";
+import { answerBySql } from "./helpers/answerBySql";
 
-const server = readFileSync("src/server.ts", "utf8");
+const queryMock = vi.fn();
+vi.mock("../db", () => ({
+  pool: {
+    query: (...a: unknown[]) => queryMock(...a),
+    connect: async () => ({ query: (...a: unknown[]) => queryMock(...a), release: () => undefined }),
+  },
+  runMigrations: async () => undefined,
+}));
+
+import app from "../server";
+
+const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+beforeEach(() => {
+  queryMock.mockReset();
+  queryMock.mockImplementation(answerBySql([
+    [/FROM bi_email_assets WHERE id=\$1/, (_sql: string, params?: unknown[]) =>
+      params?.[0] === "asset-1" ? { rows: [{ content_type: "image/png", content: PNG }], rowCount: 1 } : { rows: [], rowCount: 0 }],
+  ]));
+});
 
 describe("public marketing asset route", () => {
-  it("is mounted before any matching prefix carrying requireAuth", () => {
-    const publicAt = server.indexOf("biMarketingEmailAssetPublicRouter");
-    expect(publicAt).toBeGreaterThan(-1);
-    const guardedAt = server
-      .split("\n")
-      // BI_SERVER_ASSET_ABOVE_ALL_AUTH_MOUNTS_v14 - must consider "/api/v1" too.
-      .findIndex((line) => line.includes('app.use("/api/v1') && line.includes("requireAuth"));
-    const publicLine = server
-      .split("\n")
-      .findIndex((line) => line.includes('app.use("/api/v1/bi/marketing"') && line.includes("PublicRouter"));
-    expect(publicLine).toBeGreaterThan(-1);
-    expect(publicLine).toBeLessThan(guardedAt);
+  it("is mounted before any matching prefix carrying requireAuth", async () => {
+    const r = await request(app).get("/api/v1/bi/marketing/email/assets/asset-1");
+    expect(r.status).toBe(200);
+    expect(r.headers["content-type"]).toContain("image/png");
+    expect(Buffer.from(r.body).equals(PNG)).toBe(true);
   });
 
-  it("keeps the ordering requirement documented at the mount", () => {
-    expect(server).toContain("BI_SERVER_ASSET_ABOVE_ALL_AUTH_MOUNTS_v14");
+  it("keeps the ordering requirement: an unknown asset is the handler's 404, not an auth 401", async () => {
+    const r = await request(app).get("/api/v1/bi/marketing/email/assets/missing");
+    expect(r.status).toBe(404);
   });
 
-  it("does not put requireAuth on the public asset router itself", () => {
-    const line = server
-      .split("\n")
-      .find((candidate) => candidate.includes("biMarketingEmailAssetPublicRouter") && candidate.includes("app.use"));
-    expect(line).toBeDefined();
-    expect(line).not.toContain("requireAuth");
+  it("does not put requireAuth on the public asset router itself", async () => {
+    // A mail image proxy sends no Authorization header at all.
+    const r = await request(app).get("/api/v1/bi/marketing/email/assets/asset-1").set("User-Agent", "GoogleImageProxy");
+    expect(r.status).toBe(200);
   });
 });
 
 // BI_SERVER_ASSET_ABOVE_ALL_AUTH_MOUNTS_v14
 describe("no auth mount on any matching prefix precedes the asset router", () => {
-  const lines = readFileSync("src/server.ts", "utf8").split("\n");
-  const publicLine = lines.findIndex(
-    (line) => line.includes("biMarketingEmailAssetPublicRouter") && line.includes("app.use"),
-  );
-
-  it("is mounted at all", () => {
-    expect(publicLine).toBeGreaterThan(-1);
+  it("the same prefix is guarded for everything else", async () => {
+    // The staff marketing routes share /api/v1/bi/marketing and need a token.
+    expect((await request(app).get("/api/v1/bi/marketing/templates")).status).toBe(401);
   });
 
-  it("precedes every requireAuth mount on /api/v1 or /api/v1/bi", () => {
-    const guards = lines
-      .map((line, index) => ({ line, index }))
-      .filter(
-        ({ line }) =>
-          line.includes("app.use(") && line.includes("requireAuth") && line.includes('"/api/v1'),
-      )
-      .map(({ index }) => index);
-    expect(guards.length).toBeGreaterThan(0);
-    for (const guard of guards) expect(publicLine).toBeLessThan(guard);
+  it("the asset is still served without a token", async () => {
+    expect((await request(app).get("/api/v1/bi/marketing/email/assets/asset-1")).status).toBe(200);
   });
 });
 

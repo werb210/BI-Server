@@ -25,7 +25,7 @@ jobs:
         run: node -v
 
       - name: Install Dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Run Lint (if exists)
         run: |
@@ -53,18 +53,20 @@ jobs:
             echo "No build script found"
           fi
 
-      - name: Run Tests (if exists)
-        run: |
-          if npm run | grep -q "test"; then
-            npm test -- --verbose || npm test
-          else
-            echo "No test script found"
-          fi
+      # BI_SERVER_BLOCK_v789_CI_AUDIT - `npm test` is only `tsc --noEmit && tsc`; run the real unit
+      # suite (no database) instead.
+      - name: Unit tests
+        run: npm run test:unit
 
+      # Keep the full JSON for the report artifact, then FAIL the job on any high or critical
+      # finding (low/moderate are reported but do not block).
       - name: Run npm audit
-        run: npm audit --json > audit.json || true
+        run: |
+          npm audit --json > audit.json || true
+          npm audit --audit-level=high
 
       - name: Generate Report
+        if: always()
         run: |
           echo "Node version: $(node -v)" > report.txt
           echo "" >> report.txt
@@ -76,6 +78,7 @@ jobs:
           fi
 
       - name: Upload Report Artifact
+        if: always()
         uses: actions/upload-artifact@v5
         with:
           name: ci-audit-report

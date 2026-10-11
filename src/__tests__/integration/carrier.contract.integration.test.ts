@@ -2,9 +2,25 @@
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { Pool } from "pg";
-import { describe, beforeAll, afterAll, expect, it } from "vitest";
+import { describe, beforeAll, afterAll, expect, it, vi } from "vitest";
 import express from "express";
 import request from "supertest";
+// BI_SERVER_BLOCK_v789_CARRIER_CONTRACT_IN_CI - runs in the integration job (real database, PGI
+// stub, no network). The lender OTP step uses the dev code 000000 and the carrier calls must hit
+// the stub, so both are pinned here BEFORE the routes (and src/platform/env) load, and restored
+// after so no other test file sees them.
+const savedEnv = vi.hoisted(() => {
+  const saved = { ALLOW_DEV_OTP: process.env.ALLOW_DEV_OTP, USE_PGI_STUB: process.env.USE_PGI_STUB };
+  process.env.ALLOW_DEV_OTP = "true";
+  process.env.USE_PGI_STUB = "true";
+  return saved;
+});
+afterAll(() => {
+  for (const [k, v] of Object.entries(savedEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
 import biLenderApplicationCreate from "../../routes/biLenderApplicationCreate";
 import biLenderApiRoutes from "../../routes/biLenderApiRoutes";
 

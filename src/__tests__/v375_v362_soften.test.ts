@@ -1,25 +1,35 @@
-// BI_SERVER_BLOCK_v375_V362_SOFTEN_v1
-import { describe, it, expect } from "vitest";
-import * as fs from "node:fs";
-import * as path from "node:path";
+// BI_SERVER_BLOCK_v375_V362_SOFTEN_v1 - behaviour test of the production boot
+// guard (rewritten from a source-text test in v789).
+import { describe, it, expect, vi } from "vitest";
 
-const src = fs.readFileSync(path.resolve(__dirname, "..", "server.ts"), "utf8");
+vi.mock("../db", () => ({
+  pool: { query: async () => ({ rows: [] }), connect: async () => ({ query: async () => ({ rows: [] }), release: () => undefined }) },
+  runMigrations: async () => undefined,
+}));
 
-describe("v375 — v362 boot guard softened", () => {
-  it("does NOT exit on USE_PGI_STUB=true in production", () => {
-    expect(src).not.toMatch(
-      /USE_PGI_STUB=true in production\.[\s\S]{0,80}process\.exit\(1\)/
-    );
+import { pgiBootCheck } from "../server";
+
+const prod = (extra: Record<string, string | undefined>) => ({ NODE_ENV: "production", ...extra }) as NodeJS.ProcessEnv;
+
+describe("v375 - v362 boot guard softened", () => {
+  it("does NOT exit on USE_PGI_STUB=true in production; warns instead", () => {
+    const r = pgiBootCheck(prod({ USE_PGI_STUB: "true" }));
+    expect(r.fatal).toBeUndefined();
+    expect(r.warn).toMatch(/\[v375\] WARN: USE_PGI_STUB=true in production/);
   });
-  it("WARN message in place of FATAL for stubIsOn", () => {
-    expect(src).toMatch(/\[v375\] WARN: USE_PGI_STUB=true in production/);
+  it("still fails when stub=false AND PGI creds are missing", () => {
+    expect(pgiBootCheck(prod({ USE_PGI_STUB: "false" })).fatal).toMatch(/PGI_API_KEY and\/or PGI_BASE_URL is missing/);
+    expect(pgiBootCheck(prod({ USE_PGI_STUB: "false", PGI_API_KEY: "k" })).fatal).toBeDefined();
   });
-  it("still exits when stub=false AND PGI creds missing", () => {
-    expect(src).toMatch(
-      /USE_PGI_STUB=false but PGI_API_KEY and\/or PGI_BASE_URL is missing[\s\S]{0,200}process\.exit\(1\)/
-    );
+  it("stub=false with creds boots silently", () => {
+    expect(pgiBootCheck(prod({ USE_PGI_STUB: "false", PGI_API_KEY: "k", PGI_BASE_URL: "https://x" }))).toEqual({});
   });
-  it("treats unset USE_PGI_STUB as warn-only (no exit)", () => {
-    expect(src).toMatch(/USE_PGI_STUB is unset in production\. Treating as stub mode/);
+  it("unset USE_PGI_STUB is warn-only and says live mode (v789: that is what pgiAdapter does)", () => {
+    const r = pgiBootCheck(prod({ USE_PGI_STUB: undefined }));
+    expect(r.fatal).toBeUndefined();
+    expect(r.warn).toMatch(/USE_PGI_STUB is unset in production\. pgiAdapter runs in LIVE mode/);
+  });
+  it("does nothing outside production", () => {
+    expect(pgiBootCheck({ NODE_ENV: "test", USE_PGI_STUB: "false" } as NodeJS.ProcessEnv)).toEqual({});
   });
 });

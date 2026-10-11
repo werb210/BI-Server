@@ -70,6 +70,7 @@ import { logger } from "./platform/logger";
 import metricsRoutes from "./platform/metricsRoutes";
 import { requestId } from "./platform/requestId";
 import { badRequest } from "./utils/apiResponse";
+import { FIXED_ALLOWED_ORIGINS, configuredOrigins, isAllowedOrigin } from "./platform/corsOrigins";
 import { httpLogger } from "./utils/httpLogger";
 // BI_V1_FINAL_v47 — lender direct API + bi_notes
 import biLenderApiRoutes from "./routes/biLenderApiRoutes";
@@ -102,6 +103,9 @@ import { workersEnabled } from "./workers/workersSwitch"; // BI_SERVER_BLOCK_v47
 // path. See block intent for rationale.
 
 import biNotesRoutes from "./routes/biNotesRoutes";
+import biInternalServiceRoutes from "./routes/biInternalServiceRoutes"; // BI_SERVER_v789 [31]
+import biCompanyActivityRoutes from "./routes/biCompanyActivityRoutes"; // BI_SERVER_v789 [89]
+import biContactMergeRoutes from "./routes/biContactMergeRoutes"; // BI_SERVER_v789 [90]
 // BI_PGI_ALIGNMENT_v56
 import biAdminLenderRoutes from "./routes/biAdminLenderRoutes";
 import biContactFormRoutes from "./routes/biContactFormRoutes";
@@ -150,101 +154,21 @@ setInterval(() => {
   for (const [k, ts] of spamThrottle) if (ts < cutoff) spamThrottle.delete(k);
 }, 60_000).unref();
 
-// BI_SERVER_BLOCK_v62_CORS_AND_PATCH_ALIGNMENT_v1
-// Hardcoded production fallback so an unset CORS_ALLOWED_ORIGINS env var
-// doesn't silently brick the entire BI silo. Includes:
-//   - staff.boreal.financial          (BF-portal)
-//   - client.boreal.financial         (BF-client; future PGI add-on)
-//   - boreal.financial / www.*        (BF-website)
-//   - delightful-sand-...azurestaticapps.net  (BI-Website production SWA)
-//   - localhost dev origins
-// CORS_ALLOWED_ORIGINS env var still takes precedence and SHOULD be set;
-// this is purely a safety net.
-const PRODUCTION_FALLBACK_ORIGINS = [
-  "https://staff.boreal.financial",
-  "https://client.boreal.financial",
-  "https://boreal.financial",
-  "https://www.boreal.financial",
-  "https://delightful-sand-05a55580f.7.azurestaticapps.net",
-  "https://witty-moss-0886d220f.7.azurestaticapps.net", // BI_SERVER_BLOCK_v222_CORS_AZURESTATICAPPS_AND_HEALTH_v1 — current BI-Website SWA host
-  // BI_SERVER_BLOCK_v239_CORS_BOREAL_INSURE_v1 — public BI-Website now lives at boreal.insure.
-  "https://www.boreal.insure",
-  "https://boreal.insure",
-  // BI_SERVER_CORS_BI_CLIENT_v1 — BI-Client, the subcontractor insurance and
-  // bond application front end for the SLF channel.
-  "https://client.boreal.insure",
-  // BI_SERVER_CORS_CAPACITOR_v20 — BI-Client also ships as iOS and Android
-  // native apps. A Capacitor WebView does NOT send the custom domain as its
-  // Origin: iOS sends capacitor://localhost and Android sends
-  // https://localhost. Without these two the first native build fails every
-  // call including OTP, and it reads as "the server is down" rather than CORS.
-  // https://localhost is the Android WebView origin only — it is not a dev
-  // origin and is safe in production, because nothing but the packaged app
-  // can present it.
-  "capacitor://localhost",
-  "https://localhost",
-];
-const DEV_FALLBACK_ORIGINS = [
-  "http://localhost:5173",
-  "http://localhost:3000",
-];
-
-// BI_SERVER_BLOCK_v349_CORS_UNION_v1
-// Previously env var REPLACED the hardcoded fallback. That regression broke
-// OTP from www.boreal.insure on 2026-05-25: PRODUCTION_FALLBACK_ORIGINS
-// included it (added by v239), but the env var on Azure App Service didn't,
-// and the env var was winning. Switch to UNION: env var can ADD origins
-// (e.g. SWA preview slots) but can never silently delete canonical ones.
-const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || env.CORS_ALLOWED_ORIGINS || "")
-  .split(",")
-  .map((v) => v.trim())
-  .filter(Boolean);
-
-const baseFallback = env.NODE_ENV === "production"
-  ? PRODUCTION_FALLBACK_ORIGINS
-  : DEV_FALLBACK_ORIGINS;
-
-const corsOrigins = Array.from(new Set([...baseFallback, ...configuredOrigins]));
-
-if (configuredOrigins.length === 0) {
-  logger.warn(
-    { fallback_count: corsOrigins.length, env: env.NODE_ENV },
-    "CORS_ALLOWED_ORIGINS not set; using hardcoded fallback only."
-  );
-} else {
-  logger.info(
-    {
-      hardcoded: baseFallback.length,
-      env_added: configuredOrigins.length,
-      total: corsOrigins.length,
-    },
-    "CORS origins unioned (hardcoded ∪ env)"
-  );
-}
-
-// BI_SERVER_BLOCK_v222_CORS_AZURESTATICAPPS_AND_HEALTH_v1 — origin matcher accepts the configured list OR
-// any *.azurestaticapps.net host (so SWA preview/build URL rotations don't
-// silently brick CORS). Server-to-server requests (no Origin header) pass through.
-const AZ_SWA_HOST_RE = /^https:\/\/[a-z0-9-]+\.[0-9]+\.azurestaticapps\.net$/i;
-// BI_SERVER_CORS_NATIVE_APP_v1 - the staff portal also ships as a Capacitor iOS app, whose
-// WebView sends Origin: capacitor://localhost, NOT https://staff.boreal.financial.
-// That origin was in neither the fallback list nor the env var, so every BI call
-// from the iOS app was refused at CORS while the identical call from a desktop
-// browser succeeded. ionic://localhost is the legacy scheme, included so an older
-// build or a capacitor.config iosScheme change cannot silently break this again.
-const NATIVE_APP_ORIGINS = new Set([
-  "capacitor://localhost",
-  "ionic://localhost",
-  "http://localhost",
-]);
-const corsOriginSet = new Set(corsOrigins);
+// BI_SERVER_v789_CORS - exact-origin allowlist (src/platform/corsOrigins.ts).
+// Replaces the v62 fallback list, the v222 *.azurestaticapps.net wildcard and
+// the native-app set (ionic://, http://localhost in production). Requests with
+// no Origin (server-to-server) still pass.
+logger.info(
+  { fixed: FIXED_ALLOWED_ORIGINS.length, env_added: configuredOrigins().length, env: env.NODE_ENV },
+  "CORS exact-origin allowlist loaded",
+);
 const biCors = cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, true); // non-browser / same-origin
-    if (corsOriginSet.has(origin)) return cb(null, true);
-    if (NATIVE_APP_ORIGINS.has(origin)) return cb(null, true); // BI_SERVER_CORS_NATIVE_APP_v1
-    if (AZ_SWA_HOST_RE.test(origin)) return cb(null, true);
-    return cb(new Error(`origin not allowed: ${origin}`));
+    if (isAllowedOrigin(origin)) return cb(null, true);
+    // Not allowed: answer without CORS headers (the browser blocks it) rather
+    // than throwing, so the Origin is never echoed into an error body.
+    return cb(null, false);
   },
   credentials: true,
   // v758 — cache preflights for 24h so browsers stop re-sending an OPTIONS
@@ -267,7 +191,8 @@ app.use(express.json({ limit: "10mb" }));
 app.use(limiter);
 app.use(helmet());
 app.use(compression());
-app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
+// BI_SERVER_v789_INTERNAL_AUTH - the API docs are staff-only.
+app.use("/docs", requireAuth, swaggerUi.serve, swaggerUi.setup(openApiSpec));
 app.use("/health", biCors, healthRoutes); // BI_SERVER_BLOCK_v222_CORS_AZURESTATICAPPS_AND_HEALTH_v1
 
 // BI_SERVER_BLOCK_v376_AZURE_HEALTH_AND_BOOT_v1 — Azure App Service Linux's
@@ -332,6 +257,9 @@ app.use("/api/v1/bi", biCors, biVisitorTrackRoutes); // BI_SERVER_BLOCK_v568 - p
 // BI_SERVER_BUILD_TRUTH_v18 - public and above all matching auth middleware.
 app.use("/api/v1", biCors, biInternalBuildRoutes);
 app.use("/api/v1/bi", biCors, biInternalBuildRoutes);
+// BI_SERVER_v789 [31] - BF-Server service-only router (requireBfServiceToken inside).
+// Above every staff requireAuth mount on /api/v1/bi so service tokens reach it.
+app.use("/api/v1/bi/internal", biCors, biInternalServiceRoutes);
 
 app.use("/api/v1", biCors, chatRoutes);
 app.use("/api/v1", biCors, mayaAnalyticsRoutes);
@@ -369,6 +297,19 @@ app.use("/api/v1/bi", biCors, biLenderApiRoutes);
 // Legacy applicant draft/submit (tokens from /api/v1/otp/verify) - per-route requireAnyAuth.
 app.use("/api/v1/bi", biCors, biAppApplicantRoutes);
 
+// BI_SERVER_v789_NAICS_PUBLIC - the public NAICS lookup must sit above the
+// staff-only requireAuth mount on "/api/v1/bi" (it used to be mounted after
+// it, so every anonymous lookup got 401). Rate limited per client IP.
+const naicsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: rateLimitKeyFromRequest,
+});
+app.use("/api/v1/bi/naics", naicsLimiter);
+app.use("/api/v1/bi", biCors, biNaicsRoutes); // public NAICS lookup
+
 // Authenticated BI endpoints — every BI route lives under /api/v1/bi
 app.use("/api/v1/bi", biCors, biRateLimiter, enforceBIPrefix, requireAuth, biRoutes);
 // BI_SERVER_BLOCK_v262_CARRIER_PATH_E2E_FIX_v3 — Removed the duplicate
@@ -405,6 +346,8 @@ app.use("/api/v1/bi/commissions", requireAuth, biCommissionRoutes);
 // BF-portal calls /api/v1/bi/crm/contacts and friends; mount at /api/v1/bi
 // so the absolute URL matches the router's path.
 app.use("/api/v1/bi", requireAuth, biCrmRoutes);
+app.use("/api/v1/bi", requireAuth, biCompanyActivityRoutes); // BI_SERVER_v789 [89] staff-only per route
+app.use("/api/v1/bi", requireAuth, biContactMergeRoutes); // BI_SERVER_v789 [90] staff-only per route
 app.use("/api/v1/bi", requireAuth, biContactAnalyticsRoutes); // BI_SERVER_CONTACT_ANALYTICS_v271
 // BI_EMAIL_ASSET_UPLOAD_v1 - email clients fetch image assets without bearer authentication.
 // BI_SERVER_BLOCK_BI_ROUND8_MARKETING_v1
@@ -448,7 +391,6 @@ app.use("/api/v1/bi/applications/:id/notes", requireAuth, biNotesRoutes);
 // BI_PGI_ALIGNMENT_v56
 app.use("/api/v1/bi", requireAuth, biAdminLenderRoutes);
 app.use("/api/v1", biContactFormRoutes);  // public — no auth
-app.use("/api/v1/bi", biCors, biNaicsRoutes); // public NAICS lookup
 
 app.use(errorHandler);
 
@@ -464,6 +406,40 @@ function bootstrapDeadline<T>(work: Promise<T>): Promise<T> {
       setTimeout(() => reject(new Error("bootstrap deadline exceeded")), BOOTSTRAP_TIMEOUT_MS),
     ),
   ]);
+}
+
+// BI_SERVER_v789_PGI_MODE_LOG - matches pgiAdapter.ts: USE_PGI_STUB unset with
+// NODE_ENV=production means STUB=false, i.e. live carrier calls.
+export const PGI_STUB_UNSET_IN_PRODUCTION_WARNING =
+  "[v375] WARN: USE_PGI_STUB is unset in production. pgiAdapter runs in LIVE mode " +
+  "(real PGI API at PGI_BASE_URL, needs PGI_API_KEY). Set USE_PGI_STUB=true for stub responses, " +
+  "or USE_PGI_STUB=false to make live mode explicit and silence this warning.";
+
+/**
+ * Boot-time PGI mode check (v375 matrix, production only):
+ *   USE_PGI_STUB=true                       -> warn, stub responses
+ *   USE_PGI_STUB unset                      -> warn, pgiAdapter runs LIVE
+ *   USE_PGI_STUB=false, PGI creds missing   -> fatal (exit 1)
+ *   USE_PGI_STUB=false, PGI creds present   -> nothing
+ */
+export function pgiBootCheck(e: NodeJS.ProcessEnv): { warn?: string; fatal?: string } {
+  if (e.NODE_ENV !== "production") return {};
+  if (e.USE_PGI_STUB === "true") {
+    return {
+      warn:
+        "[v375] WARN: USE_PGI_STUB=true in production - stub responses active. " +
+        "OK for launch testing; set USE_PGI_STUB=false when ready to use the real PGI carrier.",
+    };
+  }
+  if (e.USE_PGI_STUB !== "false") return { warn: PGI_STUB_UNSET_IN_PRODUCTION_WARNING };
+  if (!e.PGI_API_KEY || !e.PGI_BASE_URL) {
+    return {
+      fatal:
+        "[v375] FATAL: USE_PGI_STUB=false but PGI_API_KEY and/or PGI_BASE_URL is missing. " +
+        "Either set the carrier credentials, or set USE_PGI_STUB=true to use stub responses.",
+    };
+  }
+  return {};
 }
 
 export async function bootstrap() {
@@ -484,36 +460,17 @@ async function bootstrapInner() {
   // the container every ~10-20 min, OTP intermittently went "Load
   // failed" because requests hit a dead bi-server between restarts.
   // Post-fix matrix:
-  //   USE_PGI_STUB=true   in prod → WARN, boot continues (test mode)
-  //   USE_PGI_STUB unset  in prod → WARN, boot continues (assume stub)
-  //   USE_PGI_STUB=false  in prod, missing PGI creds → FATAL, exit
-  //   USE_PGI_STUB=false  in prod, creds present → boot continues (real PGI)
-  if (process.env.NODE_ENV === "production") {
-    const stubIsOn = process.env.USE_PGI_STUB === "true";
-    const stubIsExplicitlyOff = process.env.USE_PGI_STUB === "false";
-    if (stubIsOn) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        "[v375] WARN: USE_PGI_STUB=true in production — stub responses active. " +
-        "OK for launch testing; set USE_PGI_STUB=false when ready to use the real PGI carrier.",
-      );
-    } else if (!stubIsExplicitlyOff) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        "[v375] WARN: USE_PGI_STUB is unset in production. Treating as stub mode for safety. " +
-        "Set USE_PGI_STUB=true or USE_PGI_STUB=false explicitly to silence this warning.",
-      );
-    } else {
-      // USE_PGI_STUB=false → real PGI carrier required. Credentials are mandatory.
-      if (!process.env.PGI_API_KEY || !process.env.PGI_BASE_URL) {
-        // eslint-disable-next-line no-console
-        console.error(
-          "[v375] FATAL: USE_PGI_STUB=false but PGI_API_KEY and/or PGI_BASE_URL is missing. " +
-          "Either set the carrier credentials, or set USE_PGI_STUB=true to use stub responses.",
-        );
-        process.exit(1);
-      }
-    }
+  //   USE_PGI_STUB=true   in prod -> WARN, boot continues (test mode)
+  //   USE_PGI_STUB unset  in prod -> WARN, boot continues (pgiAdapter: LIVE mode)
+  //   USE_PGI_STUB=false  in prod, missing PGI creds -> FATAL, exit
+  //   USE_PGI_STUB=false  in prod, creds present -> boot continues (real PGI)
+  const pgiCheck = pgiBootCheck(process.env);
+  // eslint-disable-next-line no-console
+  if (pgiCheck.warn) console.warn(pgiCheck.warn);
+  if (pgiCheck.fatal) {
+    // eslint-disable-next-line no-console
+    console.error(pgiCheck.fatal);
+    process.exit(1);
   }
   // BI_BOOT_FIX_v61 — fast DB probe. If the DB isn't reachable in 5s, skip
   // migrations entirely and log loudly. The HTTP server still starts so

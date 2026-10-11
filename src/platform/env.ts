@@ -6,7 +6,7 @@
 //
 // The new behavior:
 //   - Optional vars stay optional.
-//   - Critical vars (DATABASE_URL, JWT_SECRET, JWT_REFRESH_SECRET) still
+//   - Critical vars (DATABASE_URL, JWT_SECRET) still
 //     fail loudly — without them the server can't do its job — but the
 //     failure is logged with a clear message and process.exit(1) follows
 //     so Azure shows a useful exit reason instead of a stack trace mid-import.
@@ -21,7 +21,6 @@ const envSchema = z.object({
   PORT: z.string().default("8080"),
   DATABASE_URL: z.string().optional(),
   JWT_SECRET: z.string().optional(),
-  JWT_REFRESH_SECRET: z.string().optional(),
   // OPTIONAL — DO NOT BLOCK STARTUP
   OPENAI_API_KEY: z.string().optional(),
   TWILIO_ACCOUNT_SID: z.string().optional(),
@@ -42,7 +41,12 @@ const envSchema = z.object({
   SENDGRID_API_KEY: z.string().optional(),
   SENDGRID_FROM: z.string().optional(),
   USE_PGI_STUB: z.string().optional(),
+  // BI_SERVER_v789_TOKENS - BI_STAFF_JWT_SECRET is only an extra accepted
+  // staff-token secret; BI_SERVICE_JWT_SECRET (when set) signs/verifies the
+  // service tokens exchanged with BF-Server.
   BI_STAFF_JWT_SECRET: z.string().optional(),
+  BI_SERVICE_JWT_SECRET: z.string().optional(),
+  METRICS_TOKEN: z.string().optional(),
   ALLOW_DEV_OTP: z.string().optional(),
   APOLLO_API_KEY: z.string().optional(),
   APOLLO_SYNC_ENABLED: z.string().optional(),
@@ -78,7 +82,7 @@ export const env: Env = parseEnvSoft();
 const criticals: Array<[string, string | undefined]> = [
   ["DATABASE_URL", env.DATABASE_URL],
   ["JWT_SECRET", env.JWT_SECRET],
-  ["JWT_REFRESH_SECRET", env.JWT_REFRESH_SECRET],
+  // BI_SERVER_v789 - JWT_REFRESH_SECRET removed: nothing in BI-Server reads it.
 ];
 for (const [name, value] of criticals) {
   if (!value) {

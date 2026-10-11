@@ -1,9 +1,11 @@
 // BI_SERVER_BLOCK_BI_ROUND8_DETAIL_ENDPOINTS_v1
 // Application detail tab data sources + nested document accept/reject.
 // Mounted at /api/v1/bi/applications by server.ts.
+import { logHiddenError } from "../platform/safeError";
 import { Router, type Request, type Response } from "express";
 import { pool } from "../db";
 import { logger } from "../platform/logger";
+import { recordCarrierSubmissionFailed } from "../services/biCarrierEvents"; // BI_SERVER_v789_CARRIER_EVENTS
 
 import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
 const router: Router = Router();
@@ -130,24 +132,34 @@ async function acceptDocumentLogic(req: Request, res: Response, idParam: string,
           const { submitLenderApplicationToCarrier } = await import("../services/lenderCarrierSubmit");
           const snap = await pool.query(`SELECT * FROM bi_applications WHERE id=$1 LIMIT 1`, [appId]);
           const r = snap.rows[0];
-          await submitLenderApplicationToCarrier({
-            applicationId: appId,
-            publicId: r.application_code,
-            isDemo: Boolean(r.is_demo),
-            guarantor_name: r.guarantor_name,
-            guarantor_email: r.guarantor_email,
-            business_name: r.business_name,
-            lender_name: r.lender_name,
-            rowSnapshot: r,
-            formData: r.core_inputs ?? {},
-            declarations: r.declarations ?? {},
-          }).catch((err: Error) => {
-            console.warn("[v391] auto-submit failed", err.message);
-          });
+          // BI_SERVER_v789_CARRIER_EVENTS - submitLenderApplicationToCarrier
+          // reports a carrier failure in pgi_error (it does not throw); either
+          // way the failure is logged and recorded as carrier_submission_failed.
+          try {
+            const sub = await submitLenderApplicationToCarrier({
+              applicationId: appId,
+              publicId: r.application_code,
+              isDemo: Boolean(r.is_demo),
+              guarantor_name: r.guarantor_name,
+              guarantor_email: r.guarantor_email,
+              business_name: r.business_name,
+              lender_name: r.lender_name,
+              rowSnapshot: r,
+              formData: r.core_inputs ?? {},
+              declarations: r.declarations ?? {},
+            });
+            if (sub?.pgi_error) {
+              logger.warn({ appId }, "[v391] auto-submit failed at the carrier");
+              await recordCarrierSubmissionFailed(appId, new Error(sub.pgi_error), { path: "auto_submit_on_last_accept" });
+            }
+          } catch (err) {
+            logger.warn({ err, appId }, "[v391] auto-submit failed");
+            await recordCarrierSubmissionFailed(appId, err, { path: "auto_submit_on_last_accept" });
+          }
         }
       }
     } catch (autoSubmitErr) {
-      console.warn("[v391] auto-submit check failed", (autoSubmitErr as Error).message);
+      logger.warn({ err: autoSubmitErr, appId }, "[v391] auto-submit check failed");
     }
 
     const counts = await pool.query<{ pending: string; accepted: string; total: string }>(
@@ -200,54 +212,16 @@ async function acceptDocumentLogic(req: Request, res: Response, idParam: string,
       // Mirrors the v359 backfill from biDocumentRoutes.ts:258 so this
       // duplicate handler behaves identically. (See Bug #22 in Test #1.)
       if (doc.source_type === "public") {
-        const { submitApplicationToPGI } = await import("../services/biPgiSubmissionService");
+        const { submitApplicationToPGI, flushAcceptedDocsAfterSubmit } = await import("../services/biPgiSubmissionService");
         try {
           const result = await submitApplicationToPGI(appId);
           autoSubmittedToPgi = true;
           finalStatus = "submitted";
 
-          // v359 backfill — flush previously-uploaded docs to PGI now that
-          // pgi_application_id exists.
-          try {
-            const { pgiUploadDocument } = await import("../services/pgiAdapter");
-            const pendingDocs = await pool.query<{
-              id: string; doc_type: string; original_filename: string;
-              mime_type: string; storage_key: string;
-            }>(
-              `SELECT id, doc_type, original_filename, mime_type, storage_key
-                 FROM bi_documents
-                WHERE application_id = $1
-                  AND review_status = 'accepted'
-                  AND pgi_document_id IS NULL
-                  AND purged_at IS NULL
-                ORDER BY uploaded_at`,
-              [appId]
-            );
-            if (pendingDocs.rows.length > 0) {
-              const { getStorage } = await import("../lib/storage");
-              const store = getStorage();
-              const ALLOWED = ["loan_agreement","profit_loss","balance_sheet","ar_aging","ap_aging","founder_cv","financial_forecast"];
-              for (const d of pendingDocs.rows) {
-                if (!ALLOWED.includes(d.doc_type)) continue;
-                try {
-                  const blob = await store.get(d.storage_key);
-                  if (!blob?.buffer) throw new Error("blob not found");
-                  const fwd = await pgiUploadDocument({
-                    pgiApplicationId: result.externalId,
-                    docType: d.doc_type as any,
-                    filename: d.original_filename,
-                    buffer: blob.buffer,
-                    mimeType: d.mime_type || blob.contentType || "application/octet-stream",
-                  });
-                  await pool.query(`UPDATE bi_documents SET pgi_document_id = $1, forwarded_to_carrier_at = NOW() WHERE id = $2`, [fwd.document_id, d.id]);
-                } catch (e) {
-                  console.warn("[v373] backfill doc forward failed", { doc_id: d.id, error: (e as Error).message });
-                }
-              }
-            }
-          } catch (e) {
-            console.warn("[v373] post-submit doc flush failed", { app_id: appId, error: (e as Error).message });
-          }
+          // v359 backfill / BI_SERVER_v789_DOC_FLUSH - flush previously-uploaded
+          // docs to PGI now that pgi_application_id exists. Shared helper
+          // (orders by bi_documents.created_at); never throws.
+          await flushAcceptedDocsAfterSubmit(appId, result.externalId);
           await pool.query(
             `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
                   VALUES($1, 'system', (SELECT id FROM bi_users WHERE id = $2), 'auto_submitted_to_pgi', $3, $4::jsonb)`,
@@ -263,17 +237,19 @@ async function acceptDocumentLogic(req: Request, res: Response, idParam: string,
             ],
           );
         } catch (err) {
-          pgiSubmitError = err instanceof Error ? err.message : "PGI submission failed";
-          logger.warn({ err, appId }, "bi.applications.accept.auto_pgi_failed");
+          // BI_SERVER_v789_NO_ERR_MESSAGE - a code in the response, the detail in
+          // the log; submitApplicationToPGI already wrote carrier_submission_failed.
+          pgiSubmitError = "PGI_SUBMIT_FAILED";
+          logHiddenError(req, err, "PGI_SUBMIT_FAILED");
           await pool.query(
             `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
                   VALUES($1, 'system', (SELECT id FROM bi_users WHERE id = $2), 'auto_submit_to_pgi_failed', $3, $4::jsonb)`,
             [
               appId, userId,
-              `Auto-PGI submission failed: ${pgiSubmitError}. Manual retry available.`,
-              JSON.stringify({ error: pgiSubmitError }),
+              `Auto-PGI submission failed. Manual retry available.`,
+              JSON.stringify({ error: pgiSubmitError, requestId: (req as { id?: unknown }).id ?? null }),
             ],
-          ).catch(() => {});
+          ).catch((activityErr) => { logger.warn({ err: activityErr, appId }, "auto_submit_failed_activity_insert_failed"); });
         }
       }
     }
@@ -781,7 +757,7 @@ router.post("/:id/products/:productId/send-to-carrier", requireStaffOrAdmin, asy
     return res.json(r);
   } catch (err) {
     logger.error?.({ err: (err as Error).message }, "[send-to-carrier] failed");
-    return res.status(502).json({ error: "send_failed", message: (err as Error).message });
+    return res.status(502).json({ error: "send_failed", requestId: logHiddenError(req, err, "send_failed") });
   }
 });
 

@@ -1,3 +1,4 @@
+import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 // BI_SERVER_BLOCK_v254_CRM_CONTACTS_ENHANCED_v1
 import { logger } from "../platform/logger";
@@ -7,6 +8,7 @@ import { requireAuth } from "../platform/auth";
 
 import { badRequest, ok } from "../utils/apiResponse";
 import { hasCapability } from "../platform/capabilities";
+import { redactActivityRows } from "../lib/crmActivityInput";
 import { suppressContacts, suppressCompanies } from "../services/biCrmSuppression"; // BI_SERVER_BLOCK_v820b_CRM_DELETE_SUPPRESSION
 
 const router = Router();
@@ -55,12 +57,12 @@ router.get("/crm/contacts/:id/engagement", async (req, res) => {
     );
     return res.json({ events: r.rows });
   } catch (e) {
-    return res.status(500).json({ error: "engagement_query_failed", message: e instanceof Error ? e.message : String(e) });
+    return res.status(500).json({ error: "engagement_query_failed", requestId: logHiddenError(req, e, "engagement_query_failed") });
   }
 });
 
 // BI_SERVER_BLOCK_v349_TAG_LIST — distinct tags in use, for the CRM "View by" filter.
-router.get("/crm/contacts/tag-list", async (_req, res) => {
+router.get("/crm/contacts/tag-list", async (req, res) => {
   try {
     const r = await pool.query(
       `SELECT DISTINCT lower(t) AS tag
@@ -70,7 +72,7 @@ router.get("/crm/contacts/tag-list", async (_req, res) => {
     );
     return res.json({ tags: r.rows.map((row: { tag: string }) => row.tag) });
   } catch (e) {
-    return res.status(500).json({ error: "tag_list_failed", message: e instanceof Error ? e.message : String(e) });
+    return res.status(500).json({ error: "tag_list_failed", requestId: logHiddenError(req, e, "tag_list_failed") });
   }
 });
 
@@ -354,8 +356,9 @@ router.delete("/crm/contacts/:id", async (req, res) => {
   } catch (err: any) {
     // BI_CRM_DELETE_FIX_v1 - a bare delete_failed hid a foreign-key violation
     // for months. Return the Postgres code so the blocking table is nameable.
+    // BI_SERVER_v789_NO_ERR_MESSAGE - constraint names stay in the log; the client gets the request id.
     logger.error({ err, id, code: err?.code, constraint: err?.constraint }, "bi_crm_contact_delete_failed");
-    return res.status(500).json({ error: "delete_failed", detail: err?.code ?? null, constraint: err?.constraint ?? null });
+    return res.status(500).json({ error: "delete_failed", detail: err?.code ?? null, requestId: req.id });
   }
 });
 
@@ -431,7 +434,9 @@ router.post("/crm/contacts/:id/sms", async (req, res) => {
     sid = r.sid;
     smsOk = true;
   } catch (err: any) {
-    smsError = err?.message ?? "sms_failed";
+    // BI_SERVER_v789_NO_ERR_MESSAGE - the provider text is logged, never stored in meta
+    // (the activity/timeline GETs return meta to the portal).
+    smsError = "sms_failed";
     logger.error({ err, to: contactPhone }, "bi_crm_contact_sms_failed");
   }
 
@@ -453,7 +458,7 @@ router.post("/crm/contacts/:id/sms", async (req, res) => {
   }
 
   if (!smsOk) {
-    return res.status(502).json({ error: "sms_failed", detail: smsError });
+    return res.status(502).json({ error: "sms_failed", requestId: req.id }); // v789: provider detail is logged above, not returned
   }
   return res.json({ ok: true, sid });
 });
@@ -772,7 +777,7 @@ router.get("/crm/contacts/:id/timeline", async (req, res) => {
         LIMIT 200`,
       [id],
     );
-    return res.json({ events: r.rows });
+    return res.json({ events: redactActivityRows(r.rows) });
   } catch (err) {
     logger.error({ err }, "bi.contacts.timeline.failed");
     return res.status(500).json({ error: { code: "internal", message: "Failed to load timeline" } });
@@ -799,7 +804,7 @@ router.get("/crm/contacts/:id/activity", async (req, res) => {
         ORDER BY a.occurred_at DESC`,
       [req.params.id],
     );
-    return res.json({ items: r.rows });
+    return res.json({ items: redactActivityRows(r.rows) });
   } catch (err) {
     logger.error({ err }, "bi.contacts.activity.failed");
     return res.status(500).json({ error: { code: "internal", message: "Failed to load activity" } });

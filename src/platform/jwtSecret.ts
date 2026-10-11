@@ -18,9 +18,18 @@ export function getJwtSecret(): string {
   return secret;
 }
 
-// Staff tokens may be signed with a dedicated secret; otherwise the shared one.
+// BI_SERVER_v789_TOKENS - staff tokens are always signed with JWT_SECRET and
+// JWT_SECRET is always accepted. BI_STAFF_JWT_SECRET, when set, is only an
+// additional accepted verification secret (it never replaces JWT_SECRET).
 export function getStaffJwtSecret(): string {
-  return process.env.BI_STAFF_JWT_SECRET || getJwtSecret();
+  return getJwtSecret();
+}
+
+export function getStaffVerifySecrets(): string[] {
+  const out = [getJwtSecret()];
+  const extra = process.env.BI_STAFF_JWT_SECRET;
+  if (extra && extra !== out[0]) out.push(extra);
+  return out;
 }
 
 export function assertJwtSecretAtStartup(): void {

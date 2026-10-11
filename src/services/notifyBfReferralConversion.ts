@@ -5,7 +5,7 @@
 // ({ kind:"service", source:"bi-server" }) signed with the shared JWT_SECRET -
 // the same pattern BF uses to call bi-server, reversed. Best-effort: never
 // throws; the caller wraps it and swallows failures.
-import jwt from "jsonwebtoken";
+import { signServiceTokenForBf } from "../platform/serviceTokens";
 import { env } from "../platform/env";
 
 const BF_SERVER_URL = (
@@ -17,14 +17,12 @@ export async function notifyBfReferralConversion(input: {
   externalId: string;
   premium: number | null;
 }): Promise<{ ok: boolean; status?: number; error?: string }> {
-  const secret = process.env.JWT_SECRET || env.JWT_SECRET || "";
-  if (!secret) return { ok: false, error: "no_jwt_secret" };
+  if (!process.env.BI_SERVICE_JWT_SECRET && !process.env.JWT_SECRET) return { ok: false, error: "no_jwt_secret" };
   const refCode = String(input.refCode || "").trim();
   if (!refCode) return { ok: false, error: "no_ref_code" };
   try {
-    const token = jwt.sign({ kind: "service", source: "bi-server" }, secret, {
-      expiresIn: "5m",
-    });
+    // BI_SERVER_v789_TOKENS - aud "bf-server", BI_SERVICE_JWT_SECRET when set.
+    const token = signServiceTokenForBf({}, "5m");
     const res = await fetch(`${BF_SERVER_URL}/api/referrals-ext/from-bi`, {
       method: "POST",
       headers: {

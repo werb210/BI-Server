@@ -65,6 +65,10 @@ jobs:
       - name: Live schema drift
         run: npm run check:schema
 
+      # BI_SERVER_BLOCK_v789_SOURCE_GREP_RATCHET - tests that assert on source text may not grow.
+      - name: Source-grep test ratchet
+        run: npm run check:source-grep
+
       - name: Unit tests
         run: npm run test:unit
 

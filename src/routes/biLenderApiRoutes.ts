@@ -1,6 +1,7 @@
+import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 import crypto from "node:crypto";
-import jwt from "jsonwebtoken";
+import { signBiToken, verifyBiToken } from "../platform/serviceTokens";
 import rateLimit from "express-rate-limit"; // BI_SERVER_BLOCK_v236_RATE_LIMIT_AND_ADVISORY_LOCK_v1
 import { notifyStaff } from "../services/staffNotifyService"; // BI_SERVER_BLOCK_v235_LIVE_KEY_GATE_v1
 import { pool } from "../db";
@@ -19,6 +20,10 @@ import { getStorage } from "../lib/storage";
 import { validatePgiSubmissionV2 } from "../lib/validation/pgiFields";
 
 import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
+import { ensureLenderActive, lenderContactIdFromClaims } from "../services/lenderActiveCache";
+import { lenderIdempotency, LENDER_APPLICATION_CREATE_ROUTE } from "../services/lenderIdempotency";
+import { sniffFileType, ALLOWED_UPLOAD_EXTS } from "../lib/fileSniff";
+import { logger } from "../platform/logger";
 const router = Router();
 
 // BI_SERVER_BLOCK_BI_ROUND7_LENDER_DOCS_v1
@@ -71,31 +76,40 @@ async function authLender(req: any, res: any, next: any) {
 
   // Try lender JWT first — JWTs have exactly two dots; API keys do not.
   if (bearerToken && bearerToken.split(".").length === 3) {
-    try {
-      const claims: any = jwt.verify(bearerToken, getJwtSecret());
-      if (claims && claims.kind === "lender" && claims.id) {
-        req.lenderId = claims.id;
-        if (claims.user_id || claims.contactId) req.lenderUserId = String(claims.user_id || claims.contactId);
-        // BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1 — surface is_demo
-        // claim so per-route handlers can scope pipeline queries to the
-        // lender's current session mode. Demo sessions see ONLY demo
-        // apps; real sessions never see demo apps.
-        req.isDemo = claims.is_demo === true;
-        req.lenderIsDemo = Boolean(claims.is_demo);
-        return next();
-      }
-    } catch {
-      // fall through to API key check
+    const claims: any = verifyBiToken(bearerToken, getJwtSecret());
+    if (claims && claims.kind === "lender" && claims.id) {
+      const contactId = lenderContactIdFromClaims(claims);
+      // BI_SERVER_v789_LENDER_ACTIVE - reject a deactivated lender or login
+      // contact (30-second cache, see services/lenderActiveCache).
+      if (!(await ensureLenderActive(req, res, String(claims.id), contactId))) return;
+      req.lenderId = claims.id;
+      if (contactId) req.lenderUserId = contactId;
+      // BI_SERVER_BLOCK_v242_PIPELINE_AND_REMINDERS_v1 - surface is_demo
+      // claim so per-route handlers can scope pipeline queries to the
+      // lender's current session mode. Demo sessions see ONLY demo
+      // apps; real sessions never see demo apps.
+      req.isDemo = claims.is_demo === true;
+      req.lenderIsDemo = Boolean(claims.is_demo);
+      req.lenderAuth = "jwt";
+      return next();
     }
+    // not a lender JWT: fall through to the API key check
   }
 
   // Fall back to API key (sha256 lookup).
   const hash = crypto.createHash("sha256").update(candidate).digest("hex");
-  const r = await pool.query(`SELECT lender_id FROM bi_lender_api_keys WHERE key_hash=$1 AND is_active=TRUE LIMIT 1`, [hash]);
+  const r = await pool.query(`SELECT lender_id, key_prefix FROM bi_lender_api_keys WHERE key_hash=$1 AND is_active=TRUE LIMIT 1`, [hash]);
   const row = r.rows[0];
   if (!row) return res.status(401).json({ error: "invalid_api_key" });
+  // BI_SERVER_v789_LENDER_ACTIVE - a deactivated lender's keys stop working too.
+  if (!(await ensureLenderActive(req, res, String(row.lender_id), null))) return;
   await pool.query(`UPDATE bi_lender_api_keys SET last_used_at=NOW() WHERE key_hash=$1`, [hash]).catch(loggedFallback("biLenderApiRoutes", undefined));
   req.lenderId = row.lender_id;
+  req.lenderAuth = "api_key";
+  // BI_SERVER_v789_BK_TEST_STUB - examples/lender-api/README.md: a bk_test_
+  // key is a sandbox key and its submissions always take the stub carrier path.
+  const prefix = String(row.key_prefix || candidate);
+  req.lenderKeyMode = prefix.startsWith("bk_test_") ? "test" : "live";
   next();
 }
 
@@ -138,7 +152,7 @@ function normalizeLenderBody(input: any): { flat: Record<string, any>; declarati
   return { flat: { ...input }, declarations: {}, co_guarantors: [], shape: "legacy" };
 }
 
-router.post("/lender/applications", authLender, lenderRateLimit, /* v236 */ async (req: any, res) => {
+router.post("/lender/applications", authLender, lenderRateLimit, /* v236 */ lenderIdempotency(LENDER_APPLICATION_CREATE_ROUTE, (req: any) => req.lenderId), async (req: any, res) => {
   const norm = normalizeLenderBody(req.body ?? {});
   const b = norm.flat;
   // BI_SERVER_BLOCK_v362_LEGACY_SUNSET_AND_STUB_GUARD_v1
@@ -272,7 +286,12 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* v236 */ asyn
     const lr = await pool.query(`SELECT company_name, is_demo FROM bi_lenders WHERE id = $1 LIMIT 1`, [req.lenderId]);
     lenderCompanyName = (lr.rows[0]?.company_name as string | undefined) || null;
     lenderIsDemo = lr.rows[0]?.is_demo === true;
-  } catch {}
+  } catch (err) {
+    logger.warn({ err, lenderId: req.lenderId }, "lender_api_create_lender_lookup_failed");
+  }
+  // BI_SERVER_v789_DEMO_STUB - demo lenders, demo sessions and bk_test_
+  // sandbox keys always take the stub carrier path.
+  const carrierIsDemo = lenderIsDemo || req.lenderIsDemo === true || req.lenderKeyMode === "test";
   // BI_SERVER_BLOCK_v358_CARRIER_ENVELOPE_FIX_v1
   const carrierRowSnapshot = { id, public_id: publicId, guarantor_name: b.guarantor_name, guarantor_email: b.guarantor_email, business_name: b.business_name, lender_name: lenderCompanyName ?? b.lender_name ?? undefined, country: b.country, naics_code: b.naics_code, formation_date: b.formation_date, loan_amount: b.loan_amount, pgi_limit: b.pgi_limit, annual_revenue: b.annual_revenue, ebitda: b.ebitda, total_debt: b.total_debt, monthly_debt_service: b.monthly_debt_service, collateral_value: b.collateral_value, enterprise_value: b.enterprise_value, q4_date_of_birth: b.q4_date_of_birth, q7_email: b.q7_email || b.guarantor_email, q5_residential_address: b.q5_residential_address, q_ca_id_type: b.q_ca_id_type, q_ca_id_number: b.q_ca_id_number, q17_business_operating_address: b.q17_business_operating_address, q_business_province: b.q_business_province, q_ca_loan_type: b.q_ca_loan_type, form_data: fullFormData, declarations: norm.declarations || {} };
   // BI_SERVER_BLOCK_v370_DEDUPE_LENDER_SUBMIT_v1
@@ -280,7 +299,7 @@ router.post("/lender/applications", authLender, lenderRateLimit, /* v236 */ asyn
   const carrierResult = await submitLenderApplicationToCarrier({
     applicationId: id,
     publicId,
-    isDemo: lenderIsDemo,
+    isDemo: carrierIsDemo,
     guarantor_name: b.guarantor_name,
     guarantor_email: b.guarantor_email || b.q7_email,
     business_name: b.business_name,
@@ -402,10 +421,10 @@ async function demoSessionHandler(req: any, res: any) {
   const secret = process.env.JWT_SECRET || process.env.BI_JWT_SECRET;
   if (!secret) return res.status(500).json({ error: "jwt_secret_missing" });
 
-  const token = jwt.sign(
+  const token = signBiToken(
     { kind: "lender", id: demo.id, is_demo: true, originating_lender_id: req.lenderId },
+    "4h",
     secret,
-    { expiresIn: "4h" }
   );
 
   return res.json({
@@ -429,7 +448,7 @@ router.post("/lender/otp/verify", async (req, res) => {
     const email = String(emailRaw).trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "invalid_email" });
     const vr = await verifyEmailOtpSafe(email, code);
-    if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+    if (!vr.ok) { console.warn("[otp] verify failed", { error: vr.error }); return res.status(502).json({ error: "otp_verify_failed" }); }
     if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
 
     let row: any;
@@ -443,10 +462,10 @@ router.post("/lender/otp/verify", async (req, res) => {
     if (!row) return res.status(404).json({ error: "lender_not_found" });
 
     const secret = getJwtSecret();
-    const token = jwt.sign(
+    const token = signBiToken(
       { kind: "lender", id: row.lender_id, contactId: row.contact_id, role: row.role },
+      "12h",
       secret,
-      { expiresIn: "12h" },
     );
     return res.json({ token, channel: "email", lender: { id: row.lender_id, company_name: row.company_name }, user: { id: row.contact_id, full_name: row.full_name, email: row.email, role: row.role } });
   }
@@ -461,9 +480,9 @@ router.post("/lender/otp/verify", async (req, res) => {
   if (!row) return res.status(401).json({ error: "phone_not_registered" });
   // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1
   const vr = await verifyOtpSafe(phone, code);
-  if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+  if (!vr.ok) { console.warn("[otp] verify failed", { error: vr.error }); return res.status(502).json({ error: "otp_verify_failed" }); }
   if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
-  const token = jwt.sign({ kind: "lender", id: row.lender_id, user_id: row.contact_id }, getJwtSecret(), { expiresIn: "7d" });
+  const token = signBiToken({ kind: "lender", id: row.lender_id, user_id: row.contact_id }, "7d", getJwtSecret());
   res.json({ token, lender: { id: row.lender_id, company_name: row.company_name }, user: { id: row.contact_id, full_name: row.full_name, email: row.email, role: row.role } });
 });
 
@@ -619,11 +638,11 @@ router.post("/lender/api-keys/request-live", authLender, lenderRateLimit, /* BI_
     `INSERT INTO bi_activity (application_id, actor_type, event_type, summary, meta)
      VALUES (NULL, 'lender', 'live_keys_requested', $1, $2::jsonb)`,
     [`${r.rows[0].company_name} requested live API key access`, JSON.stringify({ lender_id: req.lenderId, contact_phone: r.rows[0].contact_phone_e164 })],
-  ).catch(() => {});
+  ).catch((err) => { logger.warn({ err, lenderId: req.lenderId }, "live_keys_requested_activity_failed"); });
   void notifyStaff(
     "new_application",
     `BI live-key request: ${r.rows[0].company_name} (${r.rows[0].contact_full_name || "no contact"}). Approve in BF-portal Lender Management.`,
-  ).catch(() => {});
+  ).catch((err) => { logger.warn({ err }, "live_keys_requested_notify_failed"); });
   return res.json({ ok: true, requested: true });
 });
 
@@ -703,19 +722,28 @@ router.post(
     const files = (req.files as Express.Multer.File[]) ?? [];
     if (files.length === 0) return res.status(400).json({ error: "no_files" });
 
-    const rawDocTypesForFiles = req.body?.doc_types;
-    const docTypes = Array.isArray(rawDocTypesForFiles)
-      ? docTypesRaw
-      : typeof rawDocTypesForFiles === "string" ? [rawDocTypesForFiles] : [];
+    const docTypes: unknown[] = docTypesRaw;
+
+    // BI_SERVER_v789_LENDER_UPLOAD_ALLOWLIST - every file needs an allowed
+    // doc type, an allowed extension and content whose first bytes match that
+    // extension; all files are checked before any is stored.
+    const plan: Array<{ file: Express.Multer.File; docType: string }> = [];
+    for (const [idx, file] of files.entries()) {
+      const docType = typeof docTypes[idx] === "string" ? String(docTypes[idx]).trim() : "";
+      if (!docType || !ALLOWED_DOC_TYPES.has(docType)) {
+        return res.status(400).json({ error: "invalid_doc_type", invalid_value: docType || null, file_index: idx, allowed: Array.from(ALLOWED_DOC_TYPES) });
+      }
+      const sniff = sniffFileType(file.buffer, file.originalname);
+      if (!sniff.ok) {
+        return res.status(400).json({ error: "invalid_file_type", reason: sniff.reason, file_index: idx, filename: file.originalname, allowed_extensions: ALLOWED_UPLOAD_EXTS });
+      }
+      plan.push({ file, docType });
+    }
 
     const store = getStorage();
     const created: Array<{ id: string; doc_type: string; filename: string }> = [];
 
-    for (const [idx, file] of files.entries()) {
-      const docType = typeof docTypes[idx] === "string" && docTypes[idx].trim()
-        ? docTypes[idx].trim()
-        : "other";
-
+    for (const { file, docType } of plan) {
       let put;
       try {
         put = await store.put({
@@ -727,12 +755,14 @@ router.post(
       } catch (err) {
         return res.status(502).json({
           error: "storage_failed",
-          detail: String((err as Error)?.message ?? err),
+          requestId: logHiddenError(req, err, "storage_failed"),
         });
       }
 
       let inserted;
       try {
+        // BI_SERVER_v789_NO_UPLOADED_AT - bi_documents has no uploaded_at
+        // column; created_at is refreshed on re-upload, as in the public upload.
         inserted = await pool.query(
           `INSERT INTO bi_documents
              (application_id, doc_type, original_filename, storage_key,
@@ -745,8 +775,12 @@ router.post(
              mime_type = EXCLUDED.mime_type,
              bytes = EXCLUDED.bytes,
              blob_url = EXCLUDED.blob_url,
+             blob_name = EXCLUDED.blob_name,
              storage_key = EXCLUDED.storage_key,
-             uploaded_at = NOW(),
+             sha256_hash = EXCLUDED.sha256_hash,
+             uploaded_by_actor = EXCLUDED.uploaded_by_actor,
+             uploaded_by_user_id = EXCLUDED.uploaded_by_user_id,
+             created_at = NOW(),
              review_status = 'pending',
              pgi_document_id = NULL,
              forwarded_to_carrier_at = NULL
@@ -758,10 +792,10 @@ router.post(
           ],
         );
       } catch (err) {
-        return res.status(400).json({
-          error: "invalid_doc_type",
+        return res.status(500).json({
+          error: "document_save_failed",
           doc_type: docType,
-          detail: String((err as Error)?.message ?? err),
+          requestId: logHiddenError(req, err, "document_save_failed"),
         });
       }
 
@@ -773,16 +807,19 @@ router.post(
 
       // BI_SERVER_BLOCK_v359_PGI_DOC_FORWARDING_v1
       // Forward to PGI if the application has already been submitted to
-      // the carrier (pgi_application_id is set). If not, defer — the docs
+      // the carrier (pgi_application_id is set). If not, defer - the docs
       // will be flushed when staff or the auto-submit path posts the app
-      // to PGI. Tracked via bi_documents.pgi_document_id (added below).
+      // to PGI. Tracked via bi_documents.pgi_document_id.
+      // BI_SERVER_v789_DEMO_STUB - demo / bk_test_ applications (is_demo, or
+      // the DEMO_ stub id the stub carrier path writes) are never forwarded.
       try {
-        const appRow = await pool.query<{ pgi_application_id: string | null }>(
-          `SELECT pgi_application_id FROM bi_applications WHERE id = $1 LIMIT 1`,
+        const appRow = await pool.query<{ pgi_application_id: string | null; is_demo: boolean | null }>(
+          `SELECT pgi_application_id, is_demo FROM bi_applications WHERE id = $1 LIMIT 1`,
           [app.id]
         );
         const pgiAppId = appRow.rows[0]?.pgi_application_id ?? null;
-        if (pgiAppId && ["loan_agreement", "profit_loss", "balance_sheet", "ar_aging", "ap_aging", "founder_cv", "financial_forecast"].includes(docType)) {
+        const isDemoApp = appRow.rows[0]?.is_demo === true || (pgiAppId ?? "").startsWith("DEMO_");
+        if (pgiAppId && !isDemoApp && ALLOWED_DOC_TYPES.has(docType)) {
           const { pgiUploadDocument } = await import("../services/pgiAdapter");
           const fwdResult = await pgiUploadDocument({
             pgiApplicationId: pgiAppId,
@@ -794,18 +831,18 @@ router.post(
           await pool.query(
             `UPDATE bi_documents SET pgi_document_id = $1, forwarded_to_carrier_at = NOW() WHERE id = $2`,
             [fwdResult.document_id, inserted.rows[0].id]
-          ).catch((e: any) => console.warn("[v359] update bi_documents.pgi_document_id failed", { id: inserted.rows[0].id, e: e?.message }));
+          ).catch((err: unknown) => { logger.warn({ err, id: inserted.rows[0].id }, "[v359] update bi_documents.pgi_document_id failed"); });
         }
       } catch (err) {
-        console.warn("[v359] pgi_doc_forward_failed", { app_id: app.id, doc_type: docType, error: (err as Error).message });
-        // Non-fatal — doc is already in our storage. Staff can manually re-forward later.
+        logger.warn({ err, app_id: app.id, doc_type: docType }, "[v359] pgi_doc_forward_failed");
+        // Non-fatal - doc is already in our storage. Staff can manually re-forward later.
       }
 
       await pool.query(
         `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
          VALUES($1, 'lender', 'document_uploaded', $2)`,
         [app.id, `Lender uploaded document: ${file.originalname}`],
-      ).catch(() => { /* non-fatal, doc is already stored */ });
+      ).catch((err: unknown) => { logger.warn({ err, app_id: app.id }, "lender_document_uploaded_activity_failed"); });
     }
 
     return res.status(200).json({ ok: true, documents: created });

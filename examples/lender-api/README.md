@@ -31,16 +31,26 @@ HTTP/2 201
 {
   "id": "...",
   "application_code": "BI-XXXXXX",
-  "pgi_application_id": "STUB_APP_DEMO_1747...",
+  "pgi_application_id": "DEMO_XXXXXXXX",
   "status": "new_application",
   ...
 }
 ```
 
-`STUB_APP_DEMO_*` confirms the carrier call was stubbed because your
-key is a `bk_test_` sandbox key. If you see a real PGI id back, you
+A `DEMO_*` id (with `"pgi_status": "demo"`) confirms the carrier call
+was stubbed because your key is a `bk_test_` sandbox key. If you see a real PGI id back, you
 sent a live key — go check the carrier dashboard, that submission was
 real.
+
+### Safe retries: `Idempotency-Key`
+
+Send an `Idempotency-Key: <any unique string, up to 255 chars>` header on
+`POST /api/v1/lender/applications`. If you retry with the same key (for
+example after a timeout), you get the original response back (same status
+and body) and no second application is created or submitted. Only
+successful (2xx) responses are remembered, so a failed request can be
+retried with the same key. A retry that arrives while the first request
+is still running gets `409 idempotency_key_in_progress`.
 
 ---
 

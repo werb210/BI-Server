@@ -3,24 +3,12 @@ import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const lenderSrc = fs.readFileSync(path.resolve(__dirname, "../routes/biLenderApiRoutes.ts"), "utf8");
 const adapterSrc = fs.readFileSync(path.resolve(__dirname, "../services/pgiAdapter.ts"), "utf8");
 const serverSrc = fs.readFileSync(path.resolve(__dirname, "../server.ts"), "utf8");
 
-describe("v362 — legacy shape sunset", () => {
-  it("returns 410 Gone for legacy shape", () => {
-    expect(lenderSrc).toMatch(/status\(410\)\.json/);
-    expect(lenderSrc).toMatch(/error:\s*"legacy_shape_removed"/);
-  });
-  it("includes migration docs link", () => {
-    expect(lenderSrc).toMatch(/boreal\.insure\/lender\/api/);
-    expect(lenderSrc).toMatch(/openapi\.json/);
-  });
-  it("removed the old Deprecation header pretense", () => {
-    expect(lenderSrc).not.toMatch(/setHeader\("Deprecation"/);
-    expect(lenderSrc).not.toMatch(/setHeader\("Sunset"/);
-  });
-});
+// BI_SERVER_v789 - the legacy-shape sunset (410 legacy_shape_removed with the
+// docs + openapi links, no Deprecation/Sunset header) is a behaviour test now:
+// src/routes/__tests__/lenderApiCarrierAlignment.v354.test.ts.
 
 describe("v362 — STUB default is env-aware", () => {
   it("STUB is computed via IIFE that branches on NODE_ENV", () => {

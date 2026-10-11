@@ -70,21 +70,30 @@ export async function submitLenderApplicationToCarrier(input: LenderCarrierSubmi
 
   let carrierResponse: any = null;
   let pgiError: string | null = null;
+  let failureDetail: string | null = null;
   try {
     carrierResponse = await pgiSubmit(carrierRequestBody as any);
   } catch (err) {
-    pgiError = (err as Error)?.message ?? "carrier submit failed";
+    // BI_SERVER_v789_NO_ERR_MESSAGE - the carrier error text goes to the log
+    // and the staff-only bi_events row, never to the API response.
+    failureDetail = String((err as Error)?.message ?? err ?? "carrier submit failed").slice(0, 500);
     logger.error({ err, applicationId: input.applicationId }, "lender_carrier_submit_failed");
   }
 
   const pgiAppId: string | null = carrierResponse?.application_id ?? null;
   const pgiStatus: string | null = carrierResponse?.status ?? null;
+  if (!pgiAppId) {
+    pgiError = "carrier_submit_failed";
+    if (!failureDetail) failureDetail = "carrier response had no application_id";
+  }
 
+  // BI_SERVER_v789_CARRIER_RECEIVED_ON_SUCCESS - carrier_received_at is the
+  // time the carrier ACKed the application; a failed submit leaves it as is.
   await pool.query(
     `UPDATE bi_applications
         SET pgi_application_id = $1,
             status = COALESCE($2, status),
-            carrier_received_at = NOW(),
+            carrier_received_at = CASE WHEN $1::text IS NOT NULL THEN NOW() ELSE carrier_received_at END,
             carrier_last_event = $3,
             carrier_submission_request = $4::jsonb,
             carrier_submission_response = $5::jsonb,
@@ -99,6 +108,20 @@ export async function submitLenderApplicationToCarrier(input: LenderCarrierSubmi
       input.applicationId,
     ]
   );
+
+  if (!pgiAppId) {
+    try {
+      await pool.query(
+        `INSERT INTO bi_events(application_id, type, payload, silo) VALUES ($1, 'carrier_submission_failed', $2::jsonb, 'bi')`,
+        [
+          input.applicationId,
+          JSON.stringify({ source: "lender", public_id: input.publicId, error: failureDetail, carrier_response: carrierResponse ?? null }),
+        ],
+      );
+    } catch (err) {
+      logger.error({ err, applicationId: input.applicationId }, "lender_carrier_failure_event_insert_failed");
+    }
+  }
 
   return {
     pgi_application_id: pgiAppId,

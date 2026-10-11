@@ -1,6 +1,6 @@
 // BI_SERVER_BLOCK_v207_HOTFIX_AND_APPLICANT_OTP_v1
 import { Router } from "express";
-import jwt from "jsonwebtoken";
+import { signBiToken } from "../platform/serviceTokens";
 import { pool } from "../db";
 import { getJwtSecret } from "../platform/jwtSecret"; // BI_SERVER_v784_JWT_SECRET
 // BI_SERVER_BLOCK_v278_OTP_ERROR_HARDENING_v1 — typed wrappers
@@ -86,10 +86,10 @@ router.post("/applicants/otp/verify", async (req, res) => {
     console.warn("[applicant_otp_verify] bi_contacts upsert failed (non-blocking):", (e as any)?.message ?? e);
   }
 
-  const token = jwt.sign(
+  const token = signBiToken(
     { kind: "applicant", phone, ...(contactId ? { contactId } : {}) },
+    "1h",
     getJwtSecret(),
-    { expiresIn: "1h" },
   );
   res.json({ token, phone, contactId });
 });

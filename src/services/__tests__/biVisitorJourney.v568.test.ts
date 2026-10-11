@@ -1,7 +1,20 @@
 // BI_SERVER_BLOCK_v568_BI_VISITOR_JOURNEY
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import request from "supertest";
+import jwt from "jsonwebtoken";
+import { answerBySql, callsMatching } from "../../__tests__/helpers/answerBySql";
 import { parseJourneyBody, publicIdFromPath, summarise } from "../biVisitorJourney";
+
+const queryMock = vi.hoisted(() => vi.fn());
+vi.mock("../../db", () => ({
+  pool: {
+    query: (...a: unknown[]) => queryMock(...a),
+    connect: async () => ({ query: (...a: unknown[]) => queryMock(...a), release: () => undefined }),
+  },
+  runMigrations: async () => undefined,
+}));
+
+import app from "../../server";
 
 describe("v568 BI visitor journey", () => {
   it("accepts the beacon as text or JSON and caps it", () => {
@@ -24,12 +37,25 @@ describe("v568 BI visitor journey", () => {
     expect(s).toMatchObject({ pageviewCount: 2, totalDwellMs: 5000, exitPage: "/what-is-pgi", submitted: false });
     expect(summarise([{ event_type: "pageview", path: "/applications/X1Y2/thanks", dwell_ms: 1 }]).submitted).toBe(true);
   });
-  it("collector is public and above the auth mounts; journey read is staff-only", () => {
-    const server = readFileSync("src/server.ts", "utf8");
-    const collector = server.indexOf('app.use("/api/v1/bi", biCors, biVisitorTrackRoutes)');
-    const firstAuth = server.indexOf('app.use("/api/v1/bi", requireAuth');
-    expect(collector).toBeGreaterThan(0);
-    expect(collector).toBeLessThan(firstAuth);
-    expect(server).toContain('app.use("/api/v1/bi", requireAuth, biContactAnalyticsRoutes)');
+  // v789 [5]/[37]: was a grep of server.ts; now requests against the real app.
+  it("collector is public and above the auth mounts; journey read is staff-only", async () => {
+    queryMock.mockReset();
+    queryMock.mockImplementation(answerBySql([]));
+    const beacon = JSON.stringify({ sessionId: "sess-1", events: [{ type: "pageview", path: "/applications/PGI-7K2Q/form" }] });
+    const collected = await request(app).post("/api/v1/bi/track/journey").set("Content-Type", "text/plain").send(beacon);
+    expect(collected.status).toBe(200);
+    expect(collected.body).toEqual({ ok: true, events: 1 });
+    const session = callsMatching(queryMock, "INSERT INTO bi_visitor_sessions");
+    expect(session).toHaveLength(1);
+    expect((session[0]![1] as unknown[]).slice(0, 2)).toEqual(["sess-1", "PGI-7K2Q"]);
+
+    const contact = "11111111-1111-4111-8111-111111111111";
+    expect((await request(app).get(`/api/v1/bi/crm/contacts/${contact}/journey`)).status).toBe(401);
+    const applicant = jwt.sign({ kind: "applicant", phone: "+15875550000" }, process.env.JWT_SECRET as string);
+    expect((await request(app).get(`/api/v1/bi/crm/contacts/${contact}/journey`).set("Authorization", `Bearer ${applicant}`)).status).toBe(403);
+    const staff = jwt.sign({ sub: "staff-1", role: "Staff" }, process.env.JWT_SECRET as string);
+    const read = await request(app).get(`/api/v1/bi/crm/contacts/${contact}/journey`).set("Authorization", `Bearer ${staff}`);
+    expect(read.status).toBe(200);
+    expect(read.body).toEqual({ sessions: [], events: [], applications: [] });
   });
 });

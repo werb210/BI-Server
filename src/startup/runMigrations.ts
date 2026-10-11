@@ -7,8 +7,7 @@
 //   - Skips anything that isn't a .sql file (including stray .ts, .md, .DS_Store)
 //   - Tracks applied filenames in bi_migrations_applied (auto-created)
 //   - Runs each unapplied migration inside a transaction
-//   - On error: ROLLBACK that one migration, log, throw — the BI server treats
-//     this as non-blocking via its existing try/catch in src/index.ts
+//   - On error: ROLLBACK that one migration, do NOT record it, log, throw
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Pool } from "pg";
@@ -147,7 +146,9 @@ export async function runMigrations(pool: Pool): Promise<{ applied: string[]; sk
           for (const f of inBaseline) alreadyApplied.add(f);
           logger.info({ recorded: inBaseline.length, newer: sqlFiles.length - inBaseline.length }, "runMigrations: empty database - schema baseline applied");
         } catch (err) {
-          await client.query("ROLLBACK").catch(() => {});
+          await client.query("ROLLBACK").catch((rollbackErr) => {
+            logger.warn({ err: rollbackErr }, "runMigrations: baseline ROLLBACK failed");
+          });
           throw err;
         } finally {
           client.release();
@@ -192,29 +193,16 @@ export async function runMigrations(pool: Pool): Promise<{ applied: string[]; sk
       applied.push(file);
       logger.info({ file }, "runMigrations: applied");
     } catch (err) {
-      await client.query("ROLLBACK").catch(() => {});
-      // BI_MIGRATION_FIX_v60b — Treat object-already-exists errors as
-      // "this migration's effect is already in the schema; skip and move on."
-      // Postgres error codes:
-      //   42P07 duplicate_table          (CREATE TABLE without IF NOT EXISTS)
-      //   42710 duplicate_object         (CREATE TYPE / extension etc)
-      //   42701 duplicate_column         (ALTER TABLE ... ADD COLUMN dup)
-      //   42P06 duplicate_schema
-      //   42723 duplicate_function
-      //   42P16 invalid_table_definition (occasionally raised on column dup)
-      const code = (err as { code?: string } | null)?.code;
-      const ALREADY_APPLIED = new Set(["42P07", "42710", "42701", "42P06", "42723", "42P16"]);
-      if (code && ALREADY_APPLIED.has(code)) {
-        // Mark as applied so future cold-starts don't re-attempt it.
-        await pool.query(
-          `INSERT INTO bi_migrations_applied (filename) VALUES ($1) ON CONFLICT DO NOTHING`,
-          [file],
-        );
-        skipped.push(file);
-        logger.warn({ file, code }, "runMigrations: object already exists; marking applied and continuing");
-        continue;
-      }
-      logger.error({ err, file }, "runMigrations: failed; rolling back this migration");
+      // BI_SERVER_BLOCK_v789_MIGRATION_FAILS_CLOSED - a file that raised is NEVER recorded as
+      // applied. The old BI_MIGRATION_FIX_v60b escape hatch marked any "already exists" error
+      // (42P07/42710/42701/...) as applied after the ROLLBACK, so the rest of that file (every
+      // statement after the duplicate) silently never ran and the ledger claimed it had.
+      // Migrations are idempotent (IF NOT EXISTS / DO blocks) instead; a failure rolls back and
+      // stops the run so it is fixed rather than hidden.
+      await client.query("ROLLBACK").catch((rollbackErr) => {
+        logger.warn({ err: rollbackErr, file }, "runMigrations: ROLLBACK failed");
+      });
+      logger.error({ err, file, code: (err as { code?: string } | null)?.code }, "runMigrations: failed; rolled back, not recorded");
       throw err;
     } finally {
       client.release();

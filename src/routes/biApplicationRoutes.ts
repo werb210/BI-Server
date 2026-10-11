@@ -1,8 +1,11 @@
+import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 import { classifyBiDocument, labelForDetectedType } from "../services/biDocumentClassifier"; // BI_SERVER_DOC_CLASSIFICATION_v276
 import { pool } from "../db";
 import { submitApplicationToPGI, assertDocsReadyForCarrier, forwardAcceptedDocsToCarrier } from "../services/biPgiSubmissionService";
 import { badRequest, ok } from "../utils/apiResponse";
+import { logger } from "../platform/logger";
+import { truncateForLog } from "../util/mask";
 
 const router = Router();
 
@@ -350,8 +353,9 @@ router.post("/application/:id/submit-pgi", async (req, res) => {
     const result = await submitApplicationToPGI(id);
     return ok(res, { success: true, ...result });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to submit to PGI";
-    return badRequest(res, message);
+    // BI_SERVER_v789_NO_ERR_MESSAGE - a code, never the error text.
+    const requestId = logHiddenError(req, error, "PGI_SUBMIT_FAILED");
+    return res.status(400).json({ status: "error", error: "PGI_SUBMIT_FAILED", requestId });
   }
 });
 
@@ -436,7 +440,7 @@ async function persistApplication(submission: ReturnType<typeof validatePgiSubmi
   const r = await (await import("../db")).pool.query<{ id: string }>(`INSERT INTO bi_applications (created_by_actor, created_by_lender_id, source_type, docs_review_required, applicant_phone_e164, stage, data, guarantor_name, guarantor_email, lender_name) VALUES ($1, $2, $3, $4, $5, $6::bi_pipeline_stage, $7::jsonb, $8, $9, $10) RETURNING id`, [sourceType === "lender" ? "lender" : "applicant", lenderId, sourceType, docsRequired, (/* BI_SERVER_BLOCK_v181_DROP_PLACEHOLDER_PHONE_v1 */ applicantPhoneE164), initialStage, JSON.stringify({ ...formData, business_name: formData.q15_business_legal_name }), formData.q2_full_name, formData.q7_email, null]);
   return r.rows[0]!.id;
 }
-router.post("/applications/lender", async (req, res) => { const userId = (req as { user?: { staffUserId?: string } }).user?.staffUserId; if (!userId) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" }); const lenderRow = (await (await import("../db")).pool.query<{ id: string }>(`SELECT id FROM bi_lenders WHERE user_id = $1 AND is_active = TRUE LIMIT 1`, [userId])).rows[0]; if (!lenderRow) return res.status(403).json({ ok: false, error: "NOT_A_LENDER" }); const v = validatePgiSubmissionV2(req.body); if (!v.ok) return res.status(400).json({ ok: false, error: "PGI_VALIDATION_FAILED", issues: v.issues }); try { const id = await persistApplication(v, "lender", lenderRow.id, null); const formData = v.value.form_data; await mirrorToContact({ source: "applicant", full_name: formData.q2_full_name, email: formData.q7_email, company_name: formData.q15_business_legal_name, lifecycle_stage: "applicant", extra_tags: [`application:${id}`, `lender:${lenderRow.id}`] }); const result = await submitApplicationToPGI(id); return res.status(201).json({ ok: true, application_id: id, source: "lender", pgi: result }); } catch (err) { return res.status(500).json({ ok: false, error: "SUBMIT_FAILED", message: err instanceof Error ? err.message : "unknown" }); }});
+router.post("/applications/lender", async (req, res) => { const userId = (req as { user?: { staffUserId?: string } }).user?.staffUserId; if (!userId) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" }); const lenderRow = (await (await import("../db")).pool.query<{ id: string }>(`SELECT id FROM bi_lenders WHERE user_id = $1 AND is_active = TRUE LIMIT 1`, [userId])).rows[0]; if (!lenderRow) return res.status(403).json({ ok: false, error: "NOT_A_LENDER" }); const v = validatePgiSubmissionV2(req.body); if (!v.ok) return res.status(400).json({ ok: false, error: "PGI_VALIDATION_FAILED", issues: v.issues }); try { const id = await persistApplication(v, "lender", lenderRow.id, null); const formData = v.value.form_data; await mirrorToContact({ source: "applicant", full_name: formData.q2_full_name, email: formData.q7_email, company_name: formData.q15_business_legal_name, lifecycle_stage: "applicant", extra_tags: [`application:${id}`, `lender:${lenderRow.id}`] }); const result = await submitApplicationToPGI(id); return res.status(201).json({ ok: true, application_id: id, source: "lender", pgi: result }); } catch (err) { return res.status(500).json({ ok: false, error: "SUBMIT_FAILED", requestId: logHiddenError(req, err, "SUBMIT_FAILED") }); }});
 router.post("/applications/:id/submit-to-carrier", async (req, res) => {
   // BI_SERVER_BLOCK_v160_SUBMIT_TO_CARRIER_HARDENING_v1
   // V1 spec §7 (Send to Carrier button) + §8 (acceptance tests 2-9).
@@ -544,7 +548,7 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
       [id]
     )
     .then((rs) => rs.rows[0]?.data ?? {})
-    .catch(() => ({}));
+    .catch((err) => { logger.warn({ err, applicationId: id }, "submit_to_carrier_snapshot_failed"); return {}; });
 
   const logResult = await pool
     .query<{ id: string }>(
@@ -573,30 +577,38 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
             WHERE id = $1`,
           [logId, JSON.stringify(result)]
         )
-        .catch(() => {});
+        .catch((err) => { logger.warn({ err, applicationId: id, logId }, "submission_log_success_update_failed"); });
     }
     // BI_SERVER_BLOCK_v383_CARRIER_PAYLOAD_AND_DOC_FORWARDING_v1
     // Forward accepted documents to PGI. Non-fatal: a failed forward
     // doesn't fail the submit. Staff can retry per-doc from the staff UI.
     const fwd = await forwardAcceptedDocsToCarrier(id, result.externalId).catch((e) => {
-      // eslint-disable-next-line no-console
-      console.warn("[v383] post-submit doc forwarding threw", { app_id: id, error: (e as Error)?.message });
+      logger.warn({ err: e, applicationId: id }, "[v383] post-submit doc forwarding threw");
       return { forwarded: 0, skipped: 0, failed: 0 };
     });
     return res.status(200).json({ ok: true, pgi: result, docs_forwarded: fwd });
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    // Release lock and revert to document_review.
+    // Stored on the internal submission log only (never in the response), truncated.
+    const errorMessage = truncateForLog(err instanceof Error ? err.message : String(err), 500);
+    // Release lock and revert. BI_SERVER_v789_STAGE_ENUM - 'document_review'
+    // is a STATUS value, not a bi_pipeline_stage enum value, so writing it to
+    // stage made this UPDATE fail (and the failure was swallowed): the lock
+    // was never released. stage goes back to 'documents_pending' (a real enum
+    // value) and status back to 'document_review'. Only rows that never
+    // reached the carrier are reverted.
     await pool
       .query(
         `UPDATE bi_applications
             SET submission_locked = FALSE,
-                stage = 'document_review',
+                stage = 'documents_pending',
+                status = 'document_review',
                 updated_at = NOW()
-          WHERE id = $1`,
+          WHERE id = $1
+            AND pgi_application_id IS NULL
+            AND pgi_external_id IS NULL`,
         [id]
       )
-      .catch(() => {});
+      .catch((releaseErr) => { logger.error({ err: releaseErr, applicationId: id }, "submit_to_carrier_lock_release_failed"); });
     if (logId) {
       await pool
         .query(
@@ -606,12 +618,12 @@ router.post("/applications/:id/submit-to-carrier", async (req, res) => {
             WHERE id = $1`,
           [logId, errorMessage]
         )
-        .catch(() => {});
+        .catch((logErr) => { logger.warn({ err: logErr, applicationId: id, logId }, "submission_log_failure_update_failed"); });
     }
     return res.status(500).json({
       ok: false,
       error: "SUBMIT_FAILED",
-      message: errorMessage,
+      requestId: logHiddenError(req, err, "SUBMIT_FAILED"),
     });
   }
 });

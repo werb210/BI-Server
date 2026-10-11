@@ -1,10 +1,24 @@
 // BI_SERVER_APPLICANT_FACE_ID_v300
 import { readFileSync } from "node:fs";
 import jwt from "jsonwebtoken";
+import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+
+const dbQuery = vi.hoisted(() => vi.fn());
+vi.mock("../db", () => ({
+  pool: {
+    query: (...a: unknown[]) => dbQuery(...a),
+    connect: async () => ({ query: (...a: unknown[]) => dbQuery(...a), release: () => undefined }),
+  },
+  runMigrations: async () => undefined,
+}));
+
+import app from "../server";
+import { verifyBiToken } from "../platform/serviceTokens";
 import { enrollApplicantDevice, hashSecret, revokeApplicantDevices, signInApplicantDevice } from "../services/biApplicantDeviceSignIn";
 
-const SECRET = "test-secret-123";
+// v789: tokens are signed and verified with the suite's JWT_SECRET, never a literal.
+const SECRET = process.env.JWT_SECRET as string;
 const ID = "44444444-4444-4444-4444-444444444444";
 
 function store() {
@@ -28,8 +42,11 @@ describe("applicant Face ID sign-in", () => {
     const r = await signInApplicantDevice(query as any, credentialId, secret, SECRET);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const claims = jwt.verify(r.token, SECRET) as any;
+    const claims = verifyBiToken(r.token, SECRET) as any;
     expect(claims).toMatchObject({ kind: "applicant", phone: "+17805551212", contactId: "contact-1" });
+    // v789: signed through signBiToken (HS256, BI issuer and audience).
+    expect(claims).toMatchObject({ iss: "bi-server", aud: "bi-server" });
+    expect((jwt.decode(r.token, { complete: true }) as any).header.alg).toBe("HS256");
     expect(claims.exp - claims.iat).toBe(3600);
     expect((await signInApplicantDevice(query as any, credentialId, secret, SECRET)).ok).toBe(false);
   });
@@ -45,8 +62,22 @@ describe("applicant Face ID sign-in", () => {
     expect((await signInApplicantDevice(query as any, credentialId, secret, SECRET)).ok).toBe(false);
   });
 
-  it("is mounted next to the applicant OTP routes", () => {
-    expect(readFileSync("src/server.ts", "utf-8")).toContain('app.use("/api/v1", biCors, biApplicantDeviceSignInRoutes);');
+  // v789 [5]/[37]: was a grep of server.ts; now a sign-in through the real app,
+  // cross-origin from the BI website like the OTP routes.
+  it("is mounted next to the applicant OTP routes", async () => {
+    const { query } = store();
+    const { credentialId, secret } = await enrollApplicantDevice(query as any, "+17805551212", "iphone");
+    dbQuery.mockImplementation((sql: string, p: any[]) => query(sql, p));
+    const r = await request(app)
+      .post("/api/v1/applicants/device-sign-in")
+      .set("Origin", "https://www.boreal.insure")
+      .send({ credentialId, secret });
+    expect(r.status).toBe(200);
+    expect(r.headers["access-control-allow-origin"]).toBe("https://www.boreal.insure");
+    expect(verifyBiToken(r.body.token, SECRET)).toMatchObject({ kind: "applicant", phone: "+17805551212" });
+    const bad = await request(app).post("/api/v1/applicants/device-sign-in").send({ credentialId, secret: "nope" });
+    expect(bad.status).toBe(401);
+    expect(bad.body).toEqual({ error: "device_sign_in_invalid" });
   });
 });
 

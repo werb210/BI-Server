@@ -1,60 +1,90 @@
 // BI_SERVER_BLOCK_v350_LENDER_PURBECK_ALIGNMENT_v1
-import { describe, it, expect } from "vitest";
+// Lender portal create: risk booleans are not required, province and
+// q_ca_loan_type are, Quebec is blocked, 1M caps on loan amount and PGI limit,
+// loan-type allowlist, declarations persisted as JSONB and co-guarantors
+// inserted. Behaviour test (BI_SERVER_v789: rewritten from a source-text test).
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import express from "express";
+import request from "supertest";
+import { answerBySql, callsMatching } from "../../__tests__/helpers/answerBySql";
 
-// This test validates the SHAPE of the v350 changes by reading the source
-// file rather than booting the express app (which requires the live DB).
-// CI catches regressions where someone accidentally re-adds risk booleans
-// to the required-fields list or removes the v350 server-side guards.
-import * as fs from "node:fs";
-import * as path from "node:path";
+const h = vi.hoisted(() => ({ queryMock: vi.fn(), submit: vi.fn() }));
+vi.mock("../../db", () => ({ pool: { query: (...a: unknown[]) => h.queryMock(...a) } }));
+vi.mock("../../services/lenderCarrierSubmit", () => ({ submitLenderApplicationToCarrier: (...a: unknown[]) => h.submit(...a) }));
+vi.mock("../../services/staffNotifyService", () => ({ notifyStaff: async () => undefined }));
 
-const src = fs.readFileSync(
-  path.resolve(__dirname, "../biLenderApplicationCreate.ts"),
-  "utf8",
-);
+import biLenderApplicationCreate from "../biLenderApplicationCreate";
+import { signBiToken } from "../../platform/serviceTokens";
+import { resetLenderActiveCache } from "../../services/lenderActiveCache";
+
+const LENDER = "11111111-1111-4111-8111-111111111111";
+function app() {
+  const a = express();
+  a.use(express.json());
+  a.use(biLenderApplicationCreate);
+  return a;
+}
+const auth = () => `Bearer ${signBiToken({ kind: "lender", id: LENDER }, "1h", process.env.JWT_SECRET as string)}`;
+function body(over: Record<string, any> = {}) {
+  const b: Record<string, any> = {
+    company_name: "Co",
+    guarantor: { name: "G", phone: "+15875550100", q_ca_id_type: "Passport", q_ca_id_number: "P-1" },
+    business: { country: "CA", province: "AB", naics: "236220", start_date: "2022-05-03" },
+    loan: { amount: 500000, pgi_limit: 400000, q_ca_loan_type: "Commercial Mortgage" },
+  };
+  for (const [k, v] of Object.entries(over)) b[k] = v && typeof v === "object" && !Array.isArray(v) && b[k] ? { ...b[k], ...v } : v;
+  return b;
+}
+const post = (b: unknown) => request(app()).post("/api/v1/lender/applications").set("Authorization", auth()).send(b as object);
+
+beforeEach(() => {
+  resetLenderActiveCache();
+  h.submit.mockReset();
+  h.submit.mockResolvedValue({ pgi_application_id: "P1", pgi_status: "received", pgi_error: null });
+  h.queryMock.mockReset();
+  h.queryMock.mockImplementation(answerBySql([
+    [/FROM bi_lenders l\s+LEFT JOIN/, { rows: [{ lender_active: true, contact_active: null }] }],
+    ["INSERT INTO bi_applications", { rows: [{ id: "app-1", application_code: "C1" }] }],
+  ]));
+});
 
 describe("biLenderApplicationCreate (v350)", () => {
-  it("does NOT require bankruptcy_history / insolvency_history / judgment_history in lender body", () => {
-    // The v349 hard-cut applies to the lender path too.
-    const requiredStart = src.indexOf("const required: Array<[string, any]> = [");
-    const requiredEnd = src.indexOf("const missing = required.filter", requiredStart);
-    const requiredBlock = src.slice(requiredStart, requiredEnd);
-    expect(requiredBlock).not.toMatch(/bankruptcy_history/);
-    expect(requiredBlock).not.toMatch(/insolvency_history/);
-    expect(requiredBlock).not.toMatch(/judgment_history/);
+  it("does NOT require bankruptcy / insolvency / judgment history", async () => {
+    const r = await post(body());
+    expect(r.status).toBe(201);
   });
 
-  it("requires business.province (needed for QC block)", () => {
-    expect(src).toMatch(/business\.province/);
+  it("requires business.province and loan.q_ca_loan_type", async () => {
+    const r = await post(body({ business: { province: "" }, loan: { q_ca_loan_type: "" } }));
+    expect(r.status).toBe(400);
+    expect(r.body.missing).toEqual(expect.arrayContaining(["business.province", "loan.q_ca_loan_type"]));
+    expect(r.body.missing).not.toEqual(expect.arrayContaining(["risk.bankruptcy_history"]));
   });
 
-  it("requires loan.q_ca_loan_type", () => {
-    expect(src).toMatch(/loan\.q_ca_loan_type/);
+  it("blocks Quebec server-side", async () => {
+    const r = await post(body({ business: { province: "QC" } }));
+    expect(r.status).toBe(400);
+    expect(r.body).toEqual({ error: "quebec_blocked", message: "PGI does not currently write business in Quebec." });
   });
 
-  it("contains Quebec server-side block", () => {
-    expect(src).toMatch(/quebec_blocked/);
-    expect(src).toMatch(/PGI does not currently write business in Quebec/);
+  it("1M cap on loan amount and PGI limit", async () => {
+    expect((await post(body({ loan: { amount: 1_000_001 } }))).body.error).toBe("loan_amount_over_cap");
+    expect((await post(body({ loan: { amount: 1_000_000, pgi_limit: 1_000_001 } }))).body.error).toBe("pgi_limit_over_cap");
   });
 
-  it("contains 1M cap server-side check on loan amount", () => {
-    expect(src).toMatch(/loan_amount_over_cap/);
-    expect(src).toMatch(/1[,_]?000[,_]?000/);
+  it("loan-type allowlist (Commercial Mortgage / Other Secured Loan only)", async () => {
+    expect((await post(body({ loan: { q_ca_loan_type: "Other Secured Loan" } }))).status).toBe(201);
+    const r = await post(body({ loan: { q_ca_loan_type: "Unsecured Line" } }));
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe("loan_type_ineligible");
   });
 
-  it("contains 1M cap server-side check on PGI limit", () => {
-    expect(src).toMatch(/pgi_limit_over_cap/);
-  });
-
-  it("contains loan-type allowlist (Commercial Mortgage / Other Secured Loan only)", () => {
-    expect(src).toMatch(/Commercial Mortgage/);
-    expect(src).toMatch(/Other Secured Loan/);
-    expect(src).toMatch(/loan_type_ineligible/);
-  });
-
-  it("persists declarations to JSONB column and co_guarantors to table", () => {
-    expect(src).toMatch(/declarations\s*=\s*\$1::jsonb/);
-    expect(src).toMatch(/INSERT INTO bi_co_guarantors/);
-    expect(src).toMatch(/has_co_guarantors/);
+  it("persists declarations to the JSONB column and co-guarantors to their table", async () => {
+    const r = await post(body({ declarations: { section_1_a: "no" }, co_guarantors: [{ first_name: "A", last_name: "B" }, { first_name: "Q", last_name: "C", province: "QC" }] }));
+    expect(r.status).toBe(201);
+    const upd = callsMatching(h.queryMock, "SET declarations = $1::jsonb")[0] as [string, unknown[]];
+    expect(JSON.parse(String(upd[1][0]))).toEqual({ section_1_a: "no" });
+    expect(upd[1][1]).toBe(true); // has_co_guarantors
+    expect(callsMatching(h.queryMock, "INSERT INTO bi_co_guarantors")).toHaveLength(1); // QC co-guarantor skipped
   });
 });

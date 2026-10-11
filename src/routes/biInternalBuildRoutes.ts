@@ -1,5 +1,6 @@
 // BI_SERVER_BUILD_TRUTH_v18
 import { Router } from "express";
+import { requireAuth } from "../platform/auth";
 import { BUILD_TAG, CODE_VERSION, COMMIT_SHA } from "../platform/buildInfo";
 import { renderEmailTemplate } from "../services/emailTemplateRender";
 import { TEMPLATE_KEYS, templateFrom } from "./biMarketingEmailCompatRoutes";
@@ -47,7 +48,8 @@ export function renderProbe(): {
 
 const router: Router = Router();
 
-router.get("/_int/build", (_req, res) => res.json({
+// BI_SERVER_v789_INTERNAL_AUTH - build/probe details are staff-only.
+router.get("/_int/build", requireAuth, (_req, res) => res.json({
   service: "bi-server",
   codeVersion: CODE_VERSION,
   buildTag: BUILD_TAG,

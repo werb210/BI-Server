@@ -1,6 +1,6 @@
 // BI_SERVER_BLOCK_v601 — applicant WebAuthn passkeys.
 import crypto from "node:crypto";
-import jwt from "jsonwebtoken";
+import { signBiToken } from "../platform/serviceTokens";
 import { base64url, challengeOf, verifyAssertion, verifyAttestation } from "./webauthnLite";
 
 import { loggedFallback } from "../lib/queryFallback.js"; // BI_SERVER_LOGGED_FALLBACKS_v712
@@ -51,7 +51,7 @@ export async function finishApplicantPasskeySignIn(query: Query, body: any, jwtS
   await query(`UPDATE bi_applicant_passkeys SET sign_count=$2,last_used_at=now() WHERE credential_id=$1`, [credentialId, verified.signCount]);
   const contact = await query(`SELECT id::text AS id FROM bi_contacts WHERE phone_e164=$1 LIMIT 1`, [row.phone_e164]).catch(loggedFallback("biApplicantPasskeys", { rows: [] }));
   const contactId = contact.rows[0]?.id ?? null;
-  return { token: jwt.sign({ kind: "applicant", phone: row.phone_e164, ...(contactId ? { contactId } : {}) }, jwtSecret, { expiresIn: "1h" }), phone: row.phone_e164, contactId };
+  return { token: signBiToken({ kind: "applicant", phone: row.phone_e164, ...(contactId ? { contactId } : {}) }, "1h", jwtSecret), phone: row.phone_e164, contactId };
 }
 
 export async function listApplicantPasskeys(query: Query, phone: string) {

@@ -18,6 +18,8 @@ import { fetchBfDocumentFile } from "../services/bfDocumentFile"; // BI_SERVER_B
 // code paths in this file may still reference it directly.
 import { extractText } from "../services/ocrService";
 import { runOcrForDocument } from "../services/ocrRunner";
+import { logger } from "../platform/logger";
+import { logHiddenError } from "../platform/safeError"; // BI_SERVER_v789_NO_ERR_MESSAGE
 
 const router = Router();
 const pool = sharedPool /* BI_SERVER_ONE_POOL_v718 */;
@@ -97,7 +99,7 @@ router.post("/:id/documents", upload.array("files"), async (req, res) => {
     );
 
     // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — fire-and-forget OCR.
-    void runOcrForDocument(docId, file).catch(() => { /* logged inside */ });
+    void runOcrForDocument(docId, file).catch((err) => { logger.warn({ err, docId }, "ocr_run_failed"); });
   }
 
   ok(res, { success: true, files: created });
@@ -256,52 +258,16 @@ router.post("/:id/accept", requireAuth, requireStaffOrAdmin, async (req, res) =>
     }
 
     if (srcType === "public") {
-      const { submitApplicationToPGI } = await import("../services/biPgiSubmissionService");
+      const { submitApplicationToPGI, flushAcceptedDocsAfterSubmit } = await import("../services/biPgiSubmissionService");
       try {
         const result = await submitApplicationToPGI(doc.application_id);
         autoSubmittedToPgi = true;
         finalStatus = "submitted";
-        // BI_SERVER_BLOCK_v359_PGI_DOC_FORWARDING_v1
-        // App just landed at the carrier — flush any docs that were
+        // BI_SERVER_BLOCK_v359_PGI_DOC_FORWARDING_v1 / BI_SERVER_v789_DOC_FLUSH
+        // App just landed at the carrier - flush any docs that were
         // uploaded BEFORE the submit (they couldn't be forwarded yet
-        // because pgi_application_id didn't exist).
-        try {
-          const { pgiUploadDocument } = await import("../services/pgiAdapter");
-          const pendingDocs = await pool.query<{ id: string; doc_type: string; original_filename: string; mime_type: string; blob_url: string; storage_key: string }>(
-            `SELECT id, doc_type, original_filename, mime_type, blob_url, storage_key
-               FROM bi_documents
-              WHERE application_id = $1
-                AND review_status = 'accepted'
-                AND pgi_document_id IS NULL
-                AND purged_at IS NULL
-              ORDER BY uploaded_at`,
-            [doc.application_id]
-          );
-          if (pendingDocs.rows.length > 0) {
-            const { getStorage } = await import("../lib/storage");
-            const store = getStorage();
-            for (const d of pendingDocs.rows) {
-              if (!["loan_agreement", "profit_loss", "balance_sheet", "ar_aging", "ap_aging", "founder_cv", "financial_forecast"].includes(d.doc_type)) continue;
-              try {
-                const blob = await store.get(d.storage_key);
-                if (!blob?.buffer) throw new Error("blob not found");
-                const fwd = await pgiUploadDocument({
-                  pgiApplicationId: result.externalId,
-                  docType: d.doc_type as any,
-                  filename: d.original_filename,
-                  buffer: blob.buffer,
-                  mimeType: d.mime_type || blob.contentType || "application/octet-stream",
-                });
-                await pool.query(`UPDATE bi_documents SET pgi_document_id = $1, forwarded_to_carrier_at = NOW() WHERE id = $2`, [fwd.document_id, d.id]);
-              } catch (e) {
-                console.warn("[v359] backfill doc forward failed", { doc_id: d.id, error: (e as Error).message });
-                // Non-fatal — staff can re-trigger via the manual re-submit endpoint later.
-              }
-            }
-          }
-        } catch (e) {
-          console.warn("[v359] post-submit doc flush failed", { app_id: doc.application_id, error: (e as Error).message });
-        }
+        // because pgi_application_id didn't exist). Shared helper; never throws.
+        await flushAcceptedDocsAfterSubmit(doc.application_id, result.externalId);
         await pool.query(
           `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
            VALUES($1, 'system', $2, 'auto_submitted_to_pgi', $3, $4::jsonb)`,
@@ -317,17 +283,20 @@ router.post("/:id/accept", requireAuth, requireStaffOrAdmin, async (req, res) =>
           ]
         );
       } catch (err) {
-        pgiSubmitError = err instanceof Error ? err.message : "PGI submission failed";
-        console.warn("[BI_ROUND8_AUTOFWD] auto-PGI submission failed", { appId: doc.application_id, err });
+        // BI_SERVER_v789_NO_ERR_MESSAGE - the response carries a code, never
+        // err.message (it can hold carrier response text). The detail is
+        // logged; submitApplicationToPGI already wrote carrier_submission_failed.
+        pgiSubmitError = "PGI_SUBMIT_FAILED";
+        logHiddenError(req, err, "PGI_SUBMIT_FAILED");
         await pool.query(
           `INSERT INTO bi_activity(application_id, actor_type, actor_user_id, event_type, summary, meta)
            VALUES($1, 'system', $2, 'auto_submit_to_pgi_failed', $3, $4::jsonb)`,
           [
             doc.application_id, userId,
-            `Auto-PGI submission failed: ${pgiSubmitError}. Manual retry available.`,
-            JSON.stringify({ error: pgiSubmitError }),
+            `Auto-PGI submission failed. Manual retry available.`,
+            JSON.stringify({ error: pgiSubmitError, requestId: (req as { id?: unknown }).id ?? null }),
           ]
-        ).catch(() => {});
+        ).catch((activityErr) => { logger.warn({ err: activityErr, appId: doc.application_id }, "auto_submit_failed_activity_insert_failed"); });
       }
     }
   }
@@ -512,7 +481,7 @@ router.delete("/:id", requireAuth, requireStaffOrAdmin, async (req, res) => {
     `INSERT INTO bi_activity (application_id, actor_type, actor_user_id, event_type, summary, meta)
      VALUES ($1, 'staff', (SELECT id FROM bi_users WHERE id = $2), 'document_deleted', $3, $4::jsonb)`,
     [row.application_id, userId, `Document deleted: ${row.doc_type}`, JSON.stringify({ docId: row.id })]
-  ).catch(() => {});
+  ).catch((err) => { logger.warn({ err, docId: row.id }, "document_deleted_activity_insert_failed"); });
   return ok(res, { success: true, id: row.id });
 });
 

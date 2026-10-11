@@ -20,6 +20,7 @@ import { Router, raw } from "express";
 import type { Request, Response } from "express";
 import crypto from "node:crypto";
 import { pool } from "../db";
+import { maskEmail } from "../util/mask"; // BI_SERVER_v789_LOG_MASKING - logs carry j***@domain, never the address
 
 const router: Router = Router();
 const SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
@@ -132,7 +133,7 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
       .catch((err) => {
         console.warn(
           "[bi_sendgrid_webhook] event ledger insert failed",
-          email,
+          maskEmail(email),
           event,
           err instanceof Error ? err.message : err,
         );
@@ -149,7 +150,7 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
         )
         .then(() => { linkClicks += 1; })
         .catch((err) => {
-          console.warn("[bi_sendgrid_webhook] link click insert failed", email, err instanceof Error ? err.message : err);
+          console.warn("[bi_sendgrid_webhook] link click insert failed", maskEmail(email), err instanceof Error ? err.message : err);
         });
     }
 
@@ -172,7 +173,7 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
       )
       .then((r) => { if ((r.rowCount ?? 0) > 0) suppressed += 1; })
       .catch((err) => {
-        console.warn("[bi_sendgrid_webhook] suppression insert failed", email, err instanceof Error ? err.message : err);
+        console.warn("[bi_sendgrid_webhook] suppression insert failed", maskEmail(email), err instanceof Error ? err.message : err);
       });
   }
 

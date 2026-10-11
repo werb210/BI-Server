@@ -17,11 +17,9 @@ export default defineConfig({
     },
     exclude: [
       ...configDefaults.exclude,
-      // node:test runner files (not vitest)
-      // QUARANTINE — pre-existing failures; re-enable each as it is converted
-      // to the real-DB harness (mock-SQL) or its stale source assertion fixed.
-      // Burn this list down to zero.
-      "src/__tests__/integration/carrier.contract.integration.test.ts",
+      // BI_SERVER_BLOCK_v789: the PGI carrier contract test (src/__tests__/integration/
+      // carrier.contract.integration.test.ts) is no longer quarantined - it runs here against the
+      // real test database and the PGI stub (it pins ALLOW_DEV_OTP/USE_PGI_STUB itself).
     ],
   },
 });

@@ -3,6 +3,7 @@
 // the resolved paths are /api/v1/bi/crm/outreach/*.
 // Auth: requireAuth (staff JWT). All writes capture req.user.staffUserId
 // as the actor so the activity timeline shows who did what.
+import { logHiddenError } from "../platform/safeError";
 import express, { type Request, type Response } from "express";
 import multer from "multer";
 import { readFirstSheetObjects } from "../lib/spreadsheet"; // BI_SERVER_SPREADSHEET_EXCELJS_v376
@@ -11,6 +12,7 @@ import { isCompanySuppressed } from "../services/biCrmSuppression"; // BI_SERVER
 import { requireAuth } from "../platform/auth";
 import { logger } from "../platform/logger";
 import { sendOutreachSms } from "../services/smsService";
+import { crmActorFrom, parseCrmActivityInput, redactActivityRows } from "../lib/crmActivityInput";
 
 const router = express.Router();
 router.use(requireAuth);
@@ -39,32 +41,14 @@ const ALLOWED_STATUS = new Set([
   "active",
 ]);
 
-const ALLOWED_EVENT_TYPES = new Set([
-  "call",
-  "demo",
-  "sms",
-  "email",
-  "note",
-  "task",     // BI_SERVER_BLOCK_v852_OUTREACH_AUTOADVANCE — BI cards log tasks/meetings like BF
-  "meeting",
-  "status_change",
-  "import",
-]);
-
 function s(v: unknown, max = 1000): string | null {
   if (typeof v !== "string") return null;
   const t = v.trim().slice(0, max);
   return t.length ? t : null;
 }
 
-function actorFrom(req: Request): { id: string | null; name: string | null } {
-  const u = (req as any).user as Record<string, unknown> | undefined;
-  const id = typeof u?.staffUserId === "string" ? u.staffUserId : null;
-  const name =
-    (typeof u?.displayName === "string" ? u.displayName : null) ??
-    (typeof u?.full_name === "string" ? u.full_name : null);
-  return { id, name };
-}
+// BI_SERVER_v789_CRM_ACTIVITY_INPUT - shared with the company activity routes.
+const actorFrom = crmActorFrom;
 
 // GET /crm/outreach/contacts
 // Query params: status, owner, q (search on name/email/phone), limit (default 100, max 500)
@@ -268,14 +252,11 @@ router.post("/crm/outreach/contacts/:id/activity", async (req: Request, res: Res
   const id = s(req.params.id);
   if (!id) return res.status(400).json({ ok: false, error: "id_required" });
 
-  const b: any = req.body ?? {};
-  const eventType = s(b.event_type);
-  if (!eventType || !ALLOWED_EVENT_TYPES.has(eventType)) {
-    return res.status(400).json({ ok: false, error: "invalid_event_type" });
+  const parsed = parseCrmActivityInput(req.body);
+  if (!parsed.ok) {
+    return res.status(400).json({ ok: false, error: parsed.error });
   }
-  const outcome = s(b.outcome);
-  const body = s(b.body, 8000);
-  const meta = b.meta && typeof b.meta === "object" ? b.meta : null;
+  const { eventType, outcome, body, meta } = parsed.value;
 
   try {
     const exists = await pool.query(
@@ -345,7 +326,7 @@ router.get("/crm/outreach/contacts/:id/activity", async (req: Request, res: Resp
         LIMIT ${limit}`,
       [id],
     );
-    return res.json({ ok: true, events: r.rows });
+    return res.json({ ok: true, events: redactActivityRows(r.rows) });
   } catch (e: any) {
     logger.error({ err: e }, "outreach_timeline_failed");
     return res.status(500).json({ ok: false, error: "timeline_failed" });
@@ -478,7 +459,7 @@ router.post(
       rows = parsed;
     } catch (e: any) {
       logger.error({ err: e, file: file.originalname }, "outreach_import_parse_failed");
-      return res.status(400).json({ ok: false, error: "parse_failed", detail: e?.message });
+      return res.status(400).json({ ok: false, error: "parse_failed", requestId: logHiddenError(req, e, "parse_failed") });
     }
 
     if (!rows.length) {
@@ -623,7 +604,7 @@ router.post(
         results.push({ row: i + 2, ok: true, id: contactId });
       } catch (e: any) {
         logger.error({ err: e, row: i + 2 }, "outreach_import_row_failed");
-        results.push({ row: i + 2, ok: false, error: e?.message ?? "insert_failed" });
+        results.push({ row: i + 2, ok: false, error: "insert_failed" });
         skipped++;
       }
     }
@@ -713,7 +694,9 @@ Book a time: ${bookingsUrl}`
       sid = r.sid;
       smsOk = true;
     } catch (e: any) {
-      smsError = e?.message ?? "sms_failed";
+      // BI_SERVER_v789_NO_ERR_MESSAGE - the provider text is logged, never stored in meta
+      // (GET .../activity returns meta to the portal).
+      smsError = "sms_failed";
       logger.error({ err: e, to: contactPhone }, "outreach_invite_sms_failed");
     }
 
@@ -736,7 +719,7 @@ Book a time: ${bookingsUrl}`
     }
 
     if (!smsOk) {
-      return res.status(502).json({ ok: false, error: "sms_failed", detail: smsError });
+      return res.status(502).json({ ok: false, error: "sms_failed", requestId: req.id }); // v789: provider detail is logged above, not returned
     }
 
     // Auto-bump status if appropriate.
@@ -842,7 +825,7 @@ router.post(
 
       return res.status(201).json({ ok: true, lender_id: lenderId });
     } catch (err) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client.query("ROLLBACK").catch((rbErr: unknown) => { logger.warn({ err: rbErr }, "outreach_rollback_failed"); });
       logger.error({ err, contactId }, "start_onboarding_failed");
       return res.status(500).json({ ok: false, error: "START_ONBOARDING_FAILED" });
     } finally {
@@ -904,9 +887,9 @@ router.post("/crm/outreach/contacts/bulk-action", async (req: Request, res: Resp
     await client.query("COMMIT");
     return res.json({ ok: true, mode, affected: del.rowCount ?? 0, suppressed });
   } catch (e: any) {
-    await client.query("ROLLBACK").catch(() => {});
+    await client.query("ROLLBACK").catch((rbErr: unknown) => { logger.warn({ err: rbErr }, "outreach_rollback_failed"); });
     logger.error({ err: e }, "outreach_bulk_delete_failed");
-    return res.status(500).json({ ok: false, error: "delete_failed", detail: e?.message });
+    return res.status(500).json({ ok: false, error: "delete_failed", requestId: logHiddenError(req, e, "delete_failed") });
   } finally {
     client.release();
   }
@@ -1003,7 +986,7 @@ router.post(
       rows = parsed;
     } catch (e: any) {
       logger.error({ err: e, file: file.originalname }, "company_import_parse_failed");
-      return res.status(400).json({ ok: false, error: "parse_failed", detail: e?.message });
+      return res.status(400).json({ ok: false, error: "parse_failed", requestId: logHiddenError(req, e, "parse_failed") });
     }
     if (!rows.length) return res.status(400).json({ ok: false, error: "no_rows" });
 
@@ -1121,7 +1104,7 @@ router.post(
         results.push({ row: i + 2, ok: true });
       } catch (e: any) {
         logger.error({ err: e, row: i + 2 }, "company_import_row_failed");
-        results.push({ row: i + 2, ok: false, error: e?.message ?? "row_failed" });
+        results.push({ row: i + 2, ok: false, error: "row_failed" });
         skipped++;
       }
     }

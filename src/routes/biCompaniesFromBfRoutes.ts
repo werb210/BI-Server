@@ -5,28 +5,20 @@
 // BI for the company + primary-contact shape it needs, keyed by ids.
 // Auth: same service JWT ({kind:"service",source:...}) as v248/v249.
 import express, { type Request, type Response } from "express";
-import jwt from "jsonwebtoken";
+import { verifyServiceToken } from "../platform/serviceTokens";
 import { pool } from "../db";
 import { env } from "../platform/env";
 import { logger } from "../platform/logger";
 
 const router = express.Router();
 
-function getSecret(): string {
-  return (env.JWT_SECRET as string | undefined) || process.env.JWT_SECRET || "";
-}
 function verifyServiceJwt(req: Request): boolean {
   const auth = req.header("authorization") || "";
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (!m) return false;
-  const secret = getSecret();
-  if (!secret) return false;
-  try {
-    const p = jwt.verify(m[1], secret) as { kind?: string; source?: string };
-    return p?.kind === "service" && !!p?.source;
-  } catch {
-    return false;
-  }
+  // BI_SERVER_v789_TOKENS - service secret, HS256 only, aud checked.
+  const p = verifyServiceToken(m[1]) as { kind?: string; source?: string } | null;
+  return p?.kind === "service" && !!p?.source;
 }
 
 router.post("/companies/by-ids/from-bf", async (req: Request, res: Response) => {

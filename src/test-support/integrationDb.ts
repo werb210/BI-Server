@@ -24,6 +24,9 @@ async function assertTestDatabase(): Promise<void> {
 
 const MUTABLE_TABLES = [
   "bi_contact_activity",
+  // BI_SERVER_v789 - carrier-path integration tests write these too.
+  "bi_webhook_log",
+  "bi_events",
   "bi_documents",
   "bi_applications",
   "bi_contacts",
@@ -79,6 +82,46 @@ export async function seedContact(
      VALUES ($1, $2, $3, $4)
      RETURNING id`,
     [companyId, full_name, email, phone_e164],
+  );
+  return rows[0];
+}
+
+// BI_SERVER_v789 - application + document seeds for carrier-path tests.
+export async function seedApplication(
+  fields: Partial<{
+    status: string;
+    stage: string;
+    source_type: string;
+    pgi_application_id: string | null;
+    submission_locked: boolean;
+  }> = {},
+): Promise<{ id: string }> {
+  const { rows } = await pool.query<{ id: string }>(
+    `INSERT INTO bi_applications (created_by_actor, source_type, status, stage, pgi_application_id, submission_locked, data)
+     VALUES ('applicant', $1, $2, $3::bi_pipeline_stage, $4, $5, '{}'::jsonb)
+     RETURNING id`,
+    [
+      fields.source_type ?? "public",
+      fields.status ?? "document_review",
+      fields.stage ?? "documents_pending",
+      fields.pgi_application_id ?? null,
+      fields.submission_locked ?? false,
+    ],
+  );
+  return rows[0];
+}
+
+export async function seedDocument(
+  applicationId: string,
+  fields: Partial<{ doc_type: string; review_status: string; storage_key: string | null; purged: boolean }> = {},
+): Promise<{ id: string }> {
+  const docType = fields.doc_type ?? "loan_agreement";
+  const key = fields.storage_key === undefined ? `applications/${applicationId}/${docType}.pdf` : fields.storage_key;
+  const { rows } = await pool.query<{ id: string }>(
+    `INSERT INTO bi_documents (application_id, doc_type, original_filename, storage_key, blob_name, mime_type, uploaded_by_actor, review_status, purged_at)
+     VALUES ($1, $2::bi_document_type, $3, $4, $4, 'application/pdf', 'applicant', $5, CASE WHEN $6::boolean THEN NOW() ELSE NULL END)
+     RETURNING id`,
+    [applicationId, docType, `${docType}.pdf`, key, fields.review_status ?? "accepted", fields.purged ?? false],
   );
   return rows[0];
 }

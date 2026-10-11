@@ -1,8 +1,12 @@
 import { Router } from "express";
 import bcrypt from "bcrypt";
 import { pool } from "../db";
-import { requireAnyAuth, signStaffToken } from "../platform/auth";
-import { submitApplicationToPGI } from "../services/biPgiSubmissionService";
+import { requireAnyAuth, signStaffToken, isStaffOrServiceClaims } from "../platform/auth";
+import { submitApplicationToPGI, assertDocsReadyForCarrier } from "../services/biPgiSubmissionService";
+import { evaluatePublicSubmitGates } from "../services/biPublicFormGates"; // BI_SERVER_v789_SUBMIT_GATES
+import { applicantPhoneFromClaims, ownedApplication } from "./applicantAuth"; // BI_SERVER_v789_APPLICANT_OWNERSHIP
+import { ipRateLimit } from "../lib/ipRateLimit"; // BI_SERVER_v789_PUBLIC_RATE_LIMITS
+import { logHiddenError } from "../platform/safeError";
 import { sendOtpSafe, verifyOtpSafe, otpSendFailed } from "../services/otpService";
 import { normalizeE164 } from "../util/phoneE164";
 import { calculatePremium } from "../services/premiumService";
@@ -11,6 +15,10 @@ import { capabilitiesForEmail } from "../platform/capabilities";
 
 const publicRouter = Router();
 export const biAppApplicantRoutes = Router();
+
+// BI_SERVER_v789_STAFF_LOGIN_LIMIT - 10 attempts per minute per client IP.
+// Per route: this router is mounted at "/api/v1" and sees every request.
+export const staffLoginLimiter = ipRateLimit({ windowMs: 60 * 1000, limit: 10 });
 
 publicRouter.post("/otp/request", async (req, res) => {
   const { phone: rawPhone, name, email, userType } = req.body as {
@@ -103,7 +111,7 @@ publicRouter.post("/otp/verify", async (req, res) => {
 
   try {
     const vr = await verifyOtpSafe(phone, code);
-    if (!vr.ok) return res.status(502).json({ error: "otp_verify_failed", detail: vr.error });
+    if (!vr.ok) { console.warn("[otp] verify failed", { error: vr.error }); return res.status(502).json({ error: "otp_verify_failed" }); }
     const approved = vr.approved;
 
     if (!approved) {
@@ -181,7 +189,7 @@ publicRouter.post("/otp/verify", async (req, res) => {
   }
 });
 
-publicRouter.post("/staff/login", async (req, res) => {
+publicRouter.post("/staff/login", staffLoginLimiter, async (req, res) => {
   const { email, password } = req.body as { email?: string; password?: string };
 
   if (!email || !password) {
@@ -297,14 +305,56 @@ biAppApplicantRoutes.post("/application/draft", requireAnyAuth, async (req, res)
   return ok(res, created.rows[0]);
 });
 
+// BI_SERVER_v789_LEGACY_SUBMIT_GUARD - this route hands the application to the
+// carrier. It used to accept any signed token and any applicationId. Now:
+//   - staff / service tokens: allowed for any application (as before);
+//   - applicant tokens (either shape): only for an application that carries the
+//     applicant's phone (ownedApplication, the check every applicant route uses);
+//   - anything else (lender, referrer, client, tracked-link...): 403.
+// And before submitApplicationToPGI, the same gates as the public submit
+// (evaluatePublicSubmitGates) plus the carrier document-readiness gate
+// (assertDocsReadyForCarrier). A failed gate is a 400 with its reason code.
 biAppApplicantRoutes.post("/application/submit", requireAnyAuth, async (req, res) => {
-  const { applicationId, facilityType, loanAmount, bankruptcy } = req.body;
+  const { applicationId, facilityType, loanAmount, bankruptcy } = req.body ?? {};
 
   if (!applicationId || !facilityType || typeof loanAmount !== "number") {
     return badRequest(res, "applicationId, facilityType and loanAmount are required");
   }
 
+  const claims = req.user as unknown;
+  let appId: string;
+  if (isStaffOrServiceClaims(claims)) {
+    appId = String(applicationId);
+  } else {
+    const phone = applicantPhoneFromClaims(claims);
+    if (!phone) return res.status(403).json({ error: "applicant_only" });
+    const { app, error } = await ownedApplication(String(applicationId), phone);
+    if (error) return res.status(error === "not_found" ? 404 : 403).json({ error });
+    appId = String(app.id);
+  }
+
   try {
+    const rowRes = await pool.query(`SELECT * FROM bi_applications WHERE id::text = $1 LIMIT 1`, [appId]);
+    const row = rowRes.rows[0];
+    if (!row) return res.status(404).json({ error: "not_found" });
+
+    const gate = evaluatePublicSubmitGates(row);
+    if (!gate.ok) return res.status(400).json(gate.failure);
+
+    const formationRaw = row.formation_date ?? row.data?.formation_date ?? null;
+    const formationDate = formationRaw instanceof Date
+      ? formationRaw.toISOString().slice(0, 10)
+      : formationRaw ? String(formationRaw).slice(0, 10) : null;
+    const readiness = await assertDocsReadyForCarrier(String(row.id), formationDate);
+    if (!readiness.ready) {
+      return res.status(400).json({
+        error: "DOCS_NOT_READY",
+        missing: readiness.missing,
+        rejected: readiness.rejected,
+        pending: readiness.pending,
+      });
+    }
+
     const premium = calculatePremium({ facilityType, loanAmount });
 
     const updatedApplication = await pool.query(
@@ -312,10 +362,11 @@ biAppApplicantRoutes.post("/application/submit", requireAnyAuth, async (req, res
        SET /* BI_SERVER_BLOCK_v62_STAGE_ALIGNMENT_v1 — column rename + stage rename */ status='document_review',
            bankruptcy_flag=$2,
            premium_calc=$3,
+           consents=$4::jsonb,
            updated_at=NOW()
        WHERE id=$1
        RETURNING *`,
-      [applicationId, bankruptcy || false, premium]
+      [row.id, bankruptcy || false, premium, JSON.stringify(gate.consents)]
     );
 
     if (!updatedApplication.rows.length) {
@@ -326,28 +377,27 @@ biAppApplicantRoutes.post("/application/submit", requireAnyAuth, async (req, res
       `INSERT INTO bi_commissions(application_id,annual_premium_amount,commission_amount,status)
       VALUES($1,$2,$3,'estimated')
       ON CONFLICT (application_id) DO NOTHING`,
-      [applicationId, premium.annualPremium, premium.annualPremium * 0.1]
+      [row.id, premium.annualPremium, premium.annualPremium * 0.1]
     );
 
     await pool.query(
       `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
       VALUES($1,'applicant','application_submitted','Application submitted and moved to Documents Pending')`,
-      [applicationId]
+      [row.id]
     );
 
     if (bankruptcy) {
       await pool.query(
         `INSERT INTO bi_activity(application_id, actor_type, event_type, summary)
         VALUES($1,'system','red_flag','Bankruptcy flag triggered')`,
-        [applicationId]
+        [row.id]
       );
     }
 
-    const pgiResult = await submitApplicationToPGI(applicationId);
+    const pgiResult = await submitApplicationToPGI(String(row.id));
     return ok(res, { success: true, premium, pgi: pgiResult });
   } catch (error) {
-    console.error("Application submit failed", error);
-    return badRequest(res, "Failed to submit application");
+    return res.status(400).json({ status: "error", error: "Failed to submit application", requestId: logHiddenError(req, error, "application_submit_failed") });
   }
 });
 

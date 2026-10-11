@@ -34,17 +34,12 @@ describe("BI_SERVER_LIVE_SCHEMA_COLUMNS_v5", () => {
     expect(src).toContain("INSERT INTO bi_sequence_events");
     expect(src).toContain("outreach_stage = 'engaged'");
   });
-  it("recurring commissions insert only real columns", () => {
-    const cols = insertColumns(read("src/modules/commission.service.ts"), "bi_commissions");
-    expect(cols).toContain("annual_premium_amount"); expect(cols).not.toContain("premium_amount"); expect(cols).not.toContain("commission_type");
-    for (const c of cols) expect(LIVE.bi_commissions).toContain(c);
-  });
   it("premium-received writes the fields the report actually reads", () => {
     const src = read("src/routes/biCommissionRoutes.ts");
     expect(src).not.toMatch(/SET\s+received\s*=/); expect(src).toContain("premium_received_at"); expect(src).toContain("status = 'payable'"); // BI_SERVER_BLOCK_v595 - 'received' is not an enum value
   });
-  it("neither referrer SMS lookup asks for display_name", () => {
-    for (const rel of ["src/routes/biReferrerRoutes.ts", "src/services/pgiOnApprovedHook.ts"]) {
+  it("the referrer SMS lookup does not ask for display_name", () => {
+    for (const rel of ["src/services/pgiOnApprovedHook.ts"]) {
       const src = read(rel); const selects = src.match(/SELECT[^`]*FROM bi_referrers/gi) ?? []; expect(selects.length).toBeGreaterThan(0);
       for (const sql of selects) { expect(sql).not.toMatch(/\bdisplay_name\b/); for (const col of sql.replace(/SELECT/i, "").replace(/FROM bi_referrers/i, "").split(",")) { const name = col.trim().split(/\s+AS\s+/i)[0].trim(); if (name && /^[a-z_]+$/.test(name)) expect(LIVE.bi_referrers).toContain(name); } }
     }

@@ -4,10 +4,11 @@
 // opts into PGI on Step 6. Auth is a service JWT signed with the
 // shared JWT_SECRET (decision A1, no new env var). On success returns
 // a completion_url that BF puts into the client mini-portal messenger.
+import { logHiddenError } from "../platform/safeError";
 import express, { type Request, type Response } from "express";
 import { normalizeE164 } from "../util/phoneE164"; // BI_SERVER_BF_PHONE_v282
 import { toIsoDate } from "../util/isoDate"; // BI_SERVER_BLOCK_v586_BF_HANDOFF_DATES
-import jwt from "jsonwebtoken";
+import { verifyServiceToken } from "../platform/serviceTokens";
 import { randomUUID } from "node:crypto";
 import { pool } from "../db";
 import { env } from "../platform/env";
@@ -16,18 +17,15 @@ import { isCompleteCoGuarantor, normalizeBfCoGuarantors } from "../services/bfCo
 
 const router = express.Router();
 
-function getSecret(): string {
-  return (env.JWT_SECRET as string | undefined) || process.env.JWT_SECRET || "";
-}
 
 function verifyServiceJwt(req: Request): { source: string } | null {
   const auth = req.header("authorization") || "";
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (!m) return null;
-  const secret = getSecret();
-  if (!secret) return null;
   try {
-    const p = jwt.verify(m[1], secret) as { kind?: string; source?: string };
+    // BI_SERVER_v789_TOKENS - service secret, HS256 only, aud checked.
+    const p = verifyServiceToken(m[1]) as { kind?: string; source?: string } | null;
+    if (!p) return null;
     if (p?.kind !== "service" || !p?.source) return null;
     return { source: String(p.source) };
   } catch {
@@ -197,7 +195,7 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
     );
   } catch (e: any) {
     logger.error({ err: e, bfApplicationId }, "from_bf_insert_failed");
-    return res.status(500).json({ error: "insert_failed", detail: e?.message });
+    return res.status(500).json({ error: "insert_failed", requestId: logHiddenError(req, e, "insert_failed") });
   }
 
   // BI_SERVER_BF_CO_APPLICANT_v391 - carry the BF co-applicant across. Never
