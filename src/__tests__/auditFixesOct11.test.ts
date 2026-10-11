@@ -18,14 +18,11 @@ vi.mock("../db", () => ({
   },
   runMigrations: async () => undefined,
 }));
-const scrapeMock = vi.fn();
-vi.mock("../services/mayaOcr", () => ({ mayaScrapeFinancials: (...args: unknown[]) => scrapeMock(...args) }));
 
 import app from "../server";
 import { requireAuth, isStaffOrServiceClaims } from "../platform/auth";
 import { getJwtSecret, assertJwtSecretAtStartup } from "../platform/jwtSecret";
 import { authApplicant } from "../routes/applicantAuth";
-import { createScrapeRouter } from "../routes/biScrapeRoutes";
 import sendgridRoutes from "../routes/biSendgridWebhookRoutes";
 import smsInboundRoutes from "../routes/biSmsInboundRoutes";
 import { revokeLenderApiKey } from "../services/lenderApiKeyRevoke";
@@ -41,7 +38,6 @@ const KEY_ID = "33333333-3333-4333-8333-333333333333";
 beforeEach(() => {
   queryMock.mockReset();
   queryMock.mockResolvedValue({ rows: [], rowCount: 0 });
-  scrapeMock.mockReset();
 });
 
 describe("1. staff-only requireAuth", () => {
@@ -210,64 +206,6 @@ describe("2. no JWT secret fallback", () => {
 
   it("index.ts runs the startup check", () => {
     expect(readFileSync("src/index.ts", "utf8")).toContain("assertJwtSecretAtStartup()");
-  });
-});
-
-describe("3. scrape gating and limits", () => {
-  function scrapeApp() {
-    const a = express();
-    a.set("trust proxy", 1);
-    a.use("/api/v1", createScrapeRouter());
-    return a;
-  }
-  function appRow(over: Record<string, unknown> = {}) {
-    return { id: "app-1", score_decision: "approve", status: "in_progress", source: "public", ...over };
-  }
-  function post(a: express.Express, ip = "203.0.113.10", publicId = "ABC123") {
-    return request(a).post(`/api/v1/applications/${publicId}/scrape`).set("X-Forwarded-For", ip).attach("file", Buffer.from("pdf"), "f.pdf");
-  }
-  beforeEach(() => scrapeMock.mockResolvedValue({ revenue: 1, _confidence: 0.9 }));
-
-  it("404s an unknown publicId without reading the file", async () => {
-    queryMock.mockImplementation(answerBySql([["FROM bi_applications", { rows: [] }]]));
-    expect((await post(scrapeApp())).status).toBe(404);
-    expect(scrapeMock).not.toHaveBeenCalled();
-  });
-
-  it("403s an application that fails the score gate", async () => {
-    queryMock.mockImplementation(answerBySql([["FROM bi_applications", { rows: [appRow({ score_decision: "decline" })] }]]));
-    expect((await post(scrapeApp())).status).toBe(403);
-    expect(scrapeMock).not.toHaveBeenCalled();
-  });
-
-  it("409s an application outside created/in_progress/document_review", async () => {
-    queryMock.mockImplementation(answerBySql([["FROM bi_applications", { rows: [appRow({ status: "submitted" })] }]]));
-    expect((await post(scrapeApp())).status).toBe(409);
-    expect(scrapeMock).not.toHaveBeenCalled();
-  });
-
-  it.each(["created", "in_progress", "document_review"])("scrapes in status %s", async (status) => {
-    queryMock.mockImplementation(answerBySql([["FROM bi_applications", { rows: [appRow({ status })] }]]));
-    const r = await post(scrapeApp());
-    expect(r.status).toBe(200);
-    expect(scrapeMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows 5 per hour per IP", async () => {
-    let n = 0;
-    queryMock.mockImplementation(answerBySql([["FROM bi_applications", () => ({ rows: [appRow({ id: `app-${n++}` })] })]]));
-    const a = scrapeApp();
-    for (let i = 0; i < 5; i++) expect((await post(a)).status).toBe(200);
-    expect((await post(a)).status).toBe(429);
-  });
-
-  it("allows 10 per day per application", async () => {
-    queryMock.mockImplementation(answerBySql([["FROM bi_applications", { rows: [appRow()] }]]));
-    const a = scrapeApp();
-    for (let i = 0; i < 10; i++) expect((await post(a, `198.51.100.${i + 1}`)).status).toBe(200);
-    const r = await post(a, "198.51.100.200");
-    expect(r.status).toBe(429);
-    expect(r.body.scope).toBe("application");
   });
 });
 

@@ -107,7 +107,6 @@ import biAdminLenderRoutes from "./routes/biAdminLenderRoutes";
 import biContactFormRoutes from "./routes/biContactFormRoutes";
 import biNaicsRoutes from "./routes/biNaicsRoutes";
 import biScoreRoutes from "./routes/biScoreRoutes";
-import biScrapeRoutes from "./routes/biScrapeRoutes";
 import { apiTimeoutGuard } from "./middleware/apiTimeoutGuard";
 import { apiErrorBoundary } from "./middleware/apiErrorBoundary";
 import biLenderApplicationCreate from "./routes/biLenderApplicationCreate.js";
@@ -339,7 +338,6 @@ app.use("/api/v1", biCors, mayaAnalyticsRoutes);
 app.use("/api/v1", biCors, intakeRoutes);
 app.use("/api/v1", biCors, biAuthRoutes);
 app.use("/api/v1", biCors, biPublicApplicationRoutes);
-app.use("/api/v1", biCors, biScrapeRoutes);
 app.use("/api/v1", biCors, biQuoteRoutes);
 // BI_SERVER_BLOCK_v223_LENDER_CARRIER_FORWARDING_v1 — biLenderApplicationCreate handles POST /api/v1/lender/applications
 // with the nested body the OTP-authenticated lender form sends. It MUST be
