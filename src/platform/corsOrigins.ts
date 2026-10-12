@@ -2,7 +2,7 @@
 // apiErrorBoundary and apiTimeoutGuard. No wildcard hosts, and an Origin that
 // is not on the list is never reflected back.
 //
-//   - BF-portal (staff) and the public BI website
+//   - BF-portal (staff), the public BI website, BI-Client web, BF-client and BF-website
 //   - Capacitor native apps: iOS sends capacitor://localhost, Android sends
 //     https://localhost (nothing but the packaged app can present those)
 //   - the BI-Website Azure Static Web Apps hosts used by this project
@@ -12,6 +12,12 @@ export const FIXED_ALLOWED_ORIGINS: readonly string[] = [
   "https://staff.boreal.financial",
   "https://boreal.insure",
   "https://www.boreal.insure",
+  // BI-Client web app (also the passkey rpId origin)
+  "https://client.boreal.insure",
+  // BF-client and BF-website
+  "https://client.boreal.financial",
+  "https://boreal.financial",
+  "https://www.boreal.financial",
   "capacitor://localhost",
   "https://localhost",
   // BI-Website Static Web Apps hosts (also listed in examples/lender-api/README.md)

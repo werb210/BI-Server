@@ -1,11 +1,23 @@
 // BI_CLIENT_CONTRACT_ROUTES_v21 source assertions (no DB required).
-import { describe, it, expect } from "vitest";
+// BI_SERVER_v789 [5]/[37] - the server.ts mount check is a behaviour test now:
+// it requests the real app (src/server.ts) with ../../db mocked.
+import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { answerBySql, callsMatching } from "../../__tests__/helpers/answerBySql";
+import { ALLOWED_ORIGIN, applicantBearer, fromBrowser, realApp } from "../../__tests__/helpers/realApp";
+
+const queryMock = vi.fn(answerBySql([]));
+vi.mock("../../db", () => ({
+  pool: {
+    query: (...a: unknown[]) => queryMock(...(a as [])),
+    connect: async () => ({ query: (...a: unknown[]) => queryMock(...(a as [])), release: () => undefined }),
+  },
+  runMigrations: async () => undefined,
+}));
 
 const read = (rel: string) => readFileSync(path.join(process.cwd(), rel), "utf8");
 const routes = read("src/routes/biApplicantContractRoutes.ts");
-const server = read("src/server.ts");
 
 describe("the three endpoints bi-client already calls now exist", () => {
   it("mounts contract upload", () => expect(routes).toContain('router.post("/applicants/contract/upload"'));
@@ -15,8 +27,18 @@ describe("the three endpoints bi-client already calls now exist", () => {
   it("mounts requirement confirm", () => {
     expect(routes).toContain('"/applicants/applications/:id/requirements/:reqId/confirm"');
   });
-  it("is mounted under /api/v1 with the BI cors guard", () => {
-    expect(server).toContain('app.use("/api/v1", biCors, biApplicantContractRoutes);');
+  it("is mounted under /api/v1 with the BI cors guard", async () => {
+    const PHONE = "+14165550121";
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_applications WHERE public_id = $1", { rows: [{ id: "app-21", public_id: "PUB21", country: "CA", applicant_phone_e164: PHONE, guarantor_phone: null }] }],
+      ["FROM bi_contract_requirements", { rows: [] }],
+    ]));
+    const app = await realApp();
+    const r = await fromBrowser(app, "get", "/api/v1/applicants/applications/PUB21/requirements").set("Authorization", applicantBearer(PHONE));
+    expect(r.status).toBe(200);
+    expect(r.headers["access-control-allow-origin"]).toBe(ALLOWED_ORIGIN);
+    expect(r.body.requirements).toEqual([]);
+    expect(callsMatching(queryMock, "FROM bi_contract_requirements")[0][1]).toEqual(["app-21"]);
   });
 });
 

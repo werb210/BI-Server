@@ -149,8 +149,8 @@ async function acceptDocumentLogic(req: Request, res: Response, idParam: string,
               declarations: r.declarations ?? {},
             });
             if (sub?.pgi_error) {
+              // lenderCarrierSubmit already wrote carrier_submission_failed.
               logger.warn({ appId }, "[v391] auto-submit failed at the carrier");
-              await recordCarrierSubmissionFailed(appId, new Error(sub.pgi_error), { path: "auto_submit_on_last_accept" });
             }
           } catch (err) {
             logger.warn({ err, appId }, "[v391] auto-submit failed");
@@ -658,7 +658,7 @@ router.post("/:id/documents/:docId/reject", requireStaffOrAdmin, async (req: Req
   return rejectDocumentLogic(req, res, req.params.id, req.params.docId);
 });
 
-// POST /:id/documents/:docId/review — single endpoint that dispatches to accept or reject
+// POST /:id/documents/:docId/review - single endpoint that dispatches to accept or reject
 // based on body.action. Portal uses this instead of two separate URLs.
 router.post("/:id/documents/:docId/review", requireStaffOrAdmin, async (req: Request, res: Response) => {
   const action = String((req.body ?? {}).action ?? "").toLowerCase().trim();

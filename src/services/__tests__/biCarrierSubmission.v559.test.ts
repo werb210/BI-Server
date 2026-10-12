@@ -23,9 +23,6 @@ describe("v559 carrier email", () => {
     expect(m.subject).toBe("Submission: Contractors Pollution Liability - Acme <Roofing> (BI-123)");
     expect(m.html).toContain("Acme &lt;Roofing&gt;"); expect(m.text).toContain("Limit required by contract: $2,000,000"); expect(m.text).toContain("Andrew");
   });
-  it("routes are staff-only", () => {
-    const r = readFileSync("src/routes/biApplicationDetailRoutes.ts", "utf8");
-    expect(r).toContain('"/:id/carrier-options", requireStaffOrAdmin');
-    expect(r).toContain('"/:id/products/:productId/send-to-carrier", requireStaffOrAdmin');
-  });
+  // BI_SERVER_v789 [5]/[37] - "routes are staff-only" is a behaviour test now:
+  // src/__tests__/carrierWiring.v789.test.ts.
 });

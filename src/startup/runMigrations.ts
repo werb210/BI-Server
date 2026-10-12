@@ -1,4 +1,4 @@
-// BI_MIGRATION_FIX_v56b — direct .sql migration runner.
+// BI_MIGRATION_FIX_v56b - direct .sql migration runner.
 // Replaces the previous "npx node-pg-migrate" shell-out, which crashed in
 // production because the deployed Node runtime cannot load .ts migration files.
 //
@@ -46,7 +46,7 @@ const ENSURE_TABLE_SQL = `
 `;
 
 // BI_SERVER_BLOCK_v66_MIGRATION_RUNNER_ENUM_SAFE_v1
-// Extract every standalone ALTER TYPE … ADD VALUE statement from a .sql
+// Extract every standalone ALTER TYPE ... ADD VALUE statement from a .sql
 // file body so the runner can pre-commit them OUTSIDE the per-file
 // transaction. Postgres permits ADD VALUE inside a tx, but rejects USING
 // the new value before commit (error 55P04). Pre-committing eliminates the
@@ -55,9 +55,9 @@ const ENSURE_TABLE_SQL = `
 // Conservative regex:
 //   - Matches ALTER TYPE <name> ADD VALUE [IF NOT EXISTS] '<value>' [BEFORE/AFTER '<other>']
 //   - Case-insensitive, multiline
-//   - Does NOT strip the matched statement from the file body — Postgres
+//   - Does NOT strip the matched statement from the file body - Postgres
 //     re-runs ADD VALUE IF NOT EXISTS as a no-op on the second pass inside
-//     the per-file BEGIN…COMMIT, which is safe.
+//     the per-file BEGIN...COMMIT, which is safe.
 function extractAddValueStatements_v66(sql: string): string[] {
   const out: string[] = [];
   const re = /ALTER\s+TYPE\s+[a-zA-Z0-9_."]+\s+ADD\s+VALUE(?:\s+IF\s+NOT\s+EXISTS)?\s+'[^']+'(?:\s+(?:BEFORE|AFTER)\s+'[^']+')?\s*;/gi;
@@ -167,7 +167,7 @@ export async function runMigrations(pool: Pool): Promise<{ applied: string[]; sk
     logger.info({ file }, "runMigrations: applying");
     const sql = readFileSync(path.join(MIGRATIONS_DIR, file), "utf8");
 
-    // BI_SERVER_BLOCK_v66_MIGRATION_RUNNER_ENUM_SAFE_v1 — pre-commit any
+    // BI_SERVER_BLOCK_v66_MIGRATION_RUNNER_ENUM_SAFE_v1 - pre-commit any
     // ALTER TYPE ... ADD VALUE statements OUTSIDE the per-file transaction.
     // Postgres rejects USING a newly-added enum value before its xact has
     // committed; running them via pool.query (autocommit) ensures any later

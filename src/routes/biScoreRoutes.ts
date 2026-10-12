@@ -1,4 +1,4 @@
-// BI_BLOCK_PGI_ALIGNMENT_v1 — score + submit-to-pgi handlers.
+// BI_BLOCK_PGI_ALIGNMENT_v1 - score + submit-to-pgi handlers.
 import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 import { pool } from "../db";
@@ -12,7 +12,7 @@ const router = Router();
 
 // BI_SERVER_BLOCK_v274_SCORE_ROUTES_NULL_GUARDS_v1
 // formation_date may arrive as Date (when column is set), string
-// (when read from JSONB / older shapes), or null (BF→BI handoff
+// (when read from JSONB / older shapes), or null (BF->BI handoff
 // mirrors don't populate the column). Throw a clear error to the
 // route handler so we return 400 instead of crashing with TypeError.
 function formationDateIsoOrThrow(v: unknown): string {

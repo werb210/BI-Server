@@ -8,7 +8,7 @@ import jwt from "jsonwebtoken";
 const { queryMock, clientQuery, SECRET } = vi.hoisted(() => ({
   queryMock: vi.fn(),
   clientQuery: vi.fn(),
-  SECRET: "test-shared-secret-min-10",
+  SECRET: (process.env.JWT_SECRET as string),
 }));
 // BI_SERVER_BLOCK_v585 - the mirror now writes through pool.connect() in a transaction (v374).
 vi.mock("../../db", () => ({

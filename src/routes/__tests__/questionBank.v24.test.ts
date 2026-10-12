@@ -1,11 +1,23 @@
 // BI_QUESTION_BANK_v24 source assertions (no DB required).
-import { describe, it, expect } from "vitest";
+// BI_SERVER_v789 [5]/[37] - the server.ts mount check is a behaviour test now:
+// it requests the real app (src/server.ts) with ../../db mocked.
+import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { answerBySql, callsMatching } from "../../__tests__/helpers/answerBySql";
+import { ALLOWED_ORIGIN, applicantBearer, fromBrowser, realApp } from "../../__tests__/helpers/realApp";
+
+const queryMock = vi.fn(answerBySql([]));
+vi.mock("../../db", () => ({
+  pool: {
+    query: (...a: unknown[]) => queryMock(...(a as [])),
+    connect: async () => ({ query: (...a: unknown[]) => queryMock(...(a as [])), release: () => undefined }),
+  },
+  runMigrations: async () => undefined,
+}));
 
 const read = (relativePath: string) => readFileSync(path.join(process.cwd(), relativePath), "utf8");
 const routes = read("src/routes/biApplicantQuestionRoutes.ts");
-const server = read("src/server.ts");
 const migration = read("src/db/migrations/20260810_bi_question_bank.sql");
 
 describe("question bank schema", () => {
@@ -58,8 +70,20 @@ describe("question routes", () => {
     expect(routes).toContain("question.required && !question.value");
   });
 
-  it("is mounted behind applicant ownership checks", () => {
-    expect(server).toContain('app.use("/api/v1", biCors, biApplicantQuestionRoutes);');
-    expect(routes).toContain('"not_owner"');
+  it("is mounted behind applicant ownership checks", async () => {
+    const PHONE = "+14165550124";
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_applications WHERE public_id = $1", { rows: [{ id: "app-24", public_id: "PUB24", country: "CA", applicant_phone_e164: PHONE, guarantor_phone: null }] }],
+    ]));
+    const app = await realApp();
+    const r = await fromBrowser(app, "get", "/api/v1/applicants/applications/PUB24/questions").set("Authorization", applicantBearer(PHONE));
+    expect(r.status).toBe(200);
+    expect(r.headers["access-control-allow-origin"]).toBe(ALLOWED_ORIGIN);
+    expect(r.body).toMatchObject({ applicationId: "PUB24", country: "CA", questions: [] });
+    expect(callsMatching(queryMock, "JOIN bi_coverage_questions cq")[0][1]).toEqual(["app-24", "CA"]);
+    const other = await fromBrowser(app, "get", "/api/v1/applicants/applications/PUB24/questions").set("Authorization", applicantBearer("+14165550999"));
+    expect(other.status).toBe(403);
+    expect(other.body.error).toBe("not_owner");
+    expect((await fromBrowser(app, "get", "/api/v1/applicants/applications/PUB24/questions")).status).toBe(401);
   });
 });

@@ -6,8 +6,8 @@ import jwt from "jsonwebtoken";
 
 const queryMock = vi.fn();
 vi.mock("../../db", () => ({ pool: { query: (...args: unknown[]) => queryMock(...args) } }));
-const SECRET = "test-shared-secret-min-10";
-vi.mock("../../platform/env", () => ({ env: { JWT_SECRET: "test-shared-secret-min-10", DATABASE_URL: "postgres://test" } }));
+const SECRET = process.env.JWT_SECRET as string;
+vi.mock("../../platform/env", () => ({ env: { JWT_SECRET: (process.env.JWT_SECRET as string), DATABASE_URL: "postgres://test" } }));
 vi.mock("../../platform/logger", () => ({ logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } }));
 vi.mock("../../services/otpService", () => ({
   sendOtpSafe: vi.fn(),

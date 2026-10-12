@@ -9,7 +9,7 @@ vi.mock("../../db", () => ({
   pool: { query: (...args: unknown[]) => queryMock(...args) },
 }));
 
-const { SECRET } = vi.hoisted(() => ({ SECRET: "test-shared-secret-min-10" })); // BI_SERVER_BLOCK_v347
+const { SECRET } = vi.hoisted(() => ({ SECRET: (process.env.JWT_SECRET as string) })); // BI_SERVER_BLOCK_v347
 vi.mock("../../platform/env", () => ({
   env: { JWT_SECRET: SECRET, DATABASE_URL: "postgres://test" },
 }));

@@ -34,8 +34,9 @@ describe("classifying BI documents", () => {
 describe("wiring", () => {
   it("classifies after OCR and returns the result to the portal", () => {
     expect(readFileSync("src/services/ocrRunner.ts", "utf-8")).toContain("classifyBiDocument(result.extractedText");
-    const routes = readFileSync("src/routes/biApplicationRoutes.ts", "utf-8");
-    expect(routes).toContain("looks_misfiled: row.detected_mismatch === true");
+    // BI_SERVER_v789 [5]/[37] - "returns the result to the portal" (looks_misfiled
+    // on GET /applications/:id/documents) is a behaviour test now:
+    // src/routes/__tests__/biApplicationRoutes.reads.v789.test.ts.
     expect(readFileSync("src/db/migrations/2026_09_16_v276_bi_document_classification.sql", "utf-8")).toContain("ADD COLUMN IF NOT EXISTS detected_mismatch");
   });
 });

@@ -1,7 +1,30 @@
-import { describe, it, expect } from "vitest";
+// BI_SERVER_v789 [5]/[37] - the route and server.ts checks below were
+// source-text greps; they now request the real app (src/server.ts) with
+// ../../db mocked and assert on the SQL it sends. Only the migration check
+// still reads its .sql file.
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { answerBySql, callsMatching } from "../../__tests__/helpers/answerBySql";
+import { ALLOWED_ORIGIN, applicantBearer, fromBrowser, realApp } from "../../__tests__/helpers/realApp";
+
+const queryMock = vi.fn(answerBySql([]));
+vi.mock("../../db", () => ({
+  pool: {
+    query: (...a: unknown[]) => queryMock(...(a as [])),
+    connect: async () => ({ query: (...a: unknown[]) => queryMock(...(a as [])), release: () => undefined }),
+  },
+  runMigrations: async () => undefined,
+}));
+
 import { isPlausibleToken, normalizePlatform } from "../biClientPushRoutes";
+
+const PHONE = "+14165550159";
+const DEVICE = "f".repeat(64);
+beforeEach(() => {
+  queryMock.mockReset();
+  queryMock.mockImplementation(answerBySql([]));
+});
 
 const root = path.resolve(__dirname, "../../..");
 
@@ -40,20 +63,33 @@ describe("BI_SERVER_PUSH_TOKENS_v159", () => {
     expect(normalizePlatform(undefined)).toBeNull();
   });
 
-  it("scopes the token to the OTP-proven applicant, never the request body", () => {
-    const src = fs.readFileSync(path.join(root, "src/routes/biClientPushRoutes.ts"), "utf8");
-    expect(src).toContain("req.applicantPhone");
-    expect(src).not.toMatch(/req\.body\??\.(phone|applicantPhone)/);
+  it("scopes the token to the OTP-proven applicant, never the request body", async () => {
+    const app = await realApp();
+    const r = await fromBrowser(app, "post", "/api/v1/client/push/register-token").set("Authorization", applicantBearer(PHONE))
+      .send({ token: DEVICE, platform: "ios", phone: "+14165550999", applicantPhone: "+14165550998" });
+    expect(r.status).toBe(200);
+    expect(callsMatching(queryMock, "INSERT INTO bi_client_push_tokens")[0][1]).toEqual([DEVICE, PHONE, "ios"]);
+    await fromBrowser(app, "post", "/api/v1/client/push/unregister-token").set("Authorization", applicantBearer(PHONE))
+      .send({ token: DEVICE, phone: "+14165550999" });
+    expect(callsMatching(queryMock, "DELETE FROM bi_client_push_tokens")[0][1]).toEqual([DEVICE, PHONE]);
   });
 
-  it("requires applicant auth on both routes", () => {
-    const src = fs.readFileSync(path.join(root, "src/routes/biClientPushRoutes.ts"), "utf8");
-    expect(src.match(/authApplicant/g)?.length).toBeGreaterThanOrEqual(3);
+  it("requires applicant auth on both routes", async () => {
+    const app = await realApp();
+    for (const route of ["register-token", "unregister-token"]) {
+      const none = await fromBrowser(app, "post", `/api/v1/client/push/${route}`).send({ token: DEVICE, platform: "ios" });
+      expect(none.status).toBe(401);
+      expect(none.body.error).toBe("missing_bearer");
+    }
+    expect(queryMock).not.toHaveBeenCalled();
   });
 
-  it("reassigns a token rather than duplicating it across applicants", () => {
-    const src = fs.readFileSync(path.join(root, "src/routes/biClientPushRoutes.ts"), "utf8");
-    expect(src).toContain("ON CONFLICT (token) DO UPDATE");
+  it("reassigns a token rather than duplicating it across applicants", async () => {
+    const app = await realApp();
+    await fromBrowser(app, "post", "/api/v1/client/push/register-token").set("Authorization", applicantBearer(PHONE)).send({ token: DEVICE, platform: "android" });
+    const sql = String(callsMatching(queryMock, "INSERT INTO bi_client_push_tokens")[0][0]);
+    expect(sql).toMatch(/ON CONFLICT \(token\) DO UPDATE/);
+    expect(sql).toMatch(/applicant_phone = EXCLUDED\.applicant_phone/);
   });
 
   it("ships an idempotent migration, as every migration here must be", () => {
@@ -66,8 +102,11 @@ describe("BI_SERVER_PUSH_TOKENS_v159", () => {
     expect(sql).toContain("CHECK (platform IN ('ios', 'android'))");
   });
 
-  it("mounts under the /api/v1 prefix BI-Client expects", () => {
-    const server = fs.readFileSync(path.join(root, "src/server.ts"), "utf8");
-    expect(server).toContain('app.use("/api/v1", biCors, biClientPushRoutes)');
+  it("mounts under the /api/v1 prefix BI-Client expects, behind the BI cors guard", async () => {
+    const app = await realApp();
+    const r = await fromBrowser(app, "post", "/api/v1/client/push/register-token").set("Authorization", applicantBearer(PHONE)).send({ token: DEVICE, platform: "capacitor" });
+    expect(r.status).toBe(400);
+    expect(r.body).toEqual({ error: "platform_required" });
+    expect(r.headers["access-control-allow-origin"]).toBe(ALLOWED_ORIGIN);
   });
 });

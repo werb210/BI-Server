@@ -8,7 +8,7 @@ import jwt from "jsonwebtoken";
 const { queryMock, sendSmsMock, SECRET } = vi.hoisted(() => ({
   queryMock: vi.fn(),
   sendSmsMock: vi.fn(),
-  SECRET: "test-shared-secret-min-10",
+  SECRET: (process.env.JWT_SECRET as string),
 }));
 vi.mock("pg", () => ({
   // BI_SERVER_BLOCK_v355 — biCrmRoutes owns a local Pool instance, so mock pg directly.

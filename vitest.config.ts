@@ -1,10 +1,8 @@
-// BI_SERVER_BLOCK_v356_TEST_DB_HARNESS — vitest configuration.
+// BI_SERVER_BLOCK_v356_TEST_DB_HARNESS - vitest configuration.
 import { defineConfig, configDefaults } from "vitest/config";
 
 const TEST_DB = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "";
 const JWT_SECRET = process.env.JWT_SECRET || "test-shared-secret-min-10";
-const JWT_REFRESH_SECRET =
-  process.env.JWT_REFRESH_SECRET || "test-refresh-secret-min-10";
 
 export default defineConfig({
   test: {
@@ -13,7 +11,6 @@ export default defineConfig({
     env: {
       DATABASE_URL: TEST_DB,
       JWT_SECRET,
-      JWT_REFRESH_SECRET,
     },
     exclude: [
       ...configDefaults.exclude,
