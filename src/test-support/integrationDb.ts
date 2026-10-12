@@ -1,4 +1,4 @@
-// BI_SERVER_BLOCK_v356_TEST_DB_HARNESS — integration-test database helpers.
+// BI_SERVER_BLOCK_v356_TEST_DB_HARNESS - integration-test database helpers.
 // Uses the application's own pg pool (src/db) so tests exercise the production
 // connection path. resetDb() truncates mutable CRM/application tables between
 // tests, leaving migration-seeded reference data intact, and is guarded so it

@@ -13,9 +13,9 @@ vi.mock("pg", () => ({
   },
 }));
 
-const SECRET = "test-shared-secret-min-10";
+const SECRET = process.env.JWT_SECRET as string;
 vi.mock("../../platform/env", () => ({
-  env: { JWT_SECRET: "test-shared-secret-min-10", DATABASE_URL: "postgres://test" },
+  env: { JWT_SECRET: (process.env.JWT_SECRET as string), DATABASE_URL: "postgres://test" },
 }));
 vi.mock("../../platform/logger", () => ({
   logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },

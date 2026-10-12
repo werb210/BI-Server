@@ -28,7 +28,9 @@ router.post("/applicants/otp/start", async (req, res) => {
       res.setHeader("Retry-After", "600");
       return res.status(429).json({ error: "otp_rate_limited", detail: "Too many OTP requests for this phone. Please wait 10 minutes and try again." });
     }
-    return res.status(502).json({ error: "otp_send_failed", detail });
+    // BI_SERVER_v789_NO_ERR_MESSAGE - provider text is logged, not returned.
+    console.warn("[applicant_otp_start] send failed", { error: detail });
+    return res.status(502).json({ error: "otp_send_failed" });
   }
   res.json({ ok: true });
 });
@@ -51,7 +53,8 @@ router.post("/applicants/otp/verify", async (req, res) => {
       res.setHeader("Retry-After", "600");
       return res.status(429).json({ error: "otp_rate_limited", detail: "Too many code-check attempts. Please request a new code in 10 minutes." });
     }
-    return res.status(502).json({ error: "otp_verify_failed", detail });
+    console.warn("[applicant_otp_verify] verify failed", { error: detail });
+    return res.status(502).json({ error: "otp_verify_failed" });
   }
   if (!vr.approved) return res.status(401).json({ error: "invalid_otp" });
 

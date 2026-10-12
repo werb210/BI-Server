@@ -1,16 +1,39 @@
 // BI_CLIENT_PROFILE_v22 source assertions (no DB required).
-import { describe, it, expect } from "vitest";
+// BI_SERVER_v789 [5]/[37] - the server.ts mount check is a behaviour test now:
+// it requests the real app (src/server.ts) with ../../db mocked.
+import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { answerBySql, callsMatching } from "../../__tests__/helpers/answerBySql";
+import { insertColumns } from "../../__tests__/helpers/insertColumns";
+import { ALLOWED_ORIGIN, applicantBearer, fromBrowser, realApp } from "../../__tests__/helpers/realApp";
+
+const queryMock = vi.fn(answerBySql([]));
+vi.mock("../../db", () => ({
+  pool: {
+    query: (...a: unknown[]) => queryMock(...(a as [])),
+    connect: async () => ({ query: (...a: unknown[]) => queryMock(...(a as [])), release: () => undefined }),
+  },
+  runMigrations: async () => undefined,
+}));
 
 const read = (rel: string) => readFileSync(path.join(process.cwd(), rel), "utf8");
 const routes = read("src/routes/biApplicantProfileRoutes.ts");
-const server = read("src/server.ts");
 
 describe("step 1 endpoint", () => {
-  it("is mounted under /api/v1 behind the BI cors guard", () => {
-    expect(routes).toContain('router.post("/applicants/profile", authApplicant');
-    expect(server).toContain('app.use("/api/v1", biCors, biApplicantProfileRoutes);');
+  it("is mounted under /api/v1 behind the BI cors guard", async () => {
+    const PHONE = "+14165550122";
+    queryMock.mockImplementation(answerBySql([]));
+    const app = await realApp();
+    const body = { businessName: "Acme", applicantName: "Jane", email: "j@example.com", country: "US", phone: "+14165550999" };
+    const r = await fromBrowser(app, "post", "/api/v1/applicants/profile").set("Authorization", applicantBearer(PHONE)).send(body);
+    expect(r.status).toBe(200);
+    expect(r.headers["access-control-allow-origin"]).toBe(ALLOWED_ORIGIN);
+    expect(r.body).toMatchObject({ phone: PHONE, industry: "other", wantsContract: false });
+    const [sql, params] = callsMatching(queryMock, "INSERT INTO bi_applications")[0] as [string, unknown[]];
+    expect(insertColumns(sql, params).applicant_phone_e164.value).toBe(PHONE);
+    // Without a token the same request is refused by the applicant guard.
+    expect((await fromBrowser(app, "post", "/api/v1/applicants/profile").send(body)).status).toBe(401);
   });
   it("takes the phone from the token, never from the body", () => {
     expect(routes).toContain("const phone = String(req.applicantPhone);");

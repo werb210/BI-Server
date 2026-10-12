@@ -10,8 +10,18 @@ import jwt from "jsonwebtoken";
 import { vi } from "vitest";
 
 const notesQueryMock = vi.fn();
-vi.mock("../../db", () => ({ pool: { query: (...args: unknown[]) => notesQueryMock(...args) } }));
-vi.mock("../../platform/logger", () => ({ logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() } }));
+vi.mock("../../db", () => ({
+  pool: {
+    query: (...args: unknown[]) => notesQueryMock(...args),
+    connect: async () => ({ query: (...args: unknown[]) => notesQueryMock(...args), release: () => undefined }),
+  },
+  runMigrations: async () => undefined,
+}));
+// A silent real pino logger, so pino-http (the real app's httpLogger) can wrap it.
+vi.mock("../../platform/logger", async () => {
+  const { default: pino } = await import("pino");
+  return { logger: pino({ level: "silent" }) };
+});
 import { requireAuth } from "../../platform/auth";
 import biNotesRoutes from "../biNotesRoutes";
 import { answerBySql } from "../../__tests__/helpers/answerBySql";
@@ -25,6 +35,7 @@ import biLenderApplicationCreate from "../biLenderApplicationCreate";
 import { signBiToken } from "../../platform/serviceTokens";
 import { resetLenderActiveCache } from "../../services/lenderActiveCache";
 import { callsMatching } from "../../__tests__/helpers/answerBySql";
+import { ALLOWED_ORIGIN, fromBrowser, realApp } from "../../__tests__/helpers/realApp";
 
 const V789_LENDER = "11111111-1111-4111-8111-111111111111";
 function lenderPortalApp() {
@@ -54,12 +65,8 @@ const lenderPortalBody = {
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 const readMigration = (name: string) =>
   readFileSync(path.join(REPO_ROOT, "src/db/migrations", name), "utf8");
-const readRoute = (name: string) =>
-  readFileSync(path.join(REPO_ROOT, "src/routes", name), "utf8");
-const readFile = (rel: string) =>
-  readFileSync(path.join(REPO_ROOT, rel), "utf8");
 
-describe("BI_SERVER_BLOCK_v262 — migration", () => {
+describe("BI_SERVER_BLOCK_v262 - migration", () => {
   const sql = readMigration("2026_05_19_carrier_path_e2e_fix_v262.sql");
   it("adds lender_notes + company_name on bi_applications", () => {
     expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS lender_notes/i);
@@ -76,18 +83,31 @@ describe("BI_SERVER_BLOCK_v262 — migration", () => {
   });
 });
 
-describe("BI_SERVER_BLOCK_v262 — server.ts duplicate mount removed", () => {
-  const src = readFile("src/server.ts");
-  it("biPublicApplicationRoutes is no longer mounted at /api/v1/bi", () => {
-    // The duplicate mount line was the only place biPublicApplicationRoutes
-    // appeared with the /api/v1/bi prefix. Should be gone.
-    const dupRe = /app\.use\("\/api\/v1\/bi"[^)]*biPublicApplicationRoutes/;
-    expect(src).not.toMatch(dupRe);
+// BI_SERVER_v789 [5]/[37] - behaviour test (was a server.ts source grep): the
+// real app (src/server.ts) is requested with the db mocked.
+describe("BI_SERVER_BLOCK_v262 - server.ts duplicate mount removed", () => {
+  const PUBLIC_LOOKUP = "SELECT * FROM bi_applications WHERE public_id=$1";
+  it("biPublicApplicationRoutes no longer shadows the staff GET /api/v1/bi/applications/:id", async () => {
+    notesQueryMock.mockReset();
+    notesQueryMock.mockImplementation(answerBySql([]));
+    const app = await realApp();
+    const staff = jwt.sign({ staffUserId: "staff-1", role: "staff" }, process.env.JWT_SECRET as string);
+    const id = "11111111-1111-4111-8111-111111111111";
+    await fromBrowser(app, "get", `/api/v1/bi/applications/${id}`).set("Authorization", `Bearer ${staff}`);
+    // The staff detail route answered (it loads a.* by id) and the public
+    // handler, which looks the id up as a public_id, never ran.
+    expect(callsMatching(notesQueryMock, /SELECT a\.\*/)[0][1]).toContain(id);
+    expect(callsMatching(notesQueryMock, PUBLIC_LOOKUP)).toHaveLength(0);
   });
-  it("biPublicApplicationRoutes is still mounted at /api/v1 (public)", () => {
-    // The primary mount must remain — that's how the BI-Website
-    // applicant flow reaches the public endpoints.
-    expect(src).toMatch(/app\.use\("\/api\/v1",[^)]*biPublicApplicationRoutes\)/);
+  it("biPublicApplicationRoutes is still mounted at /api/v1 (public, with biCors)", async () => {
+    notesQueryMock.mockReset();
+    notesQueryMock.mockImplementation(answerBySql([[PUBLIC_LOOKUP, { rows: [{ id: "app-262", public_id: "PUBX262", status: "created" }] }]]));
+    const app = await realApp();
+    const r = await fromBrowser(app, "get", "/api/v1/applications/PUBX262");
+    expect(r.status).toBe(200);
+    expect(r.headers["access-control-allow-origin"]).toBe(ALLOWED_ORIGIN);
+    expect(r.body.application).toMatchObject({ public_id: "PUBX262" });
+    expect(callsMatching(notesQueryMock, PUBLIC_LOOKUP)[0][1]).toEqual(["PUBX262"]);
   });
 });
 
@@ -97,7 +117,7 @@ describe("BI_SERVER_BLOCK_v262 — server.ts duplicate mount removed", () => {
 // behaviour tests now: src/routes/__tests__/biApplicationRoutes.reads.v789.test.ts.
 // BI_SERVER_v789 [5]/[37] - behaviour test (was a source-text grep): the
 // notes GET answers with a `notes` array (never `items`), staff only.
-describe("BI_SERVER_BLOCK_v262 — biNotesRoutes returns {notes}", () => {
+describe("BI_SERVER_BLOCK_v262 - biNotesRoutes returns {notes}", () => {
   it("GET answers { notes: [...] } (also under data), not items", async () => {
     notesQueryMock.mockImplementation(answerBySql([
       ["FROM bi_applications", { rows: [{ "?column?": 1 }] }],

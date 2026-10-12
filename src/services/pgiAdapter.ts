@@ -2,7 +2,7 @@ import { env } from "../platform/env";
 import { logger } from "../platform/logger";
 import { truncateForLog } from "../util/mask";
 
-// BI_BLOCK_PGI_ALIGNMENT_v1 — typed PGI client with USE_PGI_STUB toggle.
+// BI_BLOCK_PGI_ALIGNMENT_v1 - typed PGI client with USE_PGI_STUB toggle.
 
 // BI_SERVER_v789_PGI_TIMEOUTS - every carrier call is bounded.
 //   - PGI_TIMEOUT_MS (15 s) caps a whole carrier call: request(s), a
@@ -77,8 +77,8 @@ async function fetchWithRetryAfter(url: string, init: RequestInit, signal: Abort
 const PGI_BASE = env.PGI_BASE_URL || "https://api.pgicover.com";
 // BI_SERVER_BLOCK_v362_LEGACY_SUNSET_AND_STUB_GUARD_v1
 // Production must NEVER default to STUB mode. If USE_PGI_STUB is unset:
-//   - NODE_ENV=production → STUB=false (real PGI calls)
-//   - else                → STUB=true (safe default for local + CI)
+//   - NODE_ENV=production -> STUB=false (real PGI calls)
+//   - else                -> STUB=true (safe default for local + CI)
 // Explicit setting always wins.
 const STUB = (() => {
   const raw = process.env.USE_PGI_STUB;
@@ -270,12 +270,12 @@ export class PgiCarrierValidationError extends Error {
 export async function pgiSubmitV2(payload: CarrierPayloadV2): Promise<{ application_id: string; status: string; message?: string }> {
   // BI_SERVER_BLOCK_v391_PGI_BASE_UNIFY_v1
   // Use the SAME base-URL + stub resolution as pgiScore/pgiSubmit/
-  // pgiUploadDocument. Previously this read process.env.PGI_API_BASE —
+  // pgiUploadDocument. Previously this read process.env.PGI_API_BASE -
   // a var that is never set (env.ts validates PGI_BASE_URL, and every
   // other adapter fn reads PGI_BASE = env.PGI_BASE_URL). The mismatch
   // meant the PUBLIC carrier-submit path silently ignored a configured
   // PGI_BASE_URL and always hit the hardcoded api.pgicover.com, while
-  // the lender path correctly honored PGI_BASE_URL — so pointing the
+  // the lender path correctly honored PGI_BASE_URL - so pointing the
   // app at a PGI sandbox moved lender traffic but NOT public traffic.
   // STUB resolution now also matches the rest of the adapter (honors
   // USE_PGI_STUB=true|1|false|0 and the NODE_ENV-aware default).

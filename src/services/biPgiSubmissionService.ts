@@ -6,8 +6,8 @@ import { getStorage } from "../lib/storage";
 import { fetchBfDocumentFile } from "./bfDocumentFile"; // BI_SERVER_BF_DOC_FILE_v4
 import { logger } from "../platform/logger";
 import { recordCarrierSubmissionFailed } from "./biCarrierEvents"; // BI_SERVER_v789_CARRIER_EVENTS
-// BI_PGI_ALIGNMENT_v56 — reads from bi_applications.data which now contains the full PGI form_data shape.
-// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — adds documents_text bundle to PGI submission.
+// BI_PGI_ALIGNMENT_v56 - reads from bi_applications.data which now contains the full PGI form_data shape.
+// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER - adds documents_text bundle to PGI submission.
 
 type ApplicationRow = {
   id: string;
@@ -85,7 +85,7 @@ export async function submitApplicationToPGI(
   opts: { payload?: Record<string, unknown> } = {},
 ): Promise<{ externalId: string; status: string; alreadySubmitted: boolean }> {
   // BI_SERVER_BLOCK_v270_ORCHESTRATOR_RACE_CLAIM_v1
-  // Atomic claim: only one request can flip submission_locked=FALSE→TRUE
+  // Atomic claim: only one request can flip submission_locked=FALSE->TRUE
   // for a row that hasn't already been carrier-submitted. Closes the
   // F-2 race without holding a row lock across the Markel network call.
   const claim = await pool.query<{ id: string }>(
@@ -103,7 +103,7 @@ export async function submitApplicationToPGI(
   if (claim.rowCount === 0) {
     // Either already submitted, or another request is in flight.
     // Re-read to distinguish; either way return idempotent (the
-    // route handler treats both the same — the UI reloads and the
+    // route handler treats both the same - the UI reloads and the
     // button is hidden because submission_locked=TRUE).
     const re = await pool.query<{ pgi_application_id: string | null; pgi_external_id: string | null; stage: string }>(
       `SELECT pgi_application_id, pgi_external_id, stage
@@ -162,14 +162,14 @@ export async function submitApplicationToPGI(
 
   // BI_SERVER_BLOCK_v383_CARRIER_PAYLOAD_AND_DOC_FORWARDING_v1
   // Previous code used buildBIApplicationFromRow which read fields from
-  // row.data.* (a phantom path — public PATCH writes typed columns +
+  // row.data.* (a phantom path - public PATCH writes typed columns +
   // form_data JSONB, not flat keys on row.data). Result was a
-  // BIApplication object with defaults — firstName="Applicant",
+  // BIApplication object with defaults - firstName="Applicant",
   // businessName="Unknown business", loanAmount=0, everything in
   // scoringAnswers zero. Real PGI would either reject or process the
   // wrong economics. Test #2 leg [D] caught this against fresh main.
   // Fix: route the public path through the same V2 mapper the lender
-  // path uses (lenderCarrierSubmit.ts:36) — reads typed columns via
+  // path uses (lenderCarrierSubmit.ts:36) - reads typed columns via
   // legacyKey fallbacks so all operator-canonical fields land in the
   // carrier payload. Addresses come in as JSONB objects from the
   // public PATCH path; flatten before passing so the mapper's string
@@ -207,7 +207,7 @@ export async function submitApplicationToPGI(
   // claim already prevents concurrent submits; this is the long step.
   let result: { externalId: string; status: string };
   try {
-    // v383 — pgiSubmitV2 is the canonical V2 endpoint. The lender path
+    // v383 - pgiSubmitV2 is the canonical V2 endpoint. The lender path
     // uses pgiSubmit (v1) which works fine because both stub + real
     // PGI accept the V2 envelope at /api/v2/applications/. Using V2
     // explicitly for clarity + future-proofing.
@@ -215,7 +215,7 @@ export async function submitApplicationToPGI(
     result = { externalId: submitResp.application_id, status: submitResp.status };
   } catch (err) {
     // Release the claim so the user can retry (only release rows that
-    // never reached the carrier — guards against releasing a row that
+    // never reached the carrier - guards against releasing a row that
     // partially succeeded between two retries).
     await pool.query(
       `UPDATE bi_applications SET submission_locked = FALSE, updated_at = NOW()
@@ -270,7 +270,7 @@ export async function submitApplicationToPGI(
 
 
 
-// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER — bundles all OCR'd documents for an
+// BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER - bundles all OCR'd documents for an
 // application into a single markdown text blob with metadata headers per
 // document. Skips documents still pending or failed (notes them in the
 // bundle so PGI sees what was attempted).
@@ -314,14 +314,14 @@ async function assembleDocumentsTextBundle(applicationId: string): Promise<strin
     if (doc.ocr_status === "complete" && doc.extracted_text) sections.push(doc.extracted_text);
     else if (doc.ocr_status === "failed") sections.push(`[OCR FAILED: ${doc.ocr_error ?? "unknown error"}]`);
     else if (doc.ocr_status === "skipped") sections.push(`[OCR SKIPPED: unsupported MIME type ${doc.mime_type ?? "(unknown)"}]`);
-    else sections.push(`[OCR ${doc.ocr_status} — extraction not yet complete]`);
+    else sections.push(`[OCR ${doc.ocr_status} - extraction not yet complete]`);
     sections.push("", "---", "");
   }
 
   return sections.join("\n");
 }
 
-// PGI_API_ALIGN_v57 — strict carrier payload builder, single source of truth.
+// PGI_API_ALIGN_v57 - strict carrier payload builder, single source of truth.
 // Any code path forwarding to PGI MUST go through this function so the
 // 18-field contract is enforced at exactly one place.
 export function buildPgiPayload(row: {
@@ -334,7 +334,7 @@ export function buildPgiPayload(row: {
 }
 
 
-// BI_DOC_LIST_v61 — every required slot must be present AND accepted before
+// BI_DOC_LIST_v61 - every required slot must be present AND accepted before
 // we forward the dossier to PGI. This is intentionally redundant with the
 // route-level stage gate: routes can be added carelessly; this gate is the
 // last thing checked before the outbound HTTP call.
@@ -350,13 +350,13 @@ export async function assertDocsReadyForCarrier(applicationId: string, formation
   // BI_SERVER_BLOCK_v380_READINESS_COALESCE_v1
   // Completes v379's Bug D fix. The previous version of this query was
   // a partial-merge of v379 that only fixed Bug B (column rename
-  // status → review_status AS status). The full Bug D fix also needs:
+  // status -> review_status AS status). The full Bug D fix also needs:
   //   1. SELECT keys off doc_type when doc_slot is NULL. The public
   //      upload route at biPublicApplicationRoutes.ts:642 INSERTs rows
   //      with doc_slot=NULL (it only collects doc_type). The lender
   //      upload route (biLenderApplicationCreate.ts:260) sets
   //      doc_slot = docType (same string). COALESCE handles both paths.
-  //   2. AND purged_at IS NULL — soft-deleted rows shouldn't satisfy
+  //   2. AND purged_at IS NULL - soft-deleted rows shouldn't satisfy
   //      the readiness gate.
   //   3. Loop reads row.slot (the COALESCE'd value), not row.doc_slot.
   // Without all three, the public send-to-carrier path returns

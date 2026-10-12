@@ -1,16 +1,43 @@
 // BI_CLIENT_SELECTION_v23 source assertions (no DB required).
-import { describe, it, expect } from "vitest";
+// BI_SERVER_v789 [5]/[37] - the server.ts mount check is a behaviour test now:
+// it requests the real app (src/server.ts) with ../../db mocked.
+import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { answerBySql, callsMatching } from "../../__tests__/helpers/answerBySql";
+import { ALLOWED_ORIGIN, applicantBearer, fromBrowser, realApp } from "../../__tests__/helpers/realApp";
+
+const queryMock = vi.fn(answerBySql([]));
+vi.mock("../../db", () => ({
+  pool: {
+    query: (...a: unknown[]) => queryMock(...(a as [])),
+    connect: async () => ({ query: (...a: unknown[]) => queryMock(...(a as [])), release: () => undefined }),
+  },
+  runMigrations: async () => undefined,
+}));
 const read = (r: string) => readFileSync(path.join(process.cwd(), r), "utf8");
 const routes = read("src/routes/biApplicantSelectionRoutes.ts");
-const server = read("src/server.ts");
 
 describe("step 2 selection endpoints", () => {
   it("reads and writes the applicant's picks", () => {
     expect(routes).toContain('router.get("/applicants/applications/:id/products"');
     expect(routes).toContain('router.post("/applicants/applications/:id/products"');
-    expect(server).toContain('app.use("/api/v1", biCors, biApplicantSelectionRoutes);');
+  });
+  it("is mounted under /api/v1 behind the BI cors guard", async () => {
+    const PHONE = "+14165550123";
+    queryMock.mockImplementation(answerBySql([
+      ["FROM bi_applications WHERE public_id = $1", { rows: [{ id: "app-23", public_id: "PUB23", country: "US", applicant_phone_e164: null, guarantor_phone: PHONE }] }],
+      ["FROM bi_application_products ap JOIN bi_products p", { rows: [{ code: "pgi", display_name: "PGI", source: "client_added" }] }],
+    ]));
+    const app = await realApp();
+    const r = await fromBrowser(app, "get", "/api/v1/applicants/applications/PUB23/products").set("Authorization", applicantBearer(PHONE));
+    expect(r.status).toBe(200);
+    expect(r.headers["access-control-allow-origin"]).toBe(ALLOWED_ORIGIN);
+    expect(r.body).toEqual({ applicationId: "PUB23", country: "US", selected: [{ code: "pgi", display_name: "PGI", source: "client_added" }] });
+    expect(callsMatching(queryMock, "FROM bi_application_products ap JOIN bi_products p")[0][1]).toEqual(["app-23"]);
+    const other = await fromBrowser(app, "get", "/api/v1/applicants/applications/PUB23/products").set("Authorization", applicantBearer("+14165550999"));
+    expect(other.status).toBe(403);
+    expect(other.body.error).toBe("not_owner");
   });
   it("is ownership-checked, not just authenticated", () => {
     expect(routes).toContain('"not_owner"');

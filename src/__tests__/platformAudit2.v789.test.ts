@@ -201,6 +201,10 @@ describe("[65] CORS exact origins", () => {
     "https://staff.boreal.financial",
     "https://boreal.insure",
     "https://www.boreal.insure",
+    "https://client.boreal.insure",
+    "https://client.boreal.financial",
+    "https://boreal.financial",
+    "https://www.boreal.financial",
     "capacitor://localhost",
     "https://localhost",
     "https://witty-moss-0886d220f.7.azurestaticapps.net",
@@ -230,8 +234,8 @@ describe("[65] CORS exact origins", () => {
   });
 
   it("CORS_ALLOWED_ORIGINS adds exact origins only (no wildcards)", () => {
-    setEnv("CORS_ALLOWED_ORIGINS", "https://client.boreal.insure, https://*.azurestaticapps.net");
-    expect(isAllowedOrigin("https://client.boreal.insure")).toBe(true);
+    setEnv("CORS_ALLOWED_ORIGINS", "https://preview.boreal.insure, https://*.azurestaticapps.net");
+    expect(isAllowedOrigin("https://preview.boreal.insure")).toBe(true);
     expect(isAllowedOrigin("https://x.1.azurestaticapps.net")).toBe(false);
   });
 

@@ -63,16 +63,18 @@ describe("native BI-Client origins are allowed", () => {
     }
   });
 
-  // v789 deliberate change: client.boreal.insure is no longer hardcoded; it
-  // must be added through CORS_ALLOWED_ORIGINS.
-  it("client.boreal.insure needs CORS_ALLOWED_ORIGINS", async () => {
+  // v789 item 11 correction: the BI-Client and BF origins are built in, so they
+  // work in production with CORS_ALLOWED_ORIGINS unset.
+  it.each([
+    "https://client.boreal.insure",
+    "https://client.boreal.financial",
+    "https://boreal.financial",
+    "https://www.boreal.financial",
+  ])("%s is allowed without CORS_ALLOWED_ORIGINS", async (origin) => {
     process.env.NODE_ENV = "production";
     delete process.env.CORS_ALLOWED_ORIGINS;
-    expect(isAllowedOrigin("https://client.boreal.insure")).toBe(false);
-    expect(await allowOriginFor("https://client.boreal.insure")).toBeUndefined();
-    process.env.CORS_ALLOWED_ORIGINS = "https://client.boreal.insure";
-    expect(isAllowedOrigin("https://client.boreal.insure")).toBe(true);
-    expect(await allowOriginFor("https://client.boreal.insure")).toBe("https://client.boreal.insure");
+    expect(isAllowedOrigin(origin)).toBe(true);
+    expect(await allowOriginFor(origin)).toBe(origin);
   });
 
   // v789 deliberate change: ionic:// and http://localhost are gone in production.

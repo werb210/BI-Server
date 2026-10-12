@@ -17,7 +17,7 @@ vi.mock("../../platform/logger", () => ({
 type Adapter = typeof import("../pgiAdapter");
 let adapter: Adapter;
 const realFetch = global.fetch;
-const ENV_KEYS = ["USE_PGI_STUB", "PGI_BASE_URL", "PGI_API_KEY"] as const;
+const ENV_KEYS = ["USE_PGI_STUB", "PGI_BASE_URL", "PGI_API_KEY", "NODE_ENV"] as const;
 const saved: Record<string, string | undefined> = {};
 
 const scoreBody = {
@@ -130,5 +130,32 @@ describe("pgiAdapter error bodies are truncated (v789)", () => {
     const e = new adapter.PgiCarrierValidationError(errors);
     expect(e.message.length).toBeLessThan(600);
     expect(Object.keys(e.errors)).toHaveLength(200);
+  });
+});
+
+// BI_SERVER_v789 [5]/[37] - replaces the source-text check in
+// legacySunsetAndStubGuard.v362 ("STUB default is env-aware"): which mode runs
+// is decided by USE_PGI_STUB, defaulting to live only in production.
+describe("v362 - PGI STUB default is env-aware", () => {
+  async function submitWith(vars: Record<string, string | undefined>) {
+    for (const [k, v] of Object.entries(vars)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    const fetchMock = vi.fn(async () => jsonResponse(200, { application_id: "LIVE-1", status: "received" }));
+    global.fetch = fetchMock as any;
+    vi.resetModules();
+    const a = await import("../pgiAdapter");
+    const out = await a.pgiSubmit({} as any);
+    return { out, live: fetchMock.mock.calls.length > 0 };
+  }
+  it("production with USE_PGI_STUB unset calls the carrier", async () => {
+    expect((await submitWith({ NODE_ENV: "production", USE_PGI_STUB: undefined })).live).toBe(true);
+  });
+  it("non-production with USE_PGI_STUB unset uses the stub", async () => {
+    const r = await submitWith({ NODE_ENV: "test", USE_PGI_STUB: undefined });
+    expect(r.live).toBe(false);
+    expect(r.out.application_id).toMatch(/^STUB_APP_/);
+  });
+  it("an explicit USE_PGI_STUB=false beats the NODE_ENV default; =true forces the stub", async () => {
+    expect((await submitWith({ NODE_ENV: "test", USE_PGI_STUB: "false" })).live).toBe(true);
+    expect((await submitWith({ NODE_ENV: "production", USE_PGI_STUB: "true" })).live).toBe(false);
   });
 });

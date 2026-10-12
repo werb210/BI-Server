@@ -1,9 +1,15 @@
 // BI_SERVER_OTP_ABUSE_GUARD_v716
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { readFileSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import express from "express";
 import request from "supertest";
+import { answerBySql, callsMatching } from "../../__tests__/helpers/answerBySql";
+
+const queryMock = vi.fn();
+vi.mock("../../db", () => ({ pool: { query: (...a: unknown[]) => queryMock(...a) } }));
+
 import biApplicantOtpRoutes from "../../routes/biApplicantOtpRoutes";
+import biAuthRoutes from "../../routes/biAuthRoutes";
+import biLenderApiRoutes from "../../routes/biLenderApiRoutes";
 import { isAllowedOtpDestination, checkOtpSend, _resetOtpGuard } from "../otpGuard";
 import { rateLimitKeyFromRequest } from "../../middleware/rateLimitKey";
 import { sendOtpSafe, otpSendFailed } from "../../services/otpService";
@@ -57,14 +63,32 @@ describe("BI rate-limit key cannot be forged", () => {
     expect(rateLimitKeyFromRequest({ headers: { "x-forwarded-for": "1.2.3.4, 77.246.52.163:62553" } } as any)).toBe("77.246.52.163");
     expect(rateLimitKeyFromRequest({ headers: { "x-forwarded-for": "1.2.3.4, 77.246.52.163:62553, 10.0.0.4" } } as any)).toBe("77.246.52.163");
   });
-  // v789 [5]/[37]: biApplicantOtpRoutes changed in this block, so it is checked
-  // by behaviour; biAuthRoutes and biLenderApiRoutes are not part of the
-  // v789 changed set here and keep the source check.
-  it("every public sign-in route replies through otpSendFailed", () => {
-    for (const f of ["biAuthRoutes.ts", "biLenderApiRoutes.ts"]) {
-      expect(readFileSync("src/routes/" + f, "utf8")).toContain("otpSendFailed(res,");
-    }
+  // v789 [5]/[37]: every public sign-in route (applicant, /otp/request in
+  // biAuthRoutes, /lender/otp/start in biLenderApiRoutes) is checked by
+  // behaviour: a guard refusal comes back in otpSendFailed's shape and nothing
+  // is recorded as sent.
+  const mounted = (router: express.Router) => express().use(express.json()).use("/api/v1", router);
+  const HAITI = "+50937001234";
+
+  it("biAuthRoutes /otp/request answers a guard refusal through otpSendFailed", async () => {
+    _resetOtpGuard();
+    queryMock.mockReset().mockImplementation(answerBySql([["FROM bi_otp_sessions", { rows: [{ n: 0 }] }]]));
+    const r = await request(mounted(biAuthRoutes)).post("/api/v1/otp/request")
+      .send({ phone: HAITI, name: "Pat", email: "pat@example.com" });
+    expect(r.status).toBe(400);
+    expect(r.body).toEqual({ error: "unsupported_country", message: expect.any(String) });
+    expect(callsMatching(queryMock, "INSERT INTO bi_otp_sessions")).toHaveLength(0);
   });
+
+  it("biLenderApiRoutes /lender/otp/start answers a guard refusal through otpSendFailed", async () => {
+    _resetOtpGuard();
+    queryMock.mockReset().mockImplementation(answerBySql([["FROM bi_lender_login_contacts", { rows: [{ id: "c1" }] }]]));
+    const r = await request(mounted(biLenderApiRoutes)).post("/api/v1/lender/otp/start").send({ phone: HAITI });
+    expect(r.status).toBe(400);
+    expect(r.body).toEqual({ error: "unsupported_country", message: expect.any(String) });
+    expect(callsMatching(queryMock, "FROM bi_lender_login_contacts")[0][1]).toEqual([HAITI]);
+  });
+
   it("the applicant OTP route answers a guard refusal through otpSendFailed", async () => {
     _resetOtpGuard();
     const app = express();
