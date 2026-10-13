@@ -25,8 +25,13 @@ export function audienceAllowed(claims: unknown): boolean {
   const aud = (claims as { aud?: unknown }).aud;
   if (aud === undefined || aud === null) return true;
   const list = Array.isArray(aud) ? aud : [aud];
-  return list.includes(BI_AUDIENCE);
+  // BI_SERVER_v792_STAFF_AUDIENCE - BF-Server staff access tokens carry aud
+  // "boreal-staff-portal"; the portal sends them here for every BI screen.
+  return list.includes(BI_AUDIENCE) || list.includes(STAFF_PORTAL_AUDIENCE);
 }
+
+/** Audience on BF-Server staff access tokens (BF-Server src/auth/jwt.ts JWT_AUDIENCE). */
+export const STAFF_PORTAL_AUDIENCE = "boreal-staff-portal";
 
 /** Verify with one or more accepted secrets. Returns the claims or null. */
 export function verifyBiToken(token: string, secrets: string | string[]): TokenClaims | null {
