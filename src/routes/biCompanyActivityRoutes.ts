@@ -24,10 +24,23 @@ router.get("/crm/companies/:id/activity", requireStaffUser, async (req: Request,
   try {
     const co = await pool.query(`SELECT 1 FROM bi_companies WHERE id = $1 LIMIT 1`, [id]);
     if (!co.rows[0]) return res.status(404).json({ ok: false, error: "not_found" });
+    // BI_SERVER_v856_CRM_UNIFY - the company's own activity plus its people's (calls, emails, notes on their contact
+    // records), labelled with whose it is, so a company whose contacts are busy no longer says "No activity yet".
     const r = await pool.query(
-      `SELECT ${ACTIVITY_COLUMNS}
-         FROM bi_company_activity
-        WHERE company_id = $1
+      `SELECT * FROM (
+         SELECT ${ACTIVITY_COLUMNS}, NULL::text AS contact_id, NULL::text AS contact_name
+           FROM bi_company_activity
+          WHERE company_id = $1
+         UNION ALL
+         SELECT a.id, $1::uuid AS company_id, a.actor_id, a.actor_name, a.event_type, a.outcome, a.body, a.meta, a.created_at, a.occurred_at,
+                c.id::text AS contact_id, c.full_name AS contact_name
+           FROM bi_contact_activity a
+           JOIN bi_contacts c ON c.id = a.contact_id
+          WHERE c.converted_to_company_id IS NULL
+            AND (c.company_id = $1
+                 OR c.id IN (SELECT contact_id FROM bi_crm_company_people WHERE company_id = $1)
+                 OR c.id IN (SELECT primary_contact_id FROM bi_applications WHERE company_id = $1 AND primary_contact_id IS NOT NULL))
+       ) x
         ORDER BY occurred_at DESC, created_at DESC
         LIMIT ${limit}`,
       [id],

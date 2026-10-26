@@ -70,6 +70,15 @@ const server = app.listen(port, "0.0.0.0", () => {
       logger.error({ worker: name, err: err instanceof Error ? err.message : String(err) }, "BI worker start failed (non-blocking)");
     }
   }
+  // BI_SERVER_v856_CRM_UNIFY - once per database (after the migrations have had time to run): every application's
+  // directors, partners and guarantors become CRM contacts linked to the company (bi_crm_backfill_runs records it).
+  if (workersEnabled()) {
+    setTimeout(() => {
+      void import("./services/crmUnify/peopleSync")
+        .then((m) => m.backfillBiCrmPeopleOnce(pool))
+        .catch((err) => logger.warn({ err }, "bi_crm_people_backfill_failed"));
+    }, 60_000).unref?.();
+  }
   logger.info({ port }, "BI server running");
   // eslint-disable-next-line no-console
   console.log(`[BI_BOOT_FIX_v63] BI server listening on ${port}`);

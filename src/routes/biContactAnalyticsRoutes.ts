@@ -94,6 +94,8 @@ const defaultModel: SummaryModel | null = openai
     }
   : null;
 
+export { defaultModel as biSummaryModel }; // BI_SERVER_v856_CRM_UNIFY - the unified AI summary uses the same model
+
 const router = Router();
 
 router.get("/crm/contacts/:id/stage-events", async (req, res) => {
