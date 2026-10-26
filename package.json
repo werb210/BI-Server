@@ -31,14 +31,14 @@
     "cors": "^2.8.6",
     "dotenv": "^16.4.5",
     "exceljs": "^4.4.0",
-    "express": "^4.19.2",
+    "express": "^4.22.3",
     "express-async-errors": "^3.1.1",
     "express-rate-limit": "^7.5.1",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "mammoth": "^1.12.0",
     "morgan": "^1.10.1",
-    "multer": "^2.0.2",
+    "multer": "^2.5.0",
     "node-cron": "^4.2.1",
     "node-fetch": "^2.7.0",
     "node-pg-migrate": "^8.0.4",
@@ -53,7 +53,7 @@
     "swagger-ui-express": "^5.0.1",
     "twilio": "^5.12.2",
     "uuid": "^11.1.1",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -64,9 +64,9 @@
     "@types/supertest": "^7.2.0",
     "@types/swagger-ui-express": "^4.1.8",
     "@types/uuid": "^9.0.7",
-    "tsx": "^4.20.6",
+    "tsx": "^4.23.15",
     "typescript": "^5.4.5",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "_BI_AZURE_STORAGE_DEP_v48": "Block 44-A required @azure/storage-blob; added 2026-04-28.",
   "overrides": {
@@ -75,9 +75,13 @@
     "fast-copy": "^4.1.2",
     "uuid": "^11.1.1",
     "argparse": "^2.0.1",
-    "vite": "^8.0.16",
+    "vite": "^8.3.5",
     "postcss": "^8.5.23",
     "nanoid": "^3.3.18",
-    "source-map-js": "^1.2.2"
-  }
+    "source-map-js": "^1.2.2",
+    "body-parser": "^1.20.9",
+    "follow-redirects": "^1.16.1",
+    "esbuild": "^0.28.1"
+  },
+  "x-v859": "BI_SERVER_v859_DEP_SECURITY"
 }
