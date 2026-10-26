@@ -85,6 +85,7 @@ const UNIQUE_REFS: Array<[table: string, otherKey: string | null]> = [
   ["bi_apollo_enrollment", "sequence_id"], // UNIQUE (contact_id, sequence_id)
   ["bi_marketing_send_recipients", "job_id"], // UNIQUE (job_id, contact_id)
   ["bi_sequence_enrollments", "sequence_id"], // UNIQUE (sequence_id, contact_id)
+  ["bi_crm_company_people", "company_id"], // UNIQUE (company_id, contact_id) - BI_SERVER_v856_CRM_UNIFY
 ];
 
 // Text fields filled on the keeper when empty there and present on the duplicate.
@@ -116,6 +117,50 @@ router.post("/crm/contacts/:id/merge", requireStaffUser, async (req: Request, re
       return res.status(404).json({ ok: false, error: keeper ? "duplicate_not_found" : "not_found" });
     }
 
+    const { moved, actor } = await mergeBiContactRows(client, keepId, dupId, dup, req); // BI_SERVER_v856_CRM_UNIFY
+    await client.query("COMMIT");
+    logger.info({ keepId, dupId, moved, actor: actor.id }, "bi_crm_contact_merged");
+    return res.json({ ok: true, id: keepId, merged_id: dupId, moved });
+  } catch (err) {
+    await client.query("ROLLBACK").catch((rbErr: unknown) => {
+      logger.warn({ err: rbErr }, "bi_crm_contact_merge_rollback_failed");
+    });
+    return res.status(500).json({ ok: false, error: "merge_failed", requestId: logHiddenError(req, err, "contact_merge_failed") });
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/crm/contacts/:id/documents", requireStaffUser, async (req: Request, res: Response) => {
+  const id = String(req.params.id ?? "");
+  if (!UUID_RE.test(id)) return res.status(400).json({ ok: false, error: "invalid_id" });
+  try {
+    const c = await pool.query(`SELECT 1 FROM bi_contacts WHERE id = $1 LIMIT 1`, [id]);
+    if (!c.rows[0]) return res.status(404).json({ ok: false, error: "not_found" });
+    const r = await pool.query(
+      `SELECT d.id, d.application_id, d.doc_type, d.original_filename, d.mime_type,
+              d.bytes, d.review_status, d.created_at
+         FROM bi_documents d
+        WHERE d.purged_at IS NULL
+          AND d.application_id IN (
+                SELECT a.id FROM bi_applications a WHERE a.primary_contact_id = $1
+                UNION
+                SELECT act.application_id FROM bi_activity act
+                 WHERE act.contact_id = $1 AND act.application_id IS NOT NULL
+              )
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT 500`,
+      [id],
+    );
+    return res.json({ ok: true, documents: r.rows });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: "documents_failed", requestId: logHiddenError(req, err, "contact_documents_failed") });
+  }
+});
+
+// BI_SERVER_v856_CRM_UNIFY - one duplicate merged into the keeper inside the caller's transaction: every reference moved, the
+// duplicate deleted, the keeper's empty fields filled from it, tags unioned, and a note on the keeper's timeline.
+export async function mergeBiContactRows(client: any, keepId: string, dupId: string, dup: Record<string, unknown>, req: Request): Promise<{ moved: Record<string, number>; actor: { id: string | null; name: string | null } }> {
     const moved: Record<string, number> = {};
     for (const [table, column] of PLAIN_REFS) {
       const r = await client.query(`UPDATE ${table} SET ${column} = $1 WHERE ${column} = $2`, [keepId, dupId]);
@@ -176,44 +221,7 @@ router.post("/crm/contacts/:id/merge", requireStaffUser, async (req: Request, re
       [keepId, actor.id, actor.name, `Merged duplicate contact ${dupLabel}`.slice(0, 8000), JSON.stringify({ kind: "merge", merged_contact_id: dupId, moved })],
     );
 
-    await client.query("COMMIT");
-    logger.info({ keepId, dupId, moved, actor: actor.id }, "bi_crm_contact_merged");
-    return res.json({ ok: true, id: keepId, merged_id: dupId, moved });
-  } catch (err) {
-    await client.query("ROLLBACK").catch((rbErr: unknown) => {
-      logger.warn({ err: rbErr }, "bi_crm_contact_merge_rollback_failed");
-    });
-    return res.status(500).json({ ok: false, error: "merge_failed", requestId: logHiddenError(req, err, "contact_merge_failed") });
-  } finally {
-    client.release();
-  }
-});
-
-router.get("/crm/contacts/:id/documents", requireStaffUser, async (req: Request, res: Response) => {
-  const id = String(req.params.id ?? "");
-  if (!UUID_RE.test(id)) return res.status(400).json({ ok: false, error: "invalid_id" });
-  try {
-    const c = await pool.query(`SELECT 1 FROM bi_contacts WHERE id = $1 LIMIT 1`, [id]);
-    if (!c.rows[0]) return res.status(404).json({ ok: false, error: "not_found" });
-    const r = await pool.query(
-      `SELECT d.id, d.application_id, d.doc_type, d.original_filename, d.mime_type,
-              d.bytes, d.review_status, d.created_at
-         FROM bi_documents d
-        WHERE d.purged_at IS NULL
-          AND d.application_id IN (
-                SELECT a.id FROM bi_applications a WHERE a.primary_contact_id = $1
-                UNION
-                SELECT act.application_id FROM bi_activity act
-                 WHERE act.contact_id = $1 AND act.application_id IS NOT NULL
-              )
-        ORDER BY d.created_at DESC, d.id DESC
-        LIMIT 500`,
-      [id],
-    );
-    return res.json({ ok: true, documents: r.rows });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: "documents_failed", requestId: logHiddenError(req, err, "contact_documents_failed") });
-  }
-});
+  return { moved, actor };
+}
 
 export default router;

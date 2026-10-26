@@ -10,6 +10,7 @@ import { badRequest, ok } from "../utils/apiResponse";
 import { hasCapability } from "../platform/capabilities";
 import { redactActivityRows } from "../lib/crmActivityInput";
 import { suppressContacts, suppressCompanies } from "../services/biCrmSuppression"; // BI_SERVER_BLOCK_v820b_CRM_DELETE_SUPPRESSION
+import { SYSTEM_TAGS, parseTagFilter, untaggedSql } from "../services/crmUnify/tags"; // BI_SERVER_v856_CRM_UNIFY
 
 const router = Router();
 const pool = sharedPool /* BI_SERVER_ONE_POOL_v718 */;
@@ -128,15 +129,16 @@ router.get("/crm/contacts", async (req, res) => {
       .split(",")
       .map((t) => t.trim())
       .filter((t) => t.length > 0);
-    const wantUntagged = parts.includes("__none__");
-    const realTags = parts.filter((t) => t !== "__none__");
+    // BI_SERVER_v856_CRM_UNIFY - tags are matched normalised; untagged = no staff tags (system tags alone still count).
+    const sel = parseTagFilter({ tags: parts.join(",") });
     const ors: string[] = [];
-    if (realTags.length) {
-      ors.push(`c.tags && $${i++}::text[]`);
-      params.push(realTags);
+    if (sel.tags.length) {
+      ors.push(`EXISTS (SELECT 1 FROM unnest(COALESCE(c.tags, '{}'::text[])) t WHERE bi_norm_tag(t) = ANY($${i++}::text[]))`);
+      params.push(sel.tags);
     }
-    if (wantUntagged) {
-      ors.push(`COALESCE(cardinality(c.tags), 0) = 0`);
+    if (sel.untagged) {
+      ors.push(untaggedSql("c.tags", i++));
+      params.push([...SYSTEM_TAGS]);
     }
     if (ors.length) {
       where.push(`(${ors.join(" OR ")})`);
@@ -157,7 +159,7 @@ router.get("/crm/contacts", async (req, res) => {
            c.outreach_owner_id,
            c.outreach_updated_at,
            c.company_id,
-           co.legal_name AS company_name,
+           COALESCE(NULLIF(btrim(co.legal_name), ''), NULLIF(btrim(c.organization_name), '')) AS company_name,
            c.created_at
       FROM bi_contacts c
       LEFT JOIN bi_companies co ON co.id = c.company_id
@@ -530,11 +532,19 @@ router.get("/crm/companies", async (req, res) => {
     where.push(`owner_id = $${i++}`);
     params.push(ownerId);
   }
-  const tagFilter =
-    typeof req.query.tag === "string" ? req.query.tag.trim().toLowerCase() : "";
-  if (tagFilter) {
-    where.push(`EXISTS (SELECT 1 FROM unnest(COALESCE(tags,'{}'::text[])) t WHERE lower(t) = $${i++})`);
-    params.push(tagFilter);
+  // BI_SERVER_v856_CRM_UNIFY - ?tags=a,b (any of) or ?tag=, and __none__ = no staff tags.
+  const coTags = parseTagFilter(req.query as Record<string, unknown>);
+  if (coTags.tags.length || coTags.untagged) {
+    const ors: string[] = [];
+    if (coTags.tags.length) {
+      ors.push(`EXISTS (SELECT 1 FROM unnest(COALESCE(tags,'{}'::text[])) t WHERE bi_norm_tag(t) = ANY($${i++}::text[]))`);
+      params.push(coTags.tags);
+    }
+    if (coTags.untagged) {
+      ors.push(untaggedSql("tags", i++));
+      params.push([...SYSTEM_TAGS]);
+    }
+    where.push(`(${ors.join(" OR ")})`);
   }
 
   const sql = `

@@ -349,6 +349,12 @@ app.use("/api/v1/bi", requireAuth, biCrmRoutes);
 app.use("/api/v1/bi", requireAuth, biCompanyActivityRoutes); // BI_SERVER_v789 [89] staff-only per route
 app.use("/api/v1/bi", requireAuth, biContactMergeRoutes); // BI_SERVER_v789 [90] staff-only per route
 app.use("/api/v1/bi", requireAuth, biContactAnalyticsRoutes); // BI_SERVER_CONTACT_ANALYTICS_v271
+// BI_SERVER_v856_CRM_UNIFY - shared CRM features (same contract as BF-Server), loaded on first use so server start-up
+// does not grow: only /api/v1/bi/crm/unified/* requests reach it.
+app.use("/api/v1/bi", requireAuth, (req, res, next) => {
+  if (!req.path.startsWith("/crm/unified")) return next();
+  import("./routes/biCrmUnifyRoutes").then((m) => m.default(req, res, next)).catch(next);
+});
 // BI_EMAIL_ASSET_UPLOAD_v1 - email clients fetch image assets without bearer authentication.
 // BI_SERVER_BLOCK_BI_ROUND8_MARKETING_v1
 app.use("/api/v1/bi/marketing", requireAuth, biMarketingEmailAssetUploadRouter);
