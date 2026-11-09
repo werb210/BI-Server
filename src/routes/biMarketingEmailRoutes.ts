@@ -1,7 +1,7 @@
 import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 import { pool } from "../db";
-import { audienceParams, buildAudienceBreakdownSql, buildAudienceCountSql, type AudienceFilter } from "../services/biEmailAudience";
+import { skipTextedDaysOf, audienceParams, buildAudienceBreakdownSql, buildAudienceCountSql, type AudienceFilter } from "../services/biEmailAudience";
 import { sendgridConfigured } from "../services/biSendgridService";
 
 const router: Router = Router();
@@ -10,6 +10,7 @@ const filterFrom = (value: unknown): AudienceFilter => {
   return {
     includeTags: Array.isArray(body.includeTags) ? body.includeTags.filter((v): v is string => typeof v === "string") : undefined,
     excludeTags: Array.isArray(body.excludeTags) ? body.excludeTags.filter((v): v is string => typeof v === "string") : undefined,
+    skipTextedDays: skipTextedDaysOf(body.skipTextedDays), // BI_SERVER_SKIP_TEXTED_v1
   };
 };
 
