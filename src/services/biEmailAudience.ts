@@ -17,7 +17,8 @@
 // Compare on lower(trim(...)) on both sides rather than assuming the stored
 // data is already lowercase. Count and send share this one predicate, so the
 // number approved is the number that receives.
-export interface AudienceFilter { includeTags?: string[]; excludeTags?: string[] }
+// BI_SERVER_SKIP_TEXTED_v1 - skipTextedDays: leave out anyone sent a marketing text (a sequence SMS) in the last N days.
+export interface AudienceFilter { includeTags?: string[]; excludeTags?: string[]; skipTextedDays?: number | null }
 
 // BI_SERVER_EMAIL_ALL_CONTACTS_v1 - Todd's rule (Nov 9, same as BF-Server v917): every CRM contact with an email
 // address gets campaign email. Only unsubscribed / suppressed addresses are left out; recorded consent is no longer a gate.
@@ -32,9 +33,19 @@ const eligible = `
   AND NOT EXISTS (
     SELECT 1 FROM bi_suppressions s
     WHERE lower(s.email) = lower(c.email) AND s.channel IN ('email', 'all')
-  )`;
+  )
+  AND ($3::int IS NULL OR NOT EXISTS (
+    SELECT 1 FROM bi_sequence_events e JOIN bi_sequence_enrollments en ON en.id = e.enrollment_id
+    WHERE en.contact_id = c.id AND e.event_type = 'sent' AND e.channel = 'sms'
+      AND e.created_at > now() - ($3::int * interval '1 day')))`;
 
-export function audienceParams(filter: AudienceFilter): [string[] | null, string[] | null] {
+export function skipTextedDaysOf(v: unknown): number | null {
+  if (v === true || v === "true" || v === "1") return 7;
+  const n = Number(v);
+  return typeof v === "number" && Number.isInteger(n) && n >= 1 && n <= 90 ? n : null;
+}
+
+export function audienceParams(filter: AudienceFilter): [string[] | null, string[] | null, number | null] {
   // BI_AUDIENCE_TAG_CASE_v33 - trim as well as lower, and drop blanks. A tag
   // picked as " Lender " must match a stored "lender", and an all-blank list
   // must become NULL rather than an array that can never match anything.
@@ -42,7 +53,7 @@ export function audienceParams(filter: AudienceFilter): [string[] | null, string
     const cleaned = (value ?? []).map((tag) => String(tag ?? "").trim().toLowerCase()).filter(Boolean);
     return cleaned.length ? [...new Set(cleaned)] : null;
   };
-  return [tags(filter.includeTags), tags(filter.excludeTags)];
+  return [tags(filter.includeTags), tags(filter.excludeTags), skipTextedDaysOf(filter.skipTextedDays)];
 }
 export function buildAudienceCountSql(): string { return `SELECT count(*)::int AS count FROM bi_contacts c WHERE ${eligible}`; }
 export function buildAudienceSelectSql(): string {

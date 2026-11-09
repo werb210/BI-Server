@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db";
-import { audienceParams, buildAudienceBreakdownSql, buildAudienceCountSql, type AudienceFilter } from "../services/biEmailAudience";
+import { skipTextedDaysOf, audienceParams, buildAudienceBreakdownSql, buildAudienceCountSql, type AudienceFilter } from "../services/biEmailAudience";
 import { renderEmailTemplate, type BrandedEmailTemplate } from "../services/emailTemplateRender";
 import { mergeFields, sendBiMarketingEmail, sendgridConfigured } from "../services/biSendgridService";
 import { resolveScheduledAt, SendScheduleError } from "../services/sendSchedule";
@@ -13,6 +13,7 @@ const filterFrom = (value: unknown): AudienceFilter => {
   return {
     includeTags: strings(body.tags ?? body.includeTags),
     excludeTags: strings(body.excludeTags),
+    skipTextedDays: skipTextedDaysOf(body.skipTextedDays), // BI_SERVER_SKIP_TEXTED_v1
   };
 };
 const queryTags = (value: unknown): string[] | undefined => {
@@ -92,6 +93,7 @@ router.get("/email/audience-count", async (req, res) => {
   const filter: AudienceFilter = {
     includeTags: queryTags(req.query.include ?? req.query.tags ?? req.query.includeTags),
     excludeTags: queryTags(req.query.exclude ?? req.query.excludeTags),
+    skipTextedDays: skipTextedDaysOf(req.query.skipTexted), // BI_SERVER_SKIP_TEXTED_v1
   };
   const [count, breakdown] = await Promise.all([
     pool.query(buildAudienceCountSql(), audienceParams(filter)), pool.query(buildAudienceBreakdownSql()),

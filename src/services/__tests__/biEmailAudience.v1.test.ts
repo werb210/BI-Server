@@ -33,3 +33,20 @@ describe("BI bulk marketing audience", () => {
   it("tolerates token case and spacing", () => expect(mergeFields("{{ FIRST_NAME }}", { first_name: "Ada" })).toBe("Ada"));
   it("is unconfigured without environment values", () => expect(sendgridConfigured()).toBe(false));
 });
+
+// BI_SERVER_SKIP_TEXTED_v1 - "Skip contacts who got a marketing text in the last 7 days".
+import { audienceParams as ap2, buildAudienceCountSql as count2, skipTextedDaysOf } from "../biEmailAudience";
+describe("skip contacts texted recently", () => {
+  it("is off unless asked, 7 days for the checkbox", () => {
+    expect(ap2({})[2]).toBeNull();
+    expect(ap2({ skipTextedDays: 7 })[2]).toBe(7);
+    expect(skipTextedDaysOf(true)).toBe(7);
+    expect(skipTextedDaysOf("1")).toBe(7);
+    expect(skipTextedDaysOf(false)).toBeNull();
+  });
+  it("leaves out contacts with a sequence text sent inside the window", () => {
+    const sql = count2();
+    expect(sql).toContain("$3::int IS NULL OR NOT EXISTS");
+    expect(sql).toContain("e.event_type = 'sent' AND e.channel = 'sms'");
+  });
+});
