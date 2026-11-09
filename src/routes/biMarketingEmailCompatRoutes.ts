@@ -60,25 +60,26 @@ router.get("/email/segments", async (_req, res) => {
     // Composer segments are contact tags, not saved sequence lists. Keep this
     // eligibility predicate aligned with biEmailAudience so displayed counts
     // describe contacts that can actually receive a send.
-    const [totalResult, segmentsResult] = await Promise.all([
+    const [totalResult, segmentsResult, withEmailResult] = await Promise.all([
       pool.query(buildAudienceCountSql(), audienceParams({})),
-      pool.query(`SELECT lower(trim(tag)) AS tag, count(DISTINCT c.id)::int AS n
+      // BI_SERVER_EMAIL_ALL_CONTACTS_v1 - n = contacts with the tag who can be emailed (an email address, not
+      // unsubscribed); total = every contact with the tag, so the picker reads "n of total" like the Financial silo.
+      pool.query(`SELECT lower(trim(tag)) AS tag,
+               count(DISTINCT c.id) FILTER (WHERE c.email IS NOT NULL AND position('@' in c.email) > 1
+                 AND NOT EXISTS (SELECT 1 FROM bi_suppressions s
+                                  WHERE lower(s.email) = lower(c.email) AND s.channel IN ('email', 'all')))::int AS n,
+               count(DISTINCT c.id)::int AS total
         FROM bi_contacts c
         CROSS JOIN LATERAL unnest(c.tags) AS tag
-        WHERE c.email IS NOT NULL AND position('@' in c.email) > 1
-          AND c.marketing_consent_basis IS NOT NULL
-          AND (c.marketing_consent_expires_at IS NULL OR c.marketing_consent_expires_at > NOW())
-          AND NOT EXISTS (
-            SELECT 1 FROM bi_suppressions s
-            WHERE lower(s.email) = lower(c.email) AND s.channel IN ('email', 'all')
-          )
-          AND trim(tag) <> ''
+        WHERE trim(tag) <> ''
         GROUP BY lower(trim(tag))
         ORDER BY lower(trim(tag))`),
+      pool.query(`SELECT count(*) FILTER (WHERE email IS NOT NULL AND position('@' in email) > 1)::int AS with_email FROM bi_contacts`),
     ]);
     return res.json({
       configured: sendgridConfigured(),
       all: totalResult.rows[0]?.count || 0,
+      with_email: withEmailResult.rows[0]?.with_email || 0,
       segments: segmentsResult.rows,
     });
   } catch (error) {

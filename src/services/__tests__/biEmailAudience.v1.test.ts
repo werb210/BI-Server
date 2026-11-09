@@ -7,8 +7,9 @@ import { mergeFields, sendgridConfigured } from "../biSendgridService";
 
 describe("BI bulk marketing audience", () => {
   for (const [name, sql] of [["count", buildAudienceCountSql()], ["select", buildAudienceSelectSql()]]) {
-    it(`${name} fails closed on consent`, () => expect(sql).toContain("marketing_consent_basis IS NOT NULL"));
-    it(`${name} honors expiry`, () => expect(sql).toContain("marketing_consent_expires_at > NOW()"));
+    // BI_SERVER_EMAIL_ALL_CONTACTS_v1 - every contact with an email gets campaign email; consent is not a gate.
+    it(`${name} does not require recorded consent`, () => expect(sql).not.toContain("marketing_consent_basis"));
+    it(`${name} needs an email address`, () => expect(sql).toContain("position('@' in c.email) > 1"));
     it(`${name} excludes suppressions`, () => expect(sql).toContain("s.channel IN ('email', 'all')"));
     it(`${name} matches suppression email case-insensitively`, () => expect(sql).toContain("lower(s.email) = lower(c.email)"));
     it(`${name} requires a plausible email`, () => expect(sql).toContain("position('@' in c.email) > 1"));
