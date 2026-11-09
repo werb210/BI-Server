@@ -1,4 +1,5 @@
 import "express-async-errors";
+import { startCompanyFromEmailJob } from "./services/crmUnify/companyFromEmail"; // BI_SERVER_COMPANY_FROM_EMAIL_v1
 import compression from "compression";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
@@ -678,6 +679,7 @@ async function bootstrapInner() {
       // running the carrier-health dashboard endpoint always reflected a
       // stale/initial state (no submissions tracked).
       ["carrierHealth",    startCarrierHealthJob],
+      ["companyFromEmail", startCompanyFromEmailJob], // BI_SERVER_COMPANY_FROM_EMAIL_v1
     ] as const) {
       try { fn(); } catch (e) {
         logger.error({ job: name, err: e instanceof Error ? e.message : String(e) }, "BI job start failed (non-blocking)");
