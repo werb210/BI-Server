@@ -19,10 +19,10 @@
 // number approved is the number that receives.
 export interface AudienceFilter { includeTags?: string[]; excludeTags?: string[] }
 
+// BI_SERVER_EMAIL_ALL_CONTACTS_v1 - Todd's rule (Nov 9, same as BF-Server v917): every CRM contact with an email
+// address gets campaign email. Only unsubscribed / suppressed addresses are left out; recorded consent is no longer a gate.
 const eligible = `
   c.email IS NOT NULL AND position('@' in c.email) > 1
-  AND c.marketing_consent_basis IS NOT NULL
-  AND (c.marketing_consent_expires_at IS NULL OR c.marketing_consent_expires_at > NOW())
   AND ($1::text[] IS NULL OR EXISTS (
     SELECT 1 FROM unnest(COALESCE(c.tags, '{}')) AS t
     WHERE lower(trim(t)) = ANY($1)))
