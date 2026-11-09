@@ -33,6 +33,7 @@ describe("v404 BI CRM bulk endpoints", () => {
   });
 
   it("contacts bulk-delete deletes the given ids", async () => {
+    queryMock.mockImplementation(answerBySql([[/DELETE FROM bi_contacts WHERE/, { rows: [], rowCount: 2 }]], { rows: [], rowCount: 0 })); // BI_SERVER_v914_PARTIAL_BULK_DELETE - deleted is the real row count
     const r = await post("/crm/contacts/bulk-delete", { ids: IDS });
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ ok: true, deleted: 2 });
@@ -53,6 +54,7 @@ describe("v404 BI CRM bulk endpoints", () => {
     const r = await post("/crm/companies/bulk-delete", { ids: IDS });
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
+    expect(r.body.skipped).toEqual([]); // BI_SERVER_v914_PARTIAL_BULK_DELETE
     expect(callsMatching(queryMock, /DELETE FROM bi_companies WHERE id = ANY\(\$1::uuid\[\]\)/)).toHaveLength(1);
   });
 
@@ -61,6 +63,17 @@ describe("v404 BI CRM bulk endpoints", () => {
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ ok: true, tagged: 2 });
     expect(callsMatching(queryMock, /UPDATE bi_companies SET tags/)[0]![1]).toEqual([["vip"], IDS]);
+  });
+
+  it("contacts on an application are kept and reported", async () => { // BI_SERVER_v914_PARTIAL_BULK_DELETE
+    queryMock.mockImplementation(answerBySql([
+      [/FROM bi_contacts c\s+WHERE c.id = ANY/, { rows: [{ id: IDS[0], name: "Jane Applicant" }] }],
+      [/DELETE FROM bi_contacts WHERE/, { rows: [], rowCount: 1 }],
+    ], { rows: [], rowCount: 0 }));
+    const r = await post("/crm/contacts/bulk-delete", { ids: IDS });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ deleted: 1, skipped: [{ id: IDS[0], name: "Jane Applicant", reason: "linked to an application" }] });
+    expect(callsMatching(queryMock, /DELETE FROM bi_contacts WHERE/)[0]![1]).toEqual([[IDS[1]]]);
   });
 
   it("bulk endpoints reject an empty id list", async () => {
