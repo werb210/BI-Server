@@ -100,12 +100,13 @@ export async function contactDuplicates(db: Q, contactId: string): Promise<Dupli
     [contactId, email, p10, me.company_id ?? null, isPlaceholderName(me.full_name) ? "" : String(me.full_name ?? "").toLowerCase().replace(/\s+/g, " ").trim()],
   );
   const dismissed = await dismissedPairs(db, "contact");
+  const phoneShared = !!p10 && r.rows.filter((row: any) => String(row.phone_e164 ?? "").replace(/\D/g, "").slice(-10) === p10).length + 1 > SHARED_PHONE_LIMIT;
   const out: DuplicateCandidate[] = [];
   for (const row of r.rows) {
     const reasons: string[] = [];
     if (email && String(row.email ?? "").replace(/\s+/g, "").toLowerCase() === email) reasons.push("Same email");
     const d = String(row.phone_e164 ?? "").replace(/\D/g, "");
-    if (p10 && d.length >= 10 && d.slice(-10) === p10) reasons.push("Same phone");
+    if (p10 && !phoneShared && d.length >= 10 && d.slice(-10) === p10) reasons.push("Same phone");
     if (sameFullName(row.full_name, me.full_name)) reasons.push("Same name");
     else if (me.company_id && row.company_id === me.company_id && samePersonName(row.full_name, me.full_name)) reasons.push("Similar name, same company");
     if (!reasons.length || dismissed.has(pairKey(contactId, String(row.id)))) continue;
@@ -151,6 +152,10 @@ export async function companyDuplicates(db: Q, companyId: string): Promise<Dupli
     .slice(0, 25)
     .map(({ row, reasons }: any) => ({ id: String(row.id), name: row.legal_name ?? null, email: row.email ?? null, phone: row.phone ?? null, company_name: row.operating_name ?? null, created_at: iso(row.created_at), reasons }));
 }
+
+// BI_SERVER_SHARED_PHONE_v1 - a number on more than this many contacts is an office switchboard or main line, not
+// one person, so on its own it is not a reason to call two people duplicates (same rule as BF-Server).
+export const SHARED_PHONE_LIMIT = 3;
 
 export type DuplicateGroup = { ids: string[]; records: Array<Record<string, unknown>>; reasons: string[]; survivorId: string; placeholders: number };
 
@@ -214,6 +219,8 @@ export async function duplicateGroups(db: Q, entity: "contact" | "company", limi
       put(row.company_id ? "c:" + row.company_id : null, row);
       put(isPlaceholderName(row.full_name) ? null : "n:" + String(row.full_name ?? "").toLowerCase().replace(/\s+/g, " ").trim(), row);
     }
+    const phoneCount = new Map<string, number>();
+    for (const row of all) { const p = phone10(row.phone_e164); if (p) phoneCount.set(p, (phoneCount.get(p) ?? 0) + 1); }
     const seen = new Set<string>();
     for (const [, list] of buckets) {
       if (list.length < 2 || list.length > 400) continue;
@@ -226,7 +233,7 @@ export async function duplicateGroups(db: Q, entity: "contact" | "company", limi
         const ea = String(a.email ?? "").replace(/\s+/g, "").toLowerCase();
         if (ea && ea === String(b.email ?? "").replace(/\s+/g, "").toLowerCase()) reasons.push("Same email");
         const pa = phone10(a.phone_e164);
-        if (pa && pa === phone10(b.phone_e164)) reasons.push("Same phone");
+        if (pa && pa === phone10(b.phone_e164) && (phoneCount.get(pa) ?? 0) <= SHARED_PHONE_LIMIT) reasons.push("Same phone");
         if (sameFullName(a.full_name, b.full_name)) reasons.push("Same name");
         else if (a.company_id && a.company_id === b.company_id && samePersonName(a.full_name, b.full_name)) reasons.push("Similar name, same company");
         if (reasons.length) pairs.push({ a: a.id, b: b.id, reasons });
