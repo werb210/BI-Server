@@ -1,5 +1,6 @@
 import "express-async-errors";
 import biCustomFieldsRoutes from "./routes/biCustomFieldsRoutes"; // BI_SERVER_CUSTOM_FIELDS_v1
+import biLeadScoresRoutes from "./routes/biLeadScoresRoutes"; // BI_SERVER_LEAD_SCORES_v1
 import { startCompanyFromEmailJob } from "./services/crmUnify/companyFromEmail"; // BI_SERVER_COMPANY_FROM_EMAIL_v1
 import compression from "compression";
 import cors from "cors";
@@ -352,6 +353,7 @@ app.use("/api/v1/bi", requireAuth, biCompanyActivityRoutes); // BI_SERVER_v789 [
 app.use("/api/v1/bi", requireAuth, biContactMergeRoutes); // BI_SERVER_v789 [90] staff-only per route
 app.use("/api/v1/bi", requireAuth, biContactAnalyticsRoutes); // BI_SERVER_CONTACT_ANALYTICS_v271
 app.use("/api/v1/bi", requireAuth, biCustomFieldsRoutes); // BI_SERVER_CUSTOM_FIELDS_v1 - staff; Admins change fields
+app.use("/api/v1/bi", requireAuth, biLeadScoresRoutes); // BI_SERVER_LEAD_SCORES_v1
 // BI_SERVER_v856_CRM_UNIFY - shared CRM features (same contract as BF-Server), loaded on first use so server start-up
 // does not grow: only /api/v1/bi/crm/unified/* requests reach it.
 app.use("/api/v1/bi", requireAuth, (req, res, next) => {
