@@ -1,4 +1,5 @@
 import { logHiddenError } from "../platform/safeError";
+import { clearContactSendHistory, planCompanyDelete, planContactDelete } from "../crm/bulkDeletePlan"; // BI_SERVER_v914_PARTIAL_BULK_DELETE
 import { Router } from "express";
 // BI_SERVER_BLOCK_v254_CRM_CONTACTS_ENHANCED_v1
 import { logger } from "../platform/logger";
@@ -391,9 +392,13 @@ router.post("/crm/companies/bulk-delete", requireAuth, requireStaffOrAdmin, asyn
   const ids = Array.isArray(raw) ? raw.filter((x) => typeof x === "string" && x.length > 0) : [];
   if (ids.length === 0) return res.status(400).json({ error: "ids_required" });
   try {
-    await pool.query(`UPDATE bi_contacts SET company_id = NULL WHERE company_id = ANY($1::uuid[])`, [ids]);
-    const r = await pool.query(`DELETE FROM bi_companies WHERE id = ANY($1::uuid[]) RETURNING id`, [ids]);
-    return res.json({ ok: true, deleted: r.rowCount ?? 0, requested: ids.length });
+    // BI_SERVER_v914_PARTIAL_BULK_DELETE - companies on an application stay; their contacts are kept (unlinked).
+    const plan = await planCompanyDelete(pool, ids);
+    if (!plan.deletable.length) return res.status(409).json({ error: "fk_protected", protectedIds: plan.skipped.map((x) => x.id), skipped: plan.skipped });
+    await suppressCompanies(pool, plan.deletable); // BI_SERVER_BLOCK_v820b_CRM_DELETE_SUPPRESSION
+    await pool.query(`UPDATE bi_contacts SET company_id = NULL WHERE company_id = ANY($1::uuid[])`, [plan.deletable]);
+    const r = await pool.query(`DELETE FROM bi_companies WHERE id = ANY($1::uuid[]) RETURNING id`, [plan.deletable]);
+    return res.json({ ok: true, deleted: r.rowCount ?? 0, requested: ids.length, protectedIds: plan.skipped.map((x) => x.id), skipped: plan.skipped });
   } catch (err: any) {
     logger.error({ err, count: ids.length }, "bi_crm_company_bulk_delete_failed");
     return res.status(500).json({ error: "delete_failed", detail: err?.code ?? null });
@@ -825,9 +830,18 @@ router.post("/crm/contacts/bulk-delete", async (req, res) => {
   if (!hasCapability((req as any).user, "marketing:outreach")) return res.status(403).json({ error: "forbidden" });
   const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown): x is string => typeof x === "string") : [];
   if (ids.length === 0) return res.status(400).json({ error: "ids_required" });
-  await suppressContacts(pool, ids); // BI_SERVER_BLOCK_v820b_CRM_DELETE_SUPPRESSION
-  await pool.query(`DELETE FROM bi_contacts WHERE id = ANY($1::uuid[])`, [ids]);
-  return res.json({ ok: true, deleted: ids.length });
+  try {
+    // BI_SERVER_v914_PARTIAL_BULK_DELETE - delete what can go; report the rest with the reason.
+    const plan = await planContactDelete(pool, ids);
+    if (!plan.deletable.length) return res.status(409).json({ error: "fk_protected", protectedIds: plan.skipped.map((x) => x.id), skipped: plan.skipped });
+    await suppressContacts(pool, plan.deletable); // BI_SERVER_BLOCK_v820b_CRM_DELETE_SUPPRESSION
+    await clearContactSendHistory(pool, plan.deletable);
+    const out = await pool.query(`DELETE FROM bi_contacts WHERE id = ANY($1::uuid[])`, [plan.deletable]);
+    return res.json({ ok: true, deleted: out.rowCount ?? 0, protectedIds: plan.skipped.map((x) => x.id), skipped: plan.skipped });
+  } catch (err: any) {
+    logger.error({ err, count: ids.length }, "bi_crm_contact_bulk_delete_failed");
+    return res.status(500).json({ error: "delete_failed", detail: err?.code ?? null });
+  }
 });
 
 // BF_SERVER_BLOCK_v808_BI_ASSIGN_CREATE — assign owner to many contacts. Writes the CANONICAL
