@@ -173,3 +173,22 @@ describe("maya-chat confirmation email", () => {
     expect(ownEmailFrom({}, "send it to a@b.co")).toBeNull();
   });
 });
+
+// BI_SERVER_US_LENDERS_QUICK - the event page may send just an email or a mobile; other forms still need all three.
+describe("the US lenders quick lead", () => {
+  it("accepts an email on its own and files it as a US lenders lead", async () => {
+    const { mirrorToContact } = await import("../../services/crmMirrorService");
+    (mirrorToContact as ReturnType<typeof vi.fn>).mockClear();
+    const r = await request(app()).post("/api/v1/crm/lead").set("X-Forwarded-For", freshIp()).send({ source: "us_lenders_quick", email: "pat@firstsample.example" });
+    expect(r.status).toBe(200);
+    expect(mirrorToContact).toHaveBeenCalledWith(expect.objectContaining({ full_name: "pat@firstsample.example", email: "pat@firstsample.example", phone_e164: null, extra_tags: ["contact_form", "us_lenders"] }));
+  });
+  it("accepts a mobile number on its own", async () => {
+    const r = await request(app()).post("/api/v1/crm/lead").set("X-Forwarded-For", freshIp()).send({ source: "us_lenders_quick", phone: "512-555-0142", name: "Pat Lee" });
+    expect(r.status).toBe(200);
+  });
+  it("still refuses an empty quick lead, and an ordinary lead without a phone", async () => {
+    expect((await request(app()).post("/api/v1/crm/lead").set("X-Forwarded-For", freshIp()).send({ source: "us_lenders_quick" })).status).toBe(400);
+    expect((await request(app()).post("/api/v1/crm/lead").set("X-Forwarded-For", freshIp()).send({ name: "Pat", email: "pat@firstsample.example" })).status).toBe(400);
+  });
+});
