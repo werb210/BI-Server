@@ -188,6 +188,25 @@ const haveDb = !!process.env.DATABASE_URL;
     expect((await request(app).get(`/api/v1/field/rep/zzzzzz`)).body.ok).toBe(false);
   });
 
+  it("a broker is sent to the broker page, by email and by text; a lender to the lender page", async () => {
+    const b = await request(app).post("/api/v1/field/contacts").set(auth()).send({ full_name: "Bo Broker", email: "bo@itest.local", phone: "2125550170", audience: "broker" });
+    expect(b.body.emailed).toBe(true);
+    const mail = sent.emails[sent.emails.length - 1];
+    expect(mail.text).toContain("/us-brokers?rep=" + rep.code);
+    expect(mail.text).toContain("commercial loan brokers");
+    await request(app).post("/api/v1/field/contacts").set(auth()).send({ email: "len@itest.local", audience: "lender" });
+    expect(sent.emails[sent.emails.length - 1].text).toContain("/us-lenders?rep=" + rep.code);
+    await request(app).post("/api/v1/field/contacts").set(auth()).send({ email: "odd@itest.local", audience: "martian" });
+    expect((await pool.query(`SELECT audience FROM bi_field_contacts WHERE email = 'odd@itest.local'`)).rows[0].audience).toBeNull();
+    await creditLeadToRep(rep.code, { email: "qrb@itest.local", audience: "broker" });
+    expect((await pool.query(`SELECT audience FROM bi_field_contacts WHERE email = 'qrb@itest.local'`)).rows[0].audience).toBe("broker");
+    expect(followUpSms({ code: "ab12cd", full_name: "Sam Rep" } as any, "tok_1234567890abcdef", "broker")).toContain("/us-brokers?rep=ab12cd");
+    const me = await request(app).get("/api/v1/field/me").set(auth());
+    expect(me.body.links.share_broker).toContain("/us-brokers?rep=" + rep.code);
+    expect(me.body.links.share_lender).toContain("/us-lenders?rep=" + rep.code);
+    expect(me.body.contacts.find((c: any) => c.email === "bo@itest.local").audience).toBe("broker");
+  });
+
   it("staff see each rep's counts and contacts, and a switched-off rep can no longer sign in", async () => {
     const list = await request(app).get("/api/v1/bi/field-reps");
     const mine = list.body.reps.find((r: any) => r.id === rep.id);

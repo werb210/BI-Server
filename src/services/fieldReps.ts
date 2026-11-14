@@ -56,14 +56,18 @@ export function readRepToken(token: string): string | null {
 // ------------------------------------------------------------------ links
 export const repPageUrl = (code: string) => `${SITE()}/rep/${encodeURIComponent(code)}`;
 /** What the rep's QR code opens: the public information page, credited to the rep. */
-export const repShareUrl = (code: string) => `${SITE()}/us-lenders?rep=${encodeURIComponent(code)}`;
-export const contactInfoUrl = (code: string, token: string) => `${SITE()}/us-lenders?rep=${encodeURIComponent(code)}&c=${encodeURIComponent(token)}`;
+// BI_SERVER_FIELD_AUDIENCE_v1 - lenders and brokers each have their own information page.
+export type Audience = "lender" | "broker";
+export const audienceOf = (raw: unknown): Audience | null => (raw === "lender" || raw === "broker" ? raw : null);
+export const audiencePath = (a?: Audience | null) => (a === "broker" ? "/us-brokers" : "/us-lenders");
+export const repShareUrl = (code: string, a?: Audience | null) => `${SITE()}${audiencePath(a)}?rep=${encodeURIComponent(code)}`;
+export const contactInfoUrl = (code: string, token: string, a?: Audience | null) => `${SITE()}${audiencePath(a)}?rep=${encodeURIComponent(code)}&c=${encodeURIComponent(token)}`;
 export const bookUrl = (code: string) => `${BOOK_URL}?rep=${encodeURIComponent(code)}`;
 
 // ------------------------------------------------------------------ contacts
 export type Rep = { id: string; code: string; full_name: string; company_name: string | null; email: string | null; phone_e164: string | null; active: boolean };
-export type ContactInput = { full_name?: unknown; company_name?: unknown; title?: unknown; email?: unknown; phone?: unknown; notes?: unknown };
-export type CleanContact = { full_name: string | null; company_name: string | null; title: string | null; email: string | null; phone_e164: string | null; notes: string | null };
+export type ContactInput = { full_name?: unknown; company_name?: unknown; title?: unknown; email?: unknown; phone?: unknown; notes?: unknown; audience?: unknown };
+export type CleanContact = { full_name: string | null; company_name: string | null; title: string | null; email: string | null; phone_e164: string | null; notes: string | null; audience?: Audience | null };
 
 const text = (v: unknown, max: number): string | null => { const s = String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max); return s || null; };
 export const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/;
@@ -77,7 +81,7 @@ export function cleanContact(raw: ContactInput): { ok: true; value: CleanContact
   if (emailRaw && !email) return { ok: false, message: "That email address does not look right." };
   if (phoneRaw && !phone) return { ok: false, message: "That phone number does not look right. Use a 10-digit US or Canadian number." };
   if (!email && !phone) return { ok: false, message: "Enter an email address or a mobile number." };
-  return { ok: true, value: { full_name: text(raw.full_name, 120), company_name: text(raw.company_name, 160), title: text(raw.title, 120), email, phone_e164: phone, notes: text(raw.notes, 1000) } };
+  return { ok: true, value: { full_name: text(raw.full_name, 120), company_name: text(raw.company_name, 160), title: text(raw.title, 120), email, phone_e164: phone, notes: text(raw.notes, 1000), audience: audienceOf(raw.audience) } };
 }
 
 export type FollowUpDeps = {
@@ -96,11 +100,11 @@ export function followUpEmail(c: CleanContact, rep: Rep, token: string, source: 
   const why = source === "qr"
     ? "Thanks for your interest in Personal Guarantee Insurance. Here is the information you asked for."
     : `${rep.full_name} passed your details to us after you met. Here is the information on Personal Guarantee Insurance.`;
-  const info = contactInfoUrl(rep.code, token), book = bookUrl(rep.code);
+  const info = contactInfoUrl(rep.code, token, c.audience), book = bookUrl(rep.code);
   const lines = [
     hi, "", why, "",
     "Personal Guarantee Insurance (PGI) covers the person who signs the personal guarantee on a business loan. If the business fails and the lender calls the guarantee, the policy pays up to 80% of it. Lenders and loan brokers offer it so more borrowers are willing to sign.",
-    "", `The details for banks, lenders and brokers: ${info}`, `Book a 15-minute call or a Teams meeting: ${book}`, "Or call us at (866) 631-8939.",
+    "", `${c.audience === "broker" ? "The details for commercial loan brokers" : c.audience === "lender" ? "The details for banks and lenders" : "The details for banks, lenders and brokers"}: ${info}`, `Book a 15-minute call or a Teams meeting: ${book}`, "Or call us at (866) 631-8939.",
     "", "Boreal Risk Management", "", `You are getting this one email because ${source === "qr" ? "you asked for it on our page" : `you met ${rep.full_name}`}. If you would rather not hear from us, reply with "unsubscribe".`, MAIL_ADDRESS,
   ];
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.5;color:#0b1f3a;max-width:600px">
@@ -116,8 +120,8 @@ export function followUpEmail(c: CleanContact, rep: Rep, token: string, source: 
 }
 
 /** The one text that follows when the email was not opened. */
-export function followUpSms(rep: Rep, token: string): string {
-  return `Boreal Risk Management: ${firstName(rep.full_name) || "our colleague"} shared your details with us. Personal Guarantee Insurance info for lenders and brokers: ${contactInfoUrl(rep.code, token)} Reply STOP to opt out.`;
+export function followUpSms(rep: Rep, token: string, audience?: Audience | null): string {
+  return `Boreal Risk Management: ${firstName(rep.full_name) || "our colleague"} shared your details with us. Personal Guarantee Insurance info for lenders and brokers: ${contactInfoUrl(rep.code, token, audience)} Reply STOP to opt out.`;
 }
 
 /** Logs a contact against the rep (one row per rep and email, or rep and phone), tags the CRM contact, and sends the
@@ -133,14 +137,14 @@ export async function addFieldContact(db: Q, rep: Rep, c: CleanContact, source: 
     id = found.rows[0].id; token = found.rows[0].track_token; alreadyEmailed = Boolean(found.rows[0].email_sent_at);
     await db.query(
       `UPDATE bi_field_contacts SET full_name = COALESCE($2, full_name), company_name = COALESCE($3, company_name), title = COALESCE($4, title),
-              email = COALESCE($5, email), phone_e164 = COALESCE($6, phone_e164), notes = COALESCE($7, notes), updated_at = now()
-        WHERE id = $1::uuid`, [id, c.full_name, c.company_name, c.title, c.email, c.phone_e164, c.notes]);
+              email = COALESCE($5, email), phone_e164 = COALESCE($6, phone_e164), notes = COALESCE($7, notes), audience = COALESCE($8, audience), updated_at = now()
+        WHERE id = $1::uuid`, [id, c.full_name, c.company_name, c.title, c.email, c.phone_e164, c.notes, c.audience ?? null]);
   } else {
     token = newTrackToken(); created = true;
     const ins = await db.query(
-      `INSERT INTO bi_field_contacts (rep_id, full_name, company_name, title, email, phone_e164, notes, source, track_token)
-       VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id::text`,
-      [rep.id, c.full_name, c.company_name, c.title, c.email, c.phone_e164, c.notes, source, token]);
+      `INSERT INTO bi_field_contacts (rep_id, full_name, company_name, title, email, phone_e164, notes, source, track_token, audience)
+       VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id::text`,
+      [rep.id, c.full_name, c.company_name, c.title, c.email, c.phone_e164, c.notes, source, token, c.audience ?? null]);
     id = ins.rows[0].id;
   }
   try {
@@ -193,11 +197,11 @@ export async function runFollowUpSmsTick(db: Q, sendSms: (to: string, body: stri
         AND fc.id IN (SELECT id FROM bi_field_contacts
                        WHERE sms_sent_at IS NULL AND sms_due_at IS NOT NULL AND sms_due_at <= $1 AND email_opened_at IS NULL AND phone_e164 IS NOT NULL
                        ORDER BY sms_due_at ASC LIMIT 25 FOR UPDATE SKIP LOCKED)
-      RETURNING fc.id::text, fc.phone_e164, fc.track_token, r.code, r.full_name`, [now.toISOString()]);
+      RETURNING fc.id::text, fc.phone_e164, fc.track_token, fc.audience, r.code, r.full_name`, [now.toISOString()]);
   let sent = 0, failed = 0;
   for (const row of due.rows) {
     try {
-      await sendSms(row.phone_e164, followUpSms({ code: row.code, full_name: row.full_name } as Rep, row.track_token));
+      await sendSms(row.phone_e164, followUpSms({ code: row.code, full_name: row.full_name } as Rep, row.track_token, audienceOf(row.audience)));
       sent += 1;
     } catch (err) {
       failed += 1;

@@ -46,13 +46,13 @@ export const followUpDeps: FollowUpDeps = {
 };
 
 /** Credits a lead from the public information page to the rep whose QR code or link was used. Never throws. */
-export async function creditLeadToRep(repCode: unknown, lead: { name?: string; email?: string; phone?: string; company?: string }): Promise<void> {
+export async function creditLeadToRep(repCode: unknown, lead: { name?: string; email?: string; phone?: string; company?: string; audience?: unknown }): Promise<void> {
   const code = validRepCode(repCode);
   if (!code) return;
   try {
     const rep = (await db().query(`SELECT ${REP_COLS} FROM bi_field_reps WHERE lower(code) = $1 AND active`, [code])).rows[0] as Rep | undefined;
     if (!rep) return;
-    const c = cleanContact({ full_name: lead.name && lead.name !== lead.email && lead.name !== lead.phone ? lead.name : null, email: lead.email, phone: lead.phone, company_name: lead.company });
+    const c = cleanContact({ full_name: lead.name && lead.name !== lead.email && lead.name !== lead.phone ? lead.name : null, email: lead.email, phone: lead.phone, company_name: lead.company, audience: lead.audience });
     if (c.ok) await addFieldContact(db(), rep, c.value, "qr", followUpDeps);
   } catch (err) { logger.warn({ err: String(err) }, "[field-reps] lead not credited"); }
 }
@@ -93,7 +93,7 @@ async function requireRep(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-const CONTACT_COLS = `id::text, full_name, company_name, title, email, phone_e164, notes, source, created_at,
+const CONTACT_COLS = `id::text, audience, full_name, company_name, title, email, phone_e164, notes, source, created_at,
   email_sent_at, email_opened_at, email_error, sms_due_at, sms_sent_at`;
 /** What the rep sees beside each contact. */
 export function contactStatus(c: { email?: string | null; email_sent_at?: unknown; email_opened_at?: unknown; email_error?: unknown; sms_sent_at?: unknown; sms_due_at?: unknown }): string {
@@ -110,7 +110,7 @@ fieldPublicRouter.get("/field/me", repLimiter, requireRep, async (req: Request, 
   res.json({
     ok: true,
     rep: { code: rep.code, full_name: rep.full_name, company_name: rep.company_name },
-    links: { share: repShareUrl(rep.code), book: bookUrl(rep.code) },
+    links: { share: repShareUrl(rep.code), share_lender: repShareUrl(rep.code, "lender"), share_broker: repShareUrl(rep.code, "broker"), book: bookUrl(rep.code) },
     counts: { total: rows.length, opened: rows.filter((r) => r.email_opened_at).length },
     contacts: rows.map((r) => ({ ...r, status: contactStatus(r) })),
   });
