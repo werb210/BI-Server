@@ -35,7 +35,7 @@ router.post("/crm/lead", leadMinuteLimiter, leadDayLimiter, async (req, res) => 
       [JSON.stringify({ contact_id: result.contact_id, name, email, phone, company })],
     );
     // BI_SERVER_FIELD_REPS_v1 - a lead that arrived through a rep's QR code or link is credited to that rep.
-    if (b.rep) void creditLeadToRep(b.rep, { name, email, phone, company: company ?? undefined });
+    if (b.rep) void creditLeadToRep(b.rep, { name, email, phone, company: company ?? undefined, audience: b.audience });
     // BI_SERVER_v789_STAFF_ALERT_THROTTLE - one staff text per sender phone / IP per 10 minutes.
     const senderPhone = normalizeE164(phone) || phone.replace(/\D/g, "");
     if (staffAlertAllowed([`phone:${senderPhone}`, `ip:${clientIpKey(req)}`])) {
