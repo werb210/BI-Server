@@ -112,6 +112,7 @@ import biContactMergeRoutes from "./routes/biContactMergeRoutes"; // BI_SERVER_v
 // BI_PGI_ALIGNMENT_v56
 import biAdminLenderRoutes from "./routes/biAdminLenderRoutes";
 import biContactFormRoutes from "./routes/biContactFormRoutes";
+import { fieldPublicRouter, fieldStaffRouter, startFieldFollowUpJob } from "./routes/biFieldRepRoutes"; // BI_SERVER_FIELD_REPS_v1
 import biNaicsRoutes from "./routes/biNaicsRoutes";
 import biScoreRoutes from "./routes/biScoreRoutes";
 import { apiTimeoutGuard } from "./middleware/apiTimeoutGuard";
@@ -401,7 +402,9 @@ app.use("/api/v1/bi/applications/:id/notes", requireAuth, biNotesRoutes);
 // sat here was an open endpoint for a service we no longer use.
 // BI_PGI_ALIGNMENT_v56
 app.use("/api/v1/bi", requireAuth, biAdminLenderRoutes);
+app.use("/api/v1/bi", requireAuth, fieldStaffRouter); // BI_SERVER_FIELD_REPS_v1 - staff: reps and their contacts
 app.use("/api/v1", biContactFormRoutes);  // public — no auth
+app.use("/api/v1", biCors, fieldPublicRouter); // BI_SERVER_FIELD_REPS_v1 - the rep's page (PIN), email-open tracking
 
 app.use(errorHandler);
 
@@ -684,6 +687,7 @@ async function bootstrapInner() {
       // stale/initial state (no submissions tracked).
       ["carrierHealth",    startCarrierHealthJob],
       ["companyFromEmail", startCompanyFromEmailJob], // BI_SERVER_COMPANY_FROM_EMAIL_v1
+      ["fieldFollowUp",    startFieldFollowUpJob], // BI_SERVER_FIELD_REPS_v1 - the 72-hour follow-up text
     ] as const) {
       try { fn(); } catch (e) {
         logger.error({ job: name, err: e instanceof Error ? e.message : String(e) }, "BI job start failed (non-blocking)");
