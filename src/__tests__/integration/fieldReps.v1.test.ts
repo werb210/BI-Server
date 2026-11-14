@@ -52,6 +52,13 @@ describe("field reps: the parts that need no database", () => {
     expect(smsWindowOpen(new Date("2026-11-16T03:00:00Z"))).toBe(false);  // Sunday night
     expect(smsWindowOpen(new Date("2026-11-14T16:00:00Z"))).toBe(false);  // Saturday
   });
+  it("BI_FIELD_SMS=off stops the follow-up text without asking the database for anything", async () => {
+    process.env.BI_FIELD_SMS = "off";
+    const query = vi.fn();
+    try { expect(await runFollowUpSmsTick({ query } as any, async () => undefined, new Date("2026-11-16T16:00:00Z"))).toEqual({ sent: 0, failed: 0, skipped: true }); }
+    finally { delete process.env.BI_FIELD_SMS; }
+    expect(query).not.toHaveBeenCalled();
+  });
   it("a card reading keeps only what looks right", () => {
     expect(cardFields({ full_name: " Pat  Example ", email: "PAT@EXAMPLE.COM", phone: "212 555 0142", extra: "x" }))
       .toEqual({ full_name: "Pat Example", company_name: "", title: "", email: "pat@example.com", phone: "212 555 0142" });
