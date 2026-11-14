@@ -7,6 +7,7 @@ import { notifyStaff, staffAlertAllowed } from "../services/staffNotifyService";
 import { logger } from "../platform/logger";
 import { ipRateLimit, clientIpKey } from "../lib/ipRateLimit"; // BI_SERVER_v789_PUBLIC_RATE_LIMITS
 import { normalizeE164 } from "../util/phoneE164";
+import { creditLeadToRep } from "./biFieldRepRoutes";
 
 const router = Router();
 export const US_LENDERS_QUICK_SOURCE = "us_lenders_quick";
@@ -33,6 +34,8 @@ router.post("/crm/lead", leadMinuteLimiter, leadDayLimiter, async (req, res) => 
       `INSERT INTO bi_activity (application_id, actor_type, event_type, summary, meta) VALUES (NULL, 'system', 'contact_form_submitted', 'Contact form submission', $1::jsonb)`,
       [JSON.stringify({ contact_id: result.contact_id, name, email, phone, company })],
     );
+    // BI_SERVER_FIELD_REPS_v1 - a lead that arrived through a rep's QR code or link is credited to that rep.
+    if (b.rep) void creditLeadToRep(b.rep, { name, email, phone, company: company ?? undefined });
     // BI_SERVER_v789_STAFF_ALERT_THROTTLE - one staff text per sender phone / IP per 10 minutes.
     const senderPhone = normalizeE164(phone) || phone.replace(/\D/g, "");
     if (staffAlertAllowed([`phone:${senderPhone}`, `ip:${clientIpKey(req)}`])) {
