@@ -41,7 +41,7 @@ describe("field reps: the parts that need no database", () => {
     const c = cleanContact({ full_name: "Pat Example", email: "pat@example.com" });
     const m = followUpEmail((c as any).value, rep, "tok_1234567890abcdef", "card");
     expect(m.text).toContain("Sam Rep passed your details");
-    expect(m.text).toContain("/us-lenders?rep=ab12cd&c=tok_1234567890abcdef");
+    expect(m.text).toContain("/us?rep=ab12cd&c=tok_1234567890abcdef");
     expect(m.text).toContain("/book-pgi?rep=ab12cd");
     expect(m.text).toContain("unsubscribe");
     expect(m.html).toContain("/api/v1/field/o/tok_1234567890abcdef.gif");
@@ -138,7 +138,7 @@ const haveDb = !!process.env.DATABASE_URL;
     expect(sent.emails).toHaveLength(1);
 
     const me = await request(app).get("/api/v1/field/me").set(auth());
-    expect(me.body.links.share).toContain(`/us-lenders?rep=${rep.code}`);
+    expect(me.body.links.share).toContain(`/us?rep=${rep.code}`);
     expect(me.body.contacts.find((c: any) => c.id === a.body.id).status).toContain("72 hours");
   });
 

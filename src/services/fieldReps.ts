@@ -59,7 +59,8 @@ export const repPageUrl = (code: string) => `${SITE()}/rep/${encodeURIComponent(
 // BI_SERVER_FIELD_AUDIENCE_v1 - lenders and brokers each have their own information page.
 export type Audience = "lender" | "broker";
 export const audienceOf = (raw: unknown): Audience | null => (raw === "lender" || raw === "broker" ? raw : null);
-export const audiencePath = (a?: Audience | null) => (a === "broker" ? "/us-brokers" : "/us-lenders");
+/** Lender page, broker page, or (when we do not know) the page where the visitor says which they are. */
+export const audiencePath = (a?: Audience | null) => (a === "broker" ? "/us-brokers" : a === "lender" ? "/us-lenders" : "/us");
 export const repShareUrl = (code: string, a?: Audience | null) => `${SITE()}${audiencePath(a)}?rep=${encodeURIComponent(code)}`;
 export const contactInfoUrl = (code: string, token: string, a?: Audience | null) => `${SITE()}${audiencePath(a)}?rep=${encodeURIComponent(code)}&c=${encodeURIComponent(token)}`;
 export const bookUrl = (code: string) => `${BOOK_URL}?rep=${encodeURIComponent(code)}`;
