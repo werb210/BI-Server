@@ -183,6 +183,8 @@ export function smsWindowOpen(now: Date): boolean {
 /** Sends the one follow-up text to contacts whose email went unopened for 72 hours. Each row is claimed before it is
  *  sent, so two server instances cannot both text the same person. */
 export async function runFollowUpSmsTick(db: Q, sendSms: (to: string, body: string) => Promise<unknown>, now: Date = new Date()): Promise<{ sent: number; failed: number; skipped: boolean }> {
+  // BI_FIELD_SMS=off stops the follow-up text entirely (the email and everything else carry on).
+  if (String(process.env.BI_FIELD_SMS ?? "").trim().toLowerCase() === "off") return { sent: 0, failed: 0, skipped: true };
   if (!smsWindowOpen(now)) return { sent: 0, failed: 0, skipped: true };
   const due = await db.query(
     `UPDATE bi_field_contacts fc SET sms_sent_at = $1
