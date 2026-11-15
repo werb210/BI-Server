@@ -45,17 +45,32 @@ export async function linkCompaniesFromEmail(db: Q = pool as unknown as Q, limit
       [domain],
     );
     let companyId: string | undefined = found.rows[0]?.id;
-    if (!companyId) {
-      const ins = await db.query(
-        `INSERT INTO bi_companies (legal_name, domain, website) VALUES ($1, $2, $3) RETURNING id::text AS id`,
-        [companyNameFromDomain(domain), domain, `https://${domain}`],
-      );
-      companyId = ins.rows[0]?.id;
-      if (companyId) created += 1;
+    // BI_SERVER_COMPANY_FROM_EMAIL_v2 - company names are unique. A company with this name may already be there under
+    // no domain (use it and give it the domain) or under another domain (a different business: name the new one with
+    // its domain). One contact that cannot be linked is logged and skipped; it used to stop every run.
+    try {
+      if (!companyId) {
+        const name = companyNameFromDomain(domain);
+        const same = await db.query(`SELECT id::text AS id, domain FROM bi_companies WHERE lower(legal_name) = lower($1) LIMIT 1`, [name]);
+        const twin = same.rows[0] as { id: string; domain: string | null } | undefined;
+        if (twin && !twin.domain) {
+          await db.query(`UPDATE bi_companies SET domain = $2, website = COALESCE(NULLIF(website, ''), $3), updated_at = now() WHERE id = $1::uuid`, [twin.id, domain, `https://${domain}`]);
+          companyId = twin.id;
+        } else {
+          const ins = await db.query(
+            `INSERT INTO bi_companies (legal_name, domain, website) VALUES ($1, $2, $3) RETURNING id::text AS id`,
+            [twin ? `${name} (${domain})` : name, domain, `https://${domain}`],
+          );
+          companyId = ins.rows[0]?.id;
+          if (companyId) created += 1;
+        }
+      }
+      if (!companyId) continue;
+      const up = await db.query(`UPDATE bi_contacts SET company_id = $2::uuid, updated_at = now() WHERE id = $1::uuid AND company_id IS NULL`, [c.id, companyId]);
+      linked += up.rowCount ?? 0;
+    } catch (err) {
+      logger.warn({ contact_id: c.id, domain, err: err instanceof Error ? err.message : String(err) }, "[company-from-email] contact skipped");
     }
-    if (!companyId) continue;
-    const up = await db.query(`UPDATE bi_contacts SET company_id = $2::uuid, updated_at = now() WHERE id = $1::uuid AND company_id IS NULL`, [c.id, companyId]);
-    linked += up.rowCount ?? 0;
   }
   return { linked, created };
 }

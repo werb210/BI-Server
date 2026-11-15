@@ -114,6 +114,38 @@ const haveDb = !!process.env.DATABASE_URL;
     expect((await request(app).post("/api/v1/field/login").send({ code: r2.body.rep.code, pin: fresh.body.pin })).status).toBe(200);
   });
 
+  it("a rep who forgot the PIN is sent a new one by email and text; the old one stops working; asking again straight away sends nothing", async () => {
+    const r3 = await request(app).post("/api/v1/bi/field-reps").send({ full_name: "Forgetful Rep", email: "forget@itest.local", phone: "2125550199" });
+    made.push(r3.body.rep.id);
+    const { sendOutreachSms } = await import("../../services/smsService");
+    (sendOutreachSms as any).mockClear();
+    const out = await request(app).post("/api/v1/field/pin-reset").send({ code: r3.body.rep.code });
+    expect(out.body).toEqual({ ok: true, message: expect.stringContaining("a new PIN is on its way") });
+    const mail = sent.emails.find((m) => m.to === "forget@itest.local")!;
+    const pin = /new PIN is (\d{6})/.exec(mail.text)![1]!;
+    expect(mail.text).toContain(`/rep/${r3.body.rep.code}`);
+    expect((sendOutreachSms as any).mock.calls[0]).toEqual(["+12125550199", expect.stringContaining(pin)]);
+    expect(JSON.stringify(out.body)).not.toContain(pin);
+    expect((await request(app).post("/api/v1/field/login").send({ code: r3.body.rep.code, pin: r3.body.pin })).status).toBe(pin === r3.body.pin ? 200 : 401);
+    expect((await request(app).post("/api/v1/field/login").send({ code: r3.body.rep.code, pin })).status).toBe(200);
+    const before = sent.emails.length;
+    await request(app).post("/api/v1/field/pin-reset").send({ code: r3.body.rep.code });
+    expect(sent.emails.length).toBe(before);
+    expect((await request(app).post("/api/v1/field/login").send({ code: r3.body.rep.code, pin })).status).toBe(200);
+  });
+
+  it("asking for a PIN for a code that is not a rep, or a rep with no email or mobile, gives the same reply and sends nothing", async () => {
+    const bare = await request(app).post("/api/v1/bi/field-reps").send({ full_name: "No Contact Rep" });
+    made.push(bare.body.rep.id);
+    const before = sent.emails.length;
+    for (const code of ["zzzzzz", "../x", bare.body.rep.code]) {
+      const out = await request(app).post("/api/v1/field/pin-reset").send({ code });
+      expect(out.body).toEqual({ ok: true, message: expect.stringContaining("a new PIN is on its way") });
+    }
+    expect(sent.emails.length).toBe(before);
+    expect((await request(app).post("/api/v1/field/login").send({ code: bare.body.rep.code, pin: bare.body.pin })).status).toBe(200);
+  });
+
   it("nothing on the rep's page works without signing in", async () => {
     expect((await request(app).get("/api/v1/field/me")).status).toBe(401);
     expect((await request(app).post("/api/v1/field/contacts").send({ email: "a@itest.local" })).status).toBe(401);

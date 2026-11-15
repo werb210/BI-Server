@@ -43,8 +43,23 @@ export function pinMatches(pin: string, stored: string): boolean {
 export const newTrackToken = (): string => randomBytes(18).toString("base64url");
 
 const AUD = "bi-field-rep";
+/** A rep stays signed in on their phone for this long, so the PIN is asked for once per event, not once per day. */
+export const REP_SIGN_IN_DAYS = 30;
+/** A new PIN can be sent to a rep at most this often. */
+export const PIN_RESEND_MINUTES = 10;
+export function pinMessage(rep: { full_name: string; code: string }, pin: string): { subject: string; text: string; html: string; sms: string } {
+  const url = repPageUrl(rep.code);
+  const first = rep.full_name.split(" ")[0] || rep.full_name;
+  const text = `Hi ${first},\n\nYour new PIN is ${pin}\n\nYour page: ${url}\n\nYour old PIN no longer works. If you did not ask for this, you can ignore it; nobody can open your page without this PIN.`;
+  return {
+    subject: "Your new PIN",
+    text,
+    html: `<p>Hi ${esc(first)},</p><p>Your new PIN is <strong style="font-size:20px;letter-spacing:2px">${pin}</strong></p><p>Your page: <a href="${url}">${url}</a></p><p>Your old PIN no longer works. If you did not ask for this, you can ignore it; nobody can open your page without this PIN.</p>`,
+    sms: `Your new PIN is ${pin}. Your page: ${url}`,
+  };
+}
 export function signRepToken(repId: string): string {
-  return jwt.sign({ kind: "field_rep", rep_id: repId }, getJwtSecret(), { expiresIn: "12h", audience: AUD });
+  return jwt.sign({ kind: "field_rep", rep_id: repId }, getJwtSecret(), { expiresIn: REP_SIGN_IN_DAYS * 24 * 60 * 60, audience: AUD });
 }
 export function readRepToken(token: string): string | null {
   try {
