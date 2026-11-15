@@ -27,7 +27,7 @@ import { mirrorToContact } from "../services/crmMirrorService";
 import { sendBiMarketingEmail } from "../services/biSendgridService";
 import { sendOutreachSms } from "../services/smsService";
 import {
-  EMAIL_RE, MAX_PIN_TRIES, PIN_LOCK_MINUTES, addFieldContact, bookUrl, cleanContact, hashPin, markOpened, newPin, newRepCode, pinMatches,
+  EMAIL_RE, MAX_PIN_TRIES, PIN_LOCK_MINUTES, addFieldContact, bookUrl, cleanContact, hashPin, markOpened, newPin, newRepCode, pinMatches, pinMessage, PIN_RESEND_MINUTES,
   readRepToken, repPageUrl, repShareUrl, runFollowUpSmsTick, signRepToken, validRepCode, type CleanContact, type FollowUpDeps, type Q, type Rep,
 } from "../services/fieldReps";
 
@@ -82,6 +82,32 @@ fieldPublicRouter.post("/field/login", loginLimiter, async (req: Request, res: R
   }
   await db().query(`UPDATE bi_field_reps SET failed_pins = 0, locked_until = NULL WHERE id = $1::uuid`, [row.id]);
   res.json({ ok: true, token: signRepToken(row.id), rep: { code: row.code, full_name: row.full_name, company_name: row.company_name } });
+});
+
+// BI_SERVER_FIELD_REP_PIN_RECOVERY_v1 - a rep who has forgotten the PIN asks for a new one from the sign-in screen. It is
+// sent to the email address and mobile number we hold for that rep, never shown on screen, and the reply is the same
+// whether or not the rep exists, so the page cannot be used to find out who is a rep.
+const resetLimiter = ipRateLimit({ windowMs: 60 * 60 * 1000, limit: 6 });
+export const PIN_RESET_REPLY = "If we have your email or mobile on file, a new PIN is on its way. It can take a minute.";
+fieldPublicRouter.post("/field/pin-reset", resetLimiter, async (req: Request, res: Response) => {
+  const code = validRepCode(req.body?.code);
+  const done = () => res.json({ ok: true, message: PIN_RESET_REPLY });
+  if (!code) return done();
+  try {
+    const rep = (await db().query(
+      `SELECT ${REP_COLS} FROM bi_field_reps WHERE lower(code) = $1 AND active
+          AND (email IS NOT NULL OR phone_e164 IS NOT NULL)
+          AND (pin_sent_at IS NULL OR pin_sent_at < now() - ($2 || ' minutes')::interval)`, [code, String(PIN_RESEND_MINUTES)])).rows[0] as Rep | undefined;
+    if (!rep) return done();
+    const pin = newPin();
+    const m = pinMessage(rep, pin);
+    let sent = 0;
+    if (rep.email) { try { await sendBiMarketingEmail({ to: rep.email, subject: m.subject, html: m.html, text: m.text }); sent += 1; } catch (err) { logger.warn({ err: String(err) }, "[field-reps] PIN email failed"); } }
+    if (rep.phone_e164) { try { await sendOutreachSms(rep.phone_e164, m.sms); sent += 1; } catch (err) { logger.warn({ err: String(err) }, "[field-reps] PIN text failed"); } }
+    // The old PIN is only replaced once the new one has actually gone out.
+    if (sent > 0) await db().query(`UPDATE bi_field_reps SET pin_hash = $2, failed_pins = 0, locked_until = NULL, pin_sent_at = now(), updated_at = now() WHERE id = $1::uuid`, [rep.id, hashPin(pin)]);
+  } catch (err) { logger.warn({ err: String(err) }, "[field-reps] PIN reset failed"); }
+  done();
 });
 
 async function requireRep(req: Request, res: Response, next: NextFunction) {
