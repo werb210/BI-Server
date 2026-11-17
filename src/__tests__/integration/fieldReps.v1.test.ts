@@ -6,6 +6,7 @@ import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sent = vi.hoisted(() => ({ emails: [] as any[], mirrors: [] as any[] }));
+vi.hoisted(() => { process.env.BI_REP_AGREEMENT = "off"; }); // the agreement has its own tests (repAgreement.v1)
 vi.mock("../../services/biSendgridService", () => ({ sendBiMarketingEmail: vi.fn(async (m: any) => { if (String(m.to).startsWith("bounce")) throw new Error("mail down"); sent.emails.push(m); }) }));
 vi.mock("../../services/crmMirrorService", () => ({ mirrorToContact: vi.fn(async (m: any) => { sent.mirrors.push(m); return { contact_id: null, created: true }; }) }));
 vi.mock("../../services/smsService", () => ({ sendOutreachSms: vi.fn(async () => ({})) }));

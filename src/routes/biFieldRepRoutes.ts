@@ -31,8 +31,12 @@ import {
   readRepToken, repPageUrl, repShareUrl, runFollowUpSmsTick, signRepToken, validRepCode, type CleanContact, type FollowUpDeps, type Q, type Rep,
 } from "../services/fieldReps";
 
+import { agreementCleared, agreementStatus, agreementsOn, bfAgreementBridge, issueAgreement, welcomeMessage, type AgreementRep } from "../services/repAgreement";
+
 const db = () => pool as unknown as Q;
 const REP_COLS = "id::text, code, full_name, company_name, email, phone_e164, active";
+// BI_SERVER_REP_AGREEMENT_v1
+const AGREEMENT_COLS = "agreement_required, agreement_group_id, agreement_invite_id, agreement_sent_at, agreement_signed_at, agreement_error";
 
 export const followUpDeps: FollowUpDeps = {
   sendEmail: (m) => sendBiMarketingEmail({ to: m.to, subject: m.subject, html: m.html, text: m.text }),
@@ -113,11 +117,35 @@ fieldPublicRouter.post("/field/pin-reset", resetLimiter, async (req: Request, re
 async function requireRep(req: Request, res: Response, next: NextFunction) {
   const m = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization ?? ""));
   const repId = m ? readRepToken(m[1]!) : null;
-  const rep = repId ? ((await db().query(`SELECT ${REP_COLS} FROM bi_field_reps WHERE id = $1::uuid AND active`, [repId])).rows[0] as Rep | undefined) : undefined;
+  const rep = repId ? ((await db().query(`SELECT ${REP_COLS}, ${AGREEMENT_COLS} FROM bi_field_reps WHERE id = $1::uuid AND active`, [repId])).rows[0] as (Rep & AgreementRep) | undefined) : undefined;
   if (!rep) return res.status(401).json({ ok: false, error: "sign_in_again", message: "Enter your PIN again." });
   (req as any).rep = rep;
   next();
 }
+
+// BI_SERVER_REP_AGREEMENT_v1 - a rep who has not signed the Introducer Agreement can sign in but can do nothing else.
+async function requireSigned(req: Request, res: Response, next: NextFunction) {
+  const rep = (req as any).rep as Rep & AgreementRep;
+  if (await agreementCleared(db(), rep)) return next();
+  res.status(403).json({ ok: false, error: "agreement_required", message: "Sign the Introducer Agreement to open your page." });
+}
+
+/** Where the rep signs. A fresh link each time (they expire); `signed` once it is done. */
+fieldPublicRouter.get("/field/agreement", repLimiter, requireRep, async (req: Request, res: Response) => {
+  const rep = (req as any).rep as Rep & AgreementRep;
+  if (await agreementCleared(db(), rep)) return res.json({ ok: true, signed: true, url: null });
+  if (!rep.agreement_group_id || !rep.agreement_invite_id || !rep.email) {
+    return res.status(409).json({ ok: false, error: "agreement_not_ready", message: "Your agreement is not ready yet. We have been told and will send it shortly." });
+  }
+  try {
+    const l = await bfAgreementBridge.link(rep.agreement_group_id, rep.agreement_invite_id, rep.email);
+    if (l.signed) { await db().query(`UPDATE bi_field_reps SET agreement_signed_at = now(), updated_at = now() WHERE id = $1::uuid AND agreement_signed_at IS NULL`, [rep.id]); }
+    res.json({ ok: true, signed: l.signed, url: l.url });
+  } catch (err) {
+    logger.warn({ err: String(err) }, "[field-reps] agreement link failed");
+    res.status(502).json({ ok: false, error: "agreement_unavailable", message: "The agreement could not be opened just now. Try again in a minute." });
+  }
+});
 
 const CONTACT_COLS = `id::text, audience, full_name, company_name, title, email, phone_e164, notes, source, created_at,
   email_sent_at, email_opened_at, email_error, sms_due_at, sms_sent_at`;
@@ -130,7 +158,7 @@ export function contactStatus(c: { email?: string | null; email_sent_at?: unknow
   return c.email ? "Saved" : "Saved - no email address, we will follow up by phone";
 }
 
-fieldPublicRouter.get("/field/me", repLimiter, requireRep, async (req: Request, res: Response) => {
+fieldPublicRouter.get("/field/me", repLimiter, requireRep, requireSigned, async (req: Request, res: Response) => {
   const rep = (req as any).rep as Rep;
   const rows = (await db().query(`SELECT ${CONTACT_COLS} FROM bi_field_contacts WHERE rep_id = $1::uuid ORDER BY created_at DESC LIMIT 500`, [rep.id])).rows;
   res.json({
@@ -142,7 +170,7 @@ fieldPublicRouter.get("/field/me", repLimiter, requireRep, async (req: Request, 
   });
 });
 
-fieldPublicRouter.post("/field/contacts", repLimiter, requireRep, async (req: Request, res: Response) => {
+fieldPublicRouter.post("/field/contacts", repLimiter, requireRep, requireSigned, async (req: Request, res: Response) => {
   const rep = (req as any).rep as Rep;
   const c = cleanContact(req.body ?? {});
   if (!c.ok) return res.status(400).json({ ok: false, error: "invalid", message: c.message });
@@ -161,7 +189,7 @@ export function cardFields(raw: unknown): { full_name: string; company_name: str
   const email = s("email", 200), phone = s("phone", 40);
   return { full_name: s("full_name", 120), company_name: s("company_name", 160), title: s("title", 120), email: EMAIL_RE.test(email) ? email.toLowerCase() : "", phone: normalizeE164(phone) ? phone : "" };
 }
-fieldPublicRouter.post("/field/scan", scanLimiter, requireRep, async (req: Request, res: Response) => {
+fieldPublicRouter.post("/field/scan", scanLimiter, requireRep, requireSigned, async (req: Request, res: Response) => {
   const image = String(req.body?.image ?? "");
   if (!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(image) || image.length > 6_000_000) {
     return res.status(400).json({ ok: false, error: "bad_image", message: "Take the photo again." });
@@ -204,10 +232,11 @@ const actor = (req: Request): string | null => { const u = (req as any).user ?? 
 fieldStaffRouter.get("/field-reps", async (_req: Request, res: Response) => {
   const rows = (await db().query(
     `SELECT r.id::text, r.code, r.full_name, r.company_name, r.email, r.phone_e164, r.active, r.created_at,
+            r.agreement_required, r.agreement_group_id, r.agreement_sent_at, r.agreement_signed_at, r.agreement_error,
             count(c.id)::int AS contacts, count(c.email_opened_at)::int AS opened, max(c.created_at) AS last_contact_at
        FROM bi_field_reps r LEFT JOIN bi_field_contacts c ON c.rep_id = r.id
       GROUP BY r.id ORDER BY r.created_at DESC`)).rows;
-  res.json({ ok: true, reps: rows.map((r) => ({ ...r, page_url: repPageUrl(r.code), share_url: repShareUrl(r.code) })) });
+  res.json({ ok: true, reps: rows.map((r) => ({ ...r, agreement_group_id: undefined, agreement: agreementStatus(r), page_url: repPageUrl(r.code), share_url: repShareUrl(r.code) })) });
 });
 
 fieldStaffRouter.post("/field-reps", async (req: Request, res: Response) => {
@@ -217,6 +246,7 @@ fieldStaffRouter.post("/field-reps", async (req: Request, res: Response) => {
   const phoneRaw = String(b.phone ?? "").trim();
   const phone = phoneRaw ? normalizeE164(phoneRaw) : null;
   if (!fullName) return res.status(400).json({ ok: false, error: "name_required", message: "Enter the rep's name." });
+  if (agreementsOn() && !email) return res.status(400).json({ ok: false, error: "email_required", message: "Enter the rep's email address. Their agreement is sent there." });
   if (email && !EMAIL_RE.test(email)) return res.status(400).json({ ok: false, error: "invalid_email", message: "That email address does not look right." });
   if (phoneRaw && !phone) return res.status(400).json({ ok: false, error: "invalid_phone", message: "That phone number does not look right." });
   const pin = newPin();
@@ -225,9 +255,23 @@ fieldStaffRouter.post("/field-reps", async (req: Request, res: Response) => {
     const taken = (await db().query(`SELECT 1 FROM bi_field_reps WHERE lower(code) = $1`, [code])).rows[0];
     if (taken) continue;
     const ins = await db().query(
-      `INSERT INTO bi_field_reps (code, full_name, company_name, email, phone_e164, pin_hash, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING ${REP_COLS}`,
-      [code, fullName, String(b.company_name ?? "").trim().slice(0, 160) || null, email || null, phone, hashPin(pin), actor(req)]);
-    return res.status(201).json({ ok: true, rep: ins.rows[0], pin, page_url: repPageUrl(code), share_url: repShareUrl(code) });
+      `INSERT INTO bi_field_reps (code, full_name, company_name, email, phone_e164, pin_hash, created_by, agreement_required) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${REP_COLS}`,
+      [code, fullName, String(b.company_name ?? "").trim().slice(0, 160) || null, email || null, phone, hashPin(pin), actor(req), agreementsOn()]);
+    const rep = ins.rows[0] as Rep;
+    // BI_SERVER_REP_AGREEMENT_v1 - issue the Introducer Agreement and email the rep their page, PIN and what to do.
+    let agreement: { status: string; emailed: boolean; error?: string } = { status: "not_required", emailed: false };
+    if (agreementsOn()) {
+      const issued = await issueAgreement(db(), rep);
+      let emailed = false;
+      if (rep.email) {
+        const m = welcomeMessage(rep, pin);
+        try { await sendBiMarketingEmail({ to: rep.email, subject: m.subject, html: m.html, text: m.text }); emailed = true; }
+        catch (err) { logger.warn({ err: String(err) }, "[field-reps] welcome email failed"); }
+      }
+      agreement = { status: issued.ok ? "sent" : "not_sent", emailed, ...(issued.error ? { error: issued.error } : {}) };
+      if (!issued.ok) logger.warn({ repId: rep.id, error: issued.error }, "[field-reps] agreement was not issued");
+    }
+    return res.status(201).json({ ok: true, rep, pin, page_url: repPageUrl(code), share_url: repShareUrl(code), agreement });
   }
   res.status(500).json({ ok: false, error: "code_unavailable", message: "Try again." });
 });
@@ -237,6 +281,24 @@ fieldStaffRouter.post("/field-reps/:id/pin", async (req: Request, res: Response)
   const r = await db().query(`UPDATE bi_field_reps SET pin_hash = $2, failed_pins = 0, locked_until = NULL, updated_at = now() WHERE id::text = $1 RETURNING ${REP_COLS}`, [String(req.params.id), hashPin(pin)]);
   if (!r.rows[0]) return res.status(404).json({ ok: false, error: "not_found" });
   res.json({ ok: true, rep: r.rows[0], pin, page_url: repPageUrl(r.rows[0].code) });
+});
+
+// BI_SERVER_REP_AGREEMENT_v1 - send the agreement again (or for the first time, to a rep added before it existed).
+fieldStaffRouter.post("/field-reps/:id/agreement", async (req: Request, res: Response) => {
+  const rep = (await db().query(`SELECT ${REP_COLS}, ${AGREEMENT_COLS} FROM bi_field_reps WHERE id::text = $1`, [String(req.params.id)])).rows[0] as (Rep & AgreementRep) | undefined;
+  if (!rep) return res.status(404).json({ ok: false, error: "not_found" });
+  if (rep.agreement_signed_at) return res.status(409).json({ ok: false, error: "already_signed", message: "This rep has already signed." });
+  if (!rep.email) return res.status(400).json({ ok: false, error: "email_required", message: "This rep has no email address." });
+  await db().query(`UPDATE bi_field_reps SET agreement_required = true, updated_at = now() WHERE id = $1::uuid`, [rep.id]);
+  const issued = await issueAgreement(db(), rep);
+  if (!issued.ok) return res.status(502).json({ ok: false, error: "agreement_not_sent", message: "The agreement could not be sent just now (" + (issued.error ?? "unknown") + ")." });
+  const url = repPageUrl(rep.code);
+  try {
+    await sendBiMarketingEmail({ to: rep.email, subject: "Your Boreal Risk Management agreement is ready to sign",
+      text: `Hi ${rep.full_name.split(" ")[0]},\n\nYour Introducer Agreement is ready. Open your page and sign in with your PIN to sign it:\n${url}\n\nBoreal Risk Management`,
+      html: `<p>Hi ${rep.full_name.split(" ")[0]},</p><p>Your Introducer Agreement is ready. Open your page and sign in with your PIN to sign it:</p><p><a href="${url}">${url}</a></p><p>Boreal Risk Management</p>` });
+  } catch (err) { logger.warn({ err: String(err) }, "[field-reps] agreement email failed"); }
+  res.json({ ok: true, agreement: "sent" });
 });
 
 fieldStaffRouter.patch("/field-reps/:id", async (req: Request, res: Response) => {
