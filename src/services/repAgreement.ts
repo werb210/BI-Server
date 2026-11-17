@@ -1,11 +1,14 @@
 // BI_SERVER_REP_AGREEMENT_v1 - the PGI Introducer Agreement for outside reps.
 //
-// Staff add a rep in the Insurance silo's Reps screen. The rep is emailed their page link, their PIN and a request
-// to sign the agreement; the page stays locked until it is signed. The agreement itself (wording, PDF, SignNow) lives
+// Staff add a rep in the Insurance silo's Reps screen. The rep is emailed ONE thing: the agreement to sign (a private
+// signing link). Only once it is signed are they emailed their welcome: their page link and their PIN (v2, 2026-11-17:
+// the welcome used to go out straight away, before anything was signed). The agreement itself (wording, PDF, SignNow) lives
 // in BF-Server, which holds the SignNow account; this server asks it to issue the agreement, for a signing link when
 // the rep opens their page, and whether it has been signed.
 //   BI_REP_AGREEMENT=off  turns the whole thing off (new reps are not asked to sign).
-import { repPageUrl, type Q } from "./fieldReps";
+import jwt from "jsonwebtoken";
+import { getJwtSecret } from "../platform/jwtSecret";
+import { hashPin, newPin, repPageUrl, type Q } from "./fieldReps";
 
 export const agreementsOn = (): boolean => String(process.env.BI_REP_AGREEMENT ?? "").trim().toLowerCase() !== "off";
 const bfBase = () => (process.env.BF_SERVER_URL || "https://server.boreal.financial").replace(/\/+$/, "");
@@ -62,34 +65,104 @@ export async function issueAgreement(db: Q, rep: AgreementRep, bridge: Agreement
   }
 }
 
+type Mailer = (m: { to: string; subject: string; text: string; html: string }) => Promise<unknown>;
+let mailer: Mailer | null = null;
+/** The route file gives this the real sender at start-up (keeps this file free of SendGrid for tests). */
+export const setAgreementMailer = (m: Mailer | null): void => { mailer = m; };
+
+/**
+ * Records the signature and sends the welcome, exactly once. The PIN is made here, at signing, so it is only ever
+ * emailed to someone who has signed. Returns true when this call was the one that recorded it.
+ */
+export async function completeSigning(db: Q, rep: AgreementRep): Promise<boolean> {
+  const pin = newPin();
+  const r = await db.query(
+    `UPDATE bi_field_reps SET agreement_signed_at = now(), pin_hash = $2, failed_pins = 0, locked_until = NULL, pin_sent_at = now(), updated_at = now()
+      WHERE id = $1::uuid AND agreement_signed_at IS NULL RETURNING id`, [rep.id, hashPin(pin)]);
+  if (!r.rows[0]) return false;
+  if (rep.email && mailer) {
+    const m = welcomeMessage(rep, pin);
+    try { await mailer({ to: rep.email, subject: m.subject, text: m.text, html: m.html }); }
+    catch (err) { console.warn("[rep-agreement] welcome email failed", { repId: rep.id, message: String((err as Error)?.message ?? err) }); }
+  }
+  return true;
+}
+
 /** True once the rep may use their page. Asks BF-Server when our record still says unsigned, and remembers a yes. */
 export async function agreementCleared(db: Q, rep: AgreementRep, bridge: AgreementBridge = bfAgreementBridge): Promise<boolean> {
   if (!agreementsOn() || !rep.agreement_required || rep.agreement_signed_at) return true;
   if (!rep.agreement_group_id) return false;
   try {
     if (!(await bridge.signed(rep.agreement_group_id))) return false;
-    await db.query(`UPDATE bi_field_reps SET agreement_signed_at = now(), updated_at = now() WHERE id = $1::uuid AND agreement_signed_at IS NULL`, [rep.id]);
+    await completeSigning(db, rep);
     return true;
   } catch { return false; }
 }
 
+/** Every rep whose agreement is out and unsigned: ask whether it has been signed, and welcome the ones who have. */
+export async function runSigningSweep(db: Q, bridge: AgreementBridge = bfAgreementBridge): Promise<number> {
+  if (!agreementsOn()) return 0;
+  const rows = (await db.query(
+    `SELECT id::text, code, full_name, company_name, email, phone_e164, agreement_required, agreement_group_id, agreement_invite_id, agreement_signed_at
+       FROM bi_field_reps
+      WHERE active AND agreement_required AND agreement_signed_at IS NULL AND agreement_group_id IS NOT NULL
+        AND agreement_sent_at > now() - interval '90 days' ORDER BY agreement_sent_at DESC LIMIT 50`)).rows as AgreementRep[];
+  let done = 0;
+  for (const rep of rows) { if (await agreementCleared(db, rep, bridge)) done += 1; }
+  return done;
+}
+
+// The private signing link in the agreement email. It can only fetch that rep's signing link; it never opens their page.
+const SIGN_AUD = "bi-field-rep-sign";
+export function signLinkToken(repId: string): string {
+  return jwt.sign({ kind: "field_rep_sign", rep_id: repId }, getJwtSecret(), { expiresIn: 60 * 24 * 60 * 60, audience: SIGN_AUD });
+}
+export function readSignLinkToken(token: string): string | null {
+  try {
+    const c = jwt.verify(token, getJwtSecret(), { audience: SIGN_AUD }) as { kind?: string; rep_id?: string };
+    return c.kind === "field_rep_sign" && c.rep_id ? String(c.rep_id) : null;
+  } catch { return null; }
+}
+export const signPageUrl = (rep: { id: string; code: string }): string => `${repPageUrl(rep.code)}?sign=${encodeURIComponent(signLinkToken(rep.id))}`;
+
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
-/** The one email a new rep gets: their page, their PIN, and the agreement to sign first. */
+/** The first email: the agreement to sign, and nothing else. No page link to use, no PIN. */
+export function agreementMessage(rep: { id: string; full_name: string; code: string }): { subject: string; text: string; html: string } {
+  const url = signPageUrl(rep);
+  const first = rep.full_name.split(" ")[0] || rep.full_name;
+  const lines = [
+    `Hi ${first},`,
+    "Thank you for agreeing to introduce banks, lenders and brokers to Boreal Risk Management for Personal Guarantee Insurance.",
+    "Before we set you up, please read and sign our Introducer Agreement. It sets out how you are paid: 20% of the commission we receive on business from the banks, lenders and brokers you introduce, for as long as the agreement is in place. It takes about two minutes.",
+    `Read and sign the agreement: ${url}`,
+    "As soon as it is signed we will email your personal page and your PIN.",
+    "Questions? Just reply to this email.",
+    "Boreal Risk Management",
+  ];
+  return {
+    subject: "Your Boreal Risk Management Introducer Agreement",
+    text: lines.join("\n\n"),
+    html: lines.map((l, i) => i === 3
+      ? `<p><a href="${url}" style="display:inline-block;background:#1e3a8a;color:#ffffff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Read and sign the agreement</a></p>`
+      : `<p>${esc(l)}</p>`).join(""),
+  };
+}
+
+/** The welcome, sent once the agreement is signed: their page and their PIN. */
 export function welcomeMessage(rep: { full_name: string; code: string }, pin: string): { subject: string; text: string; html: string } {
   const url = repPageUrl(rep.code);
   const first = rep.full_name.split(" ")[0] || rep.full_name;
   const lines = [
     `Hi ${first},`,
-    "Welcome. You have been set up to introduce banks, lenders and brokers to Boreal Risk Management for Personal Guarantee Insurance.",
+    "Thank you for signing the Introducer Agreement. You are all set.",
     `Your page: ${url}`,
     `Your PIN: ${pin}`,
-    "The first time you open your page you will be asked to sign our Introducer Agreement. It sets out how you are paid: 20% of the commission we receive on business from the banks and brokers you introduce. Your page opens as soon as it is signed.",
     "Your page gives you a link and QR code to share, a business card scanner, and a list of everyone you have introduced.",
     "Questions? Just reply to this email.",
     "Boreal Risk Management",
   ];
   return {
-    subject: "Your Boreal Risk Management page and agreement",
+    subject: "Welcome - your Boreal Risk Management page and PIN",
     text: lines.join("\n\n"),
     html: lines.map((l, i) => i === 2 ? `<p>Your page: <a href="${url}">${url}</a></p>` : i === 3 ? `<p>Your PIN: <strong style="font-size:20px;letter-spacing:2px">${pin}</strong></p>` : `<p>${esc(l)}</p>`).join(""),
   };

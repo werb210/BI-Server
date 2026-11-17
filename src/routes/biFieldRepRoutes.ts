@@ -31,7 +31,14 @@ import {
   readRepToken, repPageUrl, repShareUrl, runFollowUpSmsTick, signRepToken, validRepCode, type CleanContact, type FollowUpDeps, type Q, type Rep,
 } from "../services/fieldReps";
 
-import { agreementCleared, agreementStatus, agreementsOn, bfAgreementBridge, issueAgreement, welcomeMessage, type AgreementRep } from "../services/repAgreement";
+import {
+  agreementCleared, agreementMessage, agreementStatus, agreementsOn, bfAgreementBridge, completeSigning, issueAgreement, readSignLinkToken, runSigningSweep, setAgreementMailer,
+  type AgreementRep,
+} from "../services/repAgreement";
+
+// BI_SERVER_REP_AGREEMENT_v2 - service mail (a contract to sign, a PIN): sent without the marketing unsubscribe footer.
+const sendRepMail = (m: { to: string; subject: string; text: string; html: string }) => sendBiMarketingEmail({ ...m, transactional: true });
+setAgreementMailer(sendRepMail);
 
 const db = () => pool as unknown as Q;
 const REP_COLS = "id::text, code, full_name, company_name, email, phone_e164, active";
@@ -106,7 +113,7 @@ fieldPublicRouter.post("/field/pin-reset", resetLimiter, async (req: Request, re
     const pin = newPin();
     const m = pinMessage(rep, pin);
     let sent = 0;
-    if (rep.email) { try { await sendBiMarketingEmail({ to: rep.email, subject: m.subject, html: m.html, text: m.text }); sent += 1; } catch (err) { logger.warn({ err: String(err) }, "[field-reps] PIN email failed"); } }
+    if (rep.email) { try { await sendRepMail({ to: rep.email, subject: m.subject, html: m.html, text: m.text }); sent += 1; } catch (err) { logger.warn({ err: String(err) }, "[field-reps] PIN email failed"); } }
     if (rep.phone_e164) { try { await sendOutreachSms(rep.phone_e164, m.sms); sent += 1; } catch (err) { logger.warn({ err: String(err) }, "[field-reps] PIN text failed"); } }
     // The old PIN is only replaced once the new one has actually gone out.
     if (sent > 0) await db().query(`UPDATE bi_field_reps SET pin_hash = $2, failed_pins = 0, locked_until = NULL, pin_sent_at = now(), updated_at = now() WHERE id = $1::uuid`, [rep.id, hashPin(pin)]);
@@ -139,7 +146,28 @@ fieldPublicRouter.get("/field/agreement", repLimiter, requireRep, async (req: Re
   }
   try {
     const l = await bfAgreementBridge.link(rep.agreement_group_id, rep.agreement_invite_id, rep.email);
-    if (l.signed) { await db().query(`UPDATE bi_field_reps SET agreement_signed_at = now(), updated_at = now() WHERE id = $1::uuid AND agreement_signed_at IS NULL`, [rep.id]); }
+    if (l.signed) await completeSigning(db(), rep);
+    res.json({ ok: true, signed: l.signed, url: l.url });
+  } catch (err) {
+    logger.warn({ err: String(err) }, "[field-reps] agreement link failed");
+    res.status(502).json({ ok: false, error: "agreement_unavailable", message: "The agreement could not be opened just now. Try again in a minute." });
+  }
+});
+
+// BI_SERVER_REP_AGREEMENT_v2 - the link in the agreement email. The token in it can do one thing: fetch this rep's
+// signing link (or learn it is already signed, which also sends the welcome). It never opens their page.
+fieldPublicRouter.get("/field/agreement-link", repLimiter, async (req: Request, res: Response) => {
+  const m = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization ?? ""));
+  const repId = m ? readSignLinkToken(m[1]!) : null;
+  const rep = repId ? ((await db().query(`SELECT ${REP_COLS}, ${AGREEMENT_COLS} FROM bi_field_reps WHERE id = $1::uuid AND active`, [repId])).rows[0] as (Rep & AgreementRep) | undefined) : undefined;
+  if (!rep) return res.status(401).json({ ok: false, error: "link_expired", message: "This link no longer works. Ask us to send your agreement again." });
+  if (rep.agreement_signed_at || (await agreementCleared(db(), rep))) return res.json({ ok: true, signed: true, url: null });
+  if (!rep.agreement_group_id || !rep.agreement_invite_id || !rep.email) {
+    return res.status(409).json({ ok: false, error: "agreement_not_ready", message: "Your agreement is not ready yet. We have been told and will send it shortly." });
+  }
+  try {
+    const l = await bfAgreementBridge.link(rep.agreement_group_id, rep.agreement_invite_id, rep.email);
+    if (l.signed) await completeSigning(db(), rep);
     res.json({ ok: true, signed: l.signed, url: l.url });
   } catch (err) {
     logger.warn({ err: String(err) }, "[field-reps] agreement link failed");
@@ -258,18 +286,21 @@ fieldStaffRouter.post("/field-reps", async (req: Request, res: Response) => {
       `INSERT INTO bi_field_reps (code, full_name, company_name, email, phone_e164, pin_hash, created_by, agreement_required) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${REP_COLS}`,
       [code, fullName, String(b.company_name ?? "").trim().slice(0, 160) || null, email || null, phone, hashPin(pin), actor(req), agreementsOn()]);
     const rep = ins.rows[0] as Rep;
-    // BI_SERVER_REP_AGREEMENT_v1 - issue the Introducer Agreement and email the rep their page, PIN and what to do.
+    // BI_SERVER_REP_AGREEMENT_v2 - issue the Introducer Agreement and email the rep ONLY the agreement to sign. Their
+    // page link and PIN go out in the welcome, which is sent when the signature is recorded (completeSigning).
     let agreement: { status: string; emailed: boolean; error?: string } = { status: "not_required", emailed: false };
     if (agreementsOn()) {
       const issued = await issueAgreement(db(), rep);
       let emailed = false;
-      if (rep.email) {
-        const m = welcomeMessage(rep, pin);
-        try { await sendBiMarketingEmail({ to: rep.email, subject: m.subject, html: m.html, text: m.text }); emailed = true; }
-        catch (err) { logger.warn({ err: String(err) }, "[field-reps] welcome email failed"); }
+      if (rep.email && issued.ok) {
+        const m = agreementMessage(rep);
+        try { await sendRepMail({ to: rep.email, subject: m.subject, html: m.html, text: m.text }); emailed = true; }
+        catch (err) { logger.warn({ err: String(err) }, "[field-reps] agreement email failed"); }
       }
       agreement = { status: issued.ok ? "sent" : "not_sent", emailed, ...(issued.error ? { error: issued.error } : {}) };
       if (!issued.ok) logger.warn({ repId: rep.id, error: issued.error }, "[field-reps] agreement was not issued");
+      // No PIN is shown: the one made above is replaced when they sign, and that one is emailed to them.
+      return res.status(201).json({ ok: true, rep, pin: null, page_url: repPageUrl(code), share_url: repShareUrl(code), agreement });
     }
     return res.status(201).json({ ok: true, rep, pin, page_url: repPageUrl(code), share_url: repShareUrl(code), agreement });
   }
@@ -292,12 +323,8 @@ fieldStaffRouter.post("/field-reps/:id/agreement", async (req: Request, res: Res
   await db().query(`UPDATE bi_field_reps SET agreement_required = true, updated_at = now() WHERE id = $1::uuid`, [rep.id]);
   const issued = await issueAgreement(db(), rep);
   if (!issued.ok) return res.status(502).json({ ok: false, error: "agreement_not_sent", message: "The agreement could not be sent just now (" + (issued.error ?? "unknown") + ")." });
-  const url = repPageUrl(rep.code);
-  try {
-    await sendBiMarketingEmail({ to: rep.email, subject: "Your Boreal Risk Management agreement is ready to sign",
-      text: `Hi ${rep.full_name.split(" ")[0]},\n\nYour Introducer Agreement is ready. Open your page and sign in with your PIN to sign it:\n${url}\n\nBoreal Risk Management`,
-      html: `<p>Hi ${rep.full_name.split(" ")[0]},</p><p>Your Introducer Agreement is ready. Open your page and sign in with your PIN to sign it:</p><p><a href="${url}">${url}</a></p><p>Boreal Risk Management</p>` });
-  } catch (err) { logger.warn({ err: String(err) }, "[field-reps] agreement email failed"); }
+  try { const m = agreementMessage(rep); await sendRepMail({ to: rep.email, subject: m.subject, html: m.html, text: m.text }); }
+  catch (err) { logger.warn({ err: String(err) }, "[field-reps] agreement email failed"); }
   res.json({ ok: true, agreement: "sent" });
 });
 
@@ -317,4 +344,7 @@ fieldStaffRouter.get("/field-reps/:id/contacts", async (req: Request, res: Respo
 export function startFieldFollowUpJob(): void {
   const tick = () => { void runFollowUpSmsTick(db(), (to, body) => sendOutreachSms(to, body)).catch((err) => logger.warn({ err: String(err) }, "[field-reps] follow-up tick failed")); };
   setInterval(tick, 15 * 60 * 1000).unref();
+  // BI_SERVER_REP_AGREEMENT_v2 - a rep who signs and closes the tab still gets their welcome within a couple of minutes.
+  const sweep = () => { void runSigningSweep(db()).catch((err) => logger.warn({ err: String(err) }, "[field-reps] signing sweep failed")); };
+  setInterval(sweep, 2 * 60 * 1000).unref();
 }
