@@ -10,6 +10,8 @@ export interface SendgridMessage {
   replyTo?: string;
   /** One-to-one service mail (a contract to sign, a PIN): no unsubscribe footer or list headers. */
   transactional?: boolean;
+  /** Carried back on every event for this email (open, click, bounce), so it can be tied to what sent it. */
+  customArgs?: Record<string, string>;
 }
 
 export interface SendgridResult { status: "accepted"; statusCode: number }
@@ -47,6 +49,7 @@ export async function sendBiMarketingEmail(message: SendgridMessage): Promise<Se
     subject: message.subject,
     html: message.html,
     text: message.text,
+    ...(message.customArgs ? { customArgs: message.customArgs } : {}),
     ...(message.transactional ? { trackingSettings: { subscriptionTracking: { enable: false } } } : {}),
   });
   const [response] = await Promise.race([request, timeout]);

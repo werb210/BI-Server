@@ -30,6 +30,7 @@ import biMayaStaffRoutes from "./routes/biMayaStaffRoutes";
 // BI_SERVER_BLOCK_v251_OUTREACH_CRM_v1
 import biOutreachCrmRoutes from "./routes/biOutreachCrmRoutes";
 import biListImportRoutes from "./routes/biListImportRoutes"; // BI_SERVER_LIST_IMPORT_v1
+import biFlowRoutes from "./routes/biFlowRoutes"; // BI_SERVER_EMAIL_FLOWS_v1
 import biAuthRoutes, { biAppApplicantRoutes } from "./routes/biAuthRoutes";
 import biCommissionRoutes from "./routes/biCommissionRoutes";
 import biCrmRoutes from "./routes/biCrmRoutes";
@@ -354,6 +355,7 @@ app.use("/api/v1/bi", requireAuth, biCrmRoutes);
 app.use("/api/v1/bi", requireAuth, biCompanyActivityRoutes); // BI_SERVER_v789 [89] staff-only per route
 app.use("/api/v1/bi", requireAuth, biContactMergeRoutes); // BI_SERVER_v789 [90] staff-only per route
 app.use("/api/v1/bi", requireAuth, biContactAnalyticsRoutes); // BI_SERVER_CONTACT_ANALYTICS_v271
+app.use("/api/v1/bi", requireAuth, biFlowRoutes); // BI_SERVER_EMAIL_FLOWS_v1 - email flows (open / click decides the next email)
 app.use("/api/v1/bi", requireAuth, biCustomFieldsRoutes); // BI_SERVER_CUSTOM_FIELDS_v1 - staff; Admins change fields
 app.use("/api/v1/bi", requireAuth, biLeadScoresRoutes); // BI_SERVER_LEAD_SCORES_v1
 // BI_SERVER_v856_CRM_UNIFY - shared CRM features (same contract as BF-Server), loaded on first use so server start-up

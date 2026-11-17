@@ -170,7 +170,7 @@ async function sendEmail(toEmail: string, subject: string, body: string, sender:
   }
 }
 
-async function createTask(
+export async function createTask(
   assigneeUserId: string,
   title: string,
   description: string,
