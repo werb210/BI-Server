@@ -1,13 +1,12 @@
 import { Router } from "express";
+import { calculatePremium } from "../services/premiumService";
+// BI_SERVER_PREMIUM_BY_COUNTRY_v1 - one calculation for every caller; `country=US` gives United States terms.
 const router = Router();
 router.get("/quote/calculate", (req, res) => {
-  const loan = Math.min(Number(req.query.loan ?? 0), 1_000_000);
-  const cov = Math.min(Math.max(Number(req.query.coverage ?? 0), 0), 0.80);
-  const type = String(req.query.type ?? "secured");
-  if (loan <= 0 || cov <= 0) return res.status(400).json({ error: "invalid" });
-  const rate = type === "unsecured" ? 0.040 : 0.016;
-  const coverageAmount = +(loan * cov).toFixed(2);
-  const annualPremium = +(coverageAmount * rate).toFixed(2);
-  res.json({ loan_amount: loan, coverage_percentage: cov, coverage_amount: coverageAmount, facility_type: type === "unsecured" ? "unsecured" : "secured", rate, annual_premium: annualPremium });
+  const loan = Number(req.query.loan ?? 0);
+  const cov = Number(req.query.coverage ?? 0);
+  if (!(loan > 0) || !(cov > 0)) return res.status(400).json({ error: "invalid" });
+  const p = calculatePremium({ loanAmount: loan, coverage: cov, facilityType: String(req.query.type ?? "secured") === "unsecured" ? "unsecured" : "secured", country: req.query.country });
+  res.json({ loan_amount: p.loanAmount, coverage_percentage: p.coverageRatio, coverage_amount: p.insuredAmount, facility_type: p.facilityType, rate: p.rate, annual_premium: p.annualPremium, monthly_premium: p.monthlyPremium, currency: p.currency, capped: p.capped });
 });
 export default router;
