@@ -112,6 +112,20 @@ const haveDb = !!process.env.DATABASE_URL;
     expect(tasks).toHaveLength(1); // still one call task; a second tick never repeats it
   });
 
+  it("a reply to the reply-to mailbox stops that person's flow (BI_SERVER_FLOW_REPLY_STOP_v1)", async () => {
+    const asked: string[] = [];
+    const withReplies: FlowDeps = { ...deps, replies: async (mailbox) => {
+      asked.push(mailbox);
+      return { connected: true, replies: [{ from: `quiet.${tag}@example.com`, at: at(8).toISOString() }, { from: `stranger.${tag}@example.com`, at: at(8).toISOString() }] };
+    } };
+    await pool.query(`UPDATE bi_flows SET reply_to = 'Replies@Example.com' WHERE id = $1`, [flowId]);
+    const r = await runFlowTick(pool, withReplies, at(8, 1));
+    expect(asked).toEqual(["replies@example.com"]);
+    expect(r.replied).toBe(1);
+    expect(await member("quiet")).toMatchObject({ status: "stopped", stop_reason: "replied", next_key: null });
+    expect((await member("scanner")).status).toBe("active");
+  });
+
   it("a paused flow sends nothing, and the list shows the numbers", async () => {
     await request(app).post(`/api/v1/bi/flows/${flowId}/pause`);
     sent.length = 0;
