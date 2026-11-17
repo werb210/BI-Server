@@ -16,11 +16,62 @@ type Db = Pick<Pool, "query"> | Pick<PoolClient, "query">;
 export type FlowDeps = {
   send: (m: { to: string; subject: string; html: string; text: string; fromName: string; replyTo?: string; customArgs: Record<string, string> }) => Promise<unknown>;
   task: (assigneeUserId: string, title: string, notes: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Who has emailed this mailbox since a time (BF-Server reads the connected Microsoft 365 mailbox). */
+  replies?: (mailbox: string, since: Date) => Promise<{ connected: boolean; replies: Array<{ from: string; at: string }> }>;
 };
 const liveDeps: FlowDeps = {
   send: (m) => sendBiMarketingEmail(m),
   task: (assignee, title, notes) => createTask(assignee, title, notes),
+  replies: async (mailbox, since) => {
+    const base = process.env.BF_SERVER_URL || "https://server.boreal.financial";
+    const token = (process.env.BACKEND_SERVICE_TOKEN || process.env.BI_BACKEND_TOKEN || "").trim();
+    const r = await fetch(`${base}/api/service/mail/replies?mailbox=${encodeURIComponent(mailbox)}&since=${encodeURIComponent(since.toISOString())}`,
+      { headers: { "X-Backend-Token": token, "X-Silo": "BI" }, signal: AbortSignal.timeout(30_000) });
+    if (!r.ok) throw new Error(`BF-Server replies ${r.status}`);
+    const j = (await r.json()) as { connected?: boolean; replies?: Array<{ from: string; at: string }> };
+    return { connected: Boolean(j.connected), replies: Array.isArray(j.replies) ? j.replies : [] };
+  },
 };
+const REPLY_POLL_MS = 5 * 60_000;
+let lastReplyPoll = 0;
+
+/** BI_SERVER_FLOW_REPLY_STOP_v1 - a reply to the flow's reply-to mailbox stops that person's flow. */
+export async function stopRepliedMembers(db: Db, deps: FlowDeps, now: Date): Promise<{ stopped: number; mailboxes: Record<string, boolean> }> {
+  const out = { stopped: 0, mailboxes: {} as Record<string, boolean> };
+  if (!deps.replies) return out;
+  const boxes = await db.query(
+    `SELECT lower(btrim(f.reply_to)) AS mailbox, min(m.first_sent_at) AS since
+       FROM bi_flows f JOIN bi_flow_members m ON m.flow_id = f.id
+      WHERE f.status = 'active' AND coalesce(btrim(f.reply_to), '') <> '' AND m.status IN ('active', 'done') AND m.first_sent_at IS NOT NULL
+      GROUP BY 1`,
+  );
+  for (const b of boxes.rows) {
+    const since = new Date(Math.max(new Date(b.since).getTime(), now.getTime() - 14 * 86_400_000));
+    let res;
+    try { res = await deps.replies(b.mailbox, since); }
+    catch (err) { logger.warn({ mailbox: b.mailbox, err: (err as Error)?.message }, "flow.worker.replies_failed"); continue; }
+    out.mailboxes[b.mailbox] = res.connected;
+    for (const rep of res.replies) {
+      const r = await db.query(
+        `UPDATE bi_flow_members m SET status = 'stopped', stop_reason = 'replied', next_key = NULL, next_at = NULL, updated_at = now()
+           FROM bi_flows f
+          WHERE f.id = m.flow_id AND lower(btrim(f.reply_to)) = $1 AND m.email = $2 AND m.status IN ('active', 'done')
+            AND m.first_sent_at IS NOT NULL AND m.first_sent_at < $3::timestamptz AND coalesce(m.stop_reason, '') <> 'replied'
+          RETURNING m.contact_id, f.name`,
+        [b.mailbox, rep.from, rep.at],
+      );
+      for (const row of r.rows) {
+        out.stopped += 1;
+        await db.query(
+          `INSERT INTO bi_contact_activity (id, contact_id, actor_id, actor_name, event_type, outcome, body, meta)
+           VALUES (gen_random_uuid(), $1, NULL, 'Email flow', 'note', 'replied', $2, $3::jsonb)`,
+          [row.contact_id, `Replied by email. The "${row.name}" emails have stopped for them.`, JSON.stringify({ at: rep.at })],
+        ).catch((err: unknown) => logger.warn({ err: (err as Error)?.message }, "flow.worker.reply_activity_failed"));
+      }
+    }
+  }
+  return out;
+}
 const LOCK_KEY = 772_031_951; // any fixed number; only this worker uses it
 const MAX_FAILURES = 3;
 const SENDS_PER_TICK = 60;
@@ -215,12 +266,13 @@ export async function sendDue(db: Db, deps: FlowDeps, now: Date): Promise<{ sent
   return out;
 }
 
-export async function runFlowTick(db: Db, deps: FlowDeps, now = new Date()): Promise<Record<string, number>> {
+export async function runFlowTick(db: Db, deps: FlowDeps, now = new Date(), pollReplies = true): Promise<Record<string, number>> {
+  const replied = pollReplies ? (await stopRepliedMembers(db, deps, now)).stopped : 0;
   const events = await ingestEvents(db);
   const tasks = await createCallTasks(db, deps);
   const started = await startNewPeople(db, now);
   const sends = await sendDue(db, deps, now);
-  return { ...events, tasks, started, ...sends };
+  return { replied, ...events, tasks, started, ...sends };
 }
 
 let timer: NodeJS.Timeout | null = null;
@@ -236,7 +288,9 @@ async function tick(pool: Pool): Promise<void> {
     const lock = await client.query<{ ok: boolean }>(`SELECT pg_try_advisory_lock($1) AS ok`, [LOCK_KEY]);
     if (!lock.rows[0]?.ok) return;
     try {
-      const result = await runFlowTick(client, liveDeps);
+      const poll = Date.now() - lastReplyPoll >= REPLY_POLL_MS;
+      if (poll) lastReplyPoll = Date.now();
+      const result = await runFlowTick(client, liveDeps, new Date(), poll);
       if (Object.values(result).some((n) => n > 0)) logger.info(result, "flow.worker.tick");
     } finally {
       await client.query(`SELECT pg_advisory_unlock($1)`, [LOCK_KEY]).catch(() => undefined);
