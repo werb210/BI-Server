@@ -21,6 +21,7 @@ import { env } from "./platform/env";
 import { logger } from "./platform/logger";
 import { pool } from "./db";
 import { startMarketingWorker } from "./workers/marketingWorker";
+import { startFlowWorker } from "./workers/flowWorker"; // BI_SERVER_EMAIL_FLOWS_v1
 import { startBiSendWorker } from "./services/biMarketingSendRunner";
 import { startAbandonedApplicationNudge } from "./workers/abandonedApplicationNudge"; // BI_SERVER_ABANDONED_NUDGE_v1
 import { startMailboxHealthRollup } from "./workers/mailboxHealthRollup";
@@ -61,6 +62,7 @@ const server = app.listen(port, "0.0.0.0", () => {
     logger.warn("BI workers not started: BI_WORKERS_ENABLED=false");
   } else for (const [name, fn] of [
     ["marketingWorker",     startMarketingWorker],
+    ["flowWorker", () => startFlowWorker()],
     ["mailboxHealthRollup", startMailboxHealthRollup],
     ["sendgridSuppressionSync", startSendgridSuppressionSync],
     ["abandonedApplicationNudge", startAbandonedApplicationNudge], // BI_SERVER_ABANDONED_NUDGE_v1
