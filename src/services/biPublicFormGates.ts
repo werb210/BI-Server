@@ -53,6 +53,7 @@ export const PUBLIC_SUBMIT_CONSENT_KEYS = [
   "no_undisclosed_events", "data_use", "credit_pull", "coverage_understood",
 ] as const;
 
+import { limitsFor, money } from "../lib/validation/marketLimits";
 export const ELIGIBLE_LOAN_TYPES = ["Commercial Mortgage", "Other Secured Loan"] as const;
 export const SUBMIT_AMOUNT_CAP = 1_000_000;
 
@@ -96,11 +97,13 @@ export function evaluatePublicSubmitGates(app: Record<string, any>): SubmitGateR
   if (typeof app.q_business_province === "string" && app.q_business_province.toUpperCase() === "QC") {
     return { ok: false, consents: c, failure: { error: "quebec_blocked", message: "PGI does not currently write business in Quebec." } };
   }
-  if (Number(app.loan_amount) > SUBMIT_AMOUNT_CAP) {
-    return { ok: false, consents: c, failure: { error: "loan_amount_over_cap", message: "Loan amount exceeds the 1,000,000 maximum." } };
+  // BI_SERVER_US_MARKET_LIMITS_v1
+  const lim = limitsFor(app.country);
+  if (Number(app.loan_amount) > lim.loanMax) {
+    return { ok: false, consents: c, failure: { error: "loan_amount_over_cap", message: `Loan amount exceeds the ${money(lim.loanMax)} maximum.` } };
   }
-  if (Number(app.pgi_limit) > SUBMIT_AMOUNT_CAP) {
-    return { ok: false, consents: c, failure: { error: "pgi_limit_over_cap", message: "PGI limit exceeds the 1,000,000 maximum." } };
+  if (Number(app.pgi_limit) > lim.pgiLimitMax) {
+    return { ok: false, consents: c, failure: { error: "pgi_limit_over_cap", message: `PGI limit exceeds the ${money(lim.pgiLimitMax)} maximum.` } };
   }
   if (app.q_ca_loan_type && !(ELIGIBLE_LOAN_TYPES as readonly string[]).includes(app.q_ca_loan_type)) {
     return {
