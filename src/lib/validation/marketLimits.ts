@@ -5,11 +5,13 @@
 // the covered share is up to 90% on secured loans and up to 70% on unsecured loans. The one-pager sets no ceiling on
 // the loan itself, so the US loan ceiling here is only a guard against typing errors.
 export type Market = "CA" | "US";
-export type MarketLimits = { market: Market; loanMax: number; pgiLimitMax: number; ratio: number; ratioUnsecured: number; currency: "CAD" | "USD" };
+export type MarketLimits = { market: Market; loanMax: number; pgiLimitMax: number; ratio: number; ratioUnsecured: number; currency: "CAD" | "USD";
+  /** Indicative annual premium as a share of the insured amount. The insurer sets the real premium. */
+  rate: number };
 
 export const MARKET_LIMITS: Record<Market, MarketLimits> = {
-  CA: { market: "CA", loanMax: 1_000_000, pgiLimitMax: 1_000_000, ratio: 0.8, ratioUnsecured: 0.8, currency: "CAD" },
-  US: { market: "US", loanMax: 50_000_000, pgiLimitMax: 5_000_000, ratio: 0.9, ratioUnsecured: 0.7, currency: "USD" },
+  CA: { market: "CA", loanMax: 1_000_000, pgiLimitMax: 1_000_000, ratio: 0.8, ratioUnsecured: 0.8, currency: "CAD", rate: 0.027 },
+  US: { market: "US", loanMax: 50_000_000, pgiLimitMax: 5_000_000, ratio: 0.9, ratioUnsecured: 0.7, currency: "USD", rate: 0.02 },
 };
 
 export const marketOf = (country: unknown): Market => {
