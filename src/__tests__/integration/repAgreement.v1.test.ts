@@ -11,7 +11,7 @@ vi.mock("../../services/crmMirrorService", () => ({ mirrorToContact: vi.fn(async
 vi.mock("../../services/smsService", () => ({ sendOutreachSms: vi.fn(async () => ({})) }));
 
 import { fieldPublicRouter, fieldStaffRouter } from "../../routes/biFieldRepRoutes";
-import { agreementStatus, welcomeMessage } from "../../services/repAgreement";
+import { agreementMessage, agreementStatus, runSigningSweep, welcomeMessage } from "../../services/repAgreement";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -48,31 +48,47 @@ const haveDb = !!process.env.DATABASE_URL;
   });
   beforeEach(() => { h.emails.length = 0; h.calls.length = 0; h.signed = false; h.down = false; });
 
-  it("adding a rep needs an email, issues the agreement and emails the rep their page and PIN", async () => {
+  it("adding a rep sends ONLY the agreement to sign; the welcome with page and PIN goes out once it is signed", async () => {
     expect((await request(app).post("/api/v1/bi/field-reps").send({ full_name: "No Email" })).body).toMatchObject({ error: "email_required" });
     const r = await request(app).post("/api/v1/bi/field-reps").send({ full_name: "Alex Introducer", company_name: "Itest Advisors", email: "alex@itest.local" });
     expect(r.status).toBe(201);
     made.push(r.body.rep.id);
     expect(r.body.agreement).toEqual({ status: "sent", emailed: true });
+    expect(r.body.pin).toBeNull();
     expect(h.calls[0]).toMatchObject({ path: "/pgi-rep-agreement", body: { repId: r.body.rep.id, fullName: "Alex Introducer", email: "alex@itest.local", company: "Itest Advisors" } });
-    expect(h.emails[0].to).toBe("alex@itest.local");
-    expect(h.emails[0].text).toContain(`/rep/${r.body.rep.code}`);
-    expect(h.emails[0].text).toContain(r.body.pin);
-    expect(h.emails[0].text).toContain("20% of the commission");
+
+    // One email so far: the agreement. No PIN in it, and it is service mail (no unsubscribe footer).
+    expect(h.emails).toHaveLength(1);
+    const first = h.emails[0];
+    expect(first).toMatchObject({ to: "alex@itest.local", subject: "Your Boreal Risk Management Introducer Agreement", transactional: true });
+    expect(first.text).toContain("20% of the commission");
+    expect(first.text).not.toMatch(/PIN: \d/);
+    const signToken = decodeURIComponent(/\/rep\/[a-z0-9]+\?sign=([^\s"]+)/.exec(first.text)![1]!);
+    expect(first.html).toContain("Read and sign the agreement");
 
     const list = (await request(app).get("/api/v1/bi/field-reps")).body.reps.find((x: any) => x.id === r.body.rep.id);
     expect(list.agreement).toBe("sent");
 
-    // The page is locked: the rep can sign in and get a signing link, nothing else.
-    const token = (await request(app).post("/api/v1/field/login").send({ code: r.body.rep.code, pin: r.body.pin })).body.token;
-    const auth = { Authorization: `Bearer ${token}` };
-    expect((await request(app).get("/api/v1/field/me").set(auth)).body).toMatchObject({ error: "agreement_required" });
-    expect((await request(app).post("/api/v1/field/contacts").set(auth).send({ full_name: "Pat Example", email: "pat@itest.local" })).status).toBe(403);
-    expect((await request(app).get("/api/v1/field/agreement").set(auth)).body).toEqual({ ok: true, signed: false, url: "https://sign.example/fresh" });
+    // The link in the email fetches the signing link, and cannot open the rep's page.
+    const sign = { Authorization: `Bearer ${signToken}` };
+    expect((await request(app).get("/api/v1/field/agreement-link").set(sign)).body).toEqual({ ok: true, signed: false, url: "https://sign.example/fresh" });
+    expect((await request(app).get("/api/v1/field/me").set(sign)).status).toBe(401);
+    expect((await request(app).get("/api/v1/field/agreement-link").set({ Authorization: "Bearer nonsense" })).status).toBe(401);
+    expect(h.emails).toHaveLength(1);
 
-    // Signed: the page opens and stays open without asking again.
+    // Signed: the welcome goes out, once, with the page and a PIN that works.
     h.signed = true;
-    expect((await request(app).get("/api/v1/field/me").set(auth)).status).toBe(200);
+    expect((await request(app).get("/api/v1/field/agreement-link").set(sign)).body).toEqual({ ok: true, signed: true, url: null });
+    expect((await request(app).get("/api/v1/field/agreement-link").set(sign)).body).toEqual({ ok: true, signed: true, url: null });
+    expect(await runSigningSweep(pool as any)).toBe(0);
+    expect(h.emails).toHaveLength(2);
+    const welcome = h.emails[1];
+    expect(welcome).toMatchObject({ to: "alex@itest.local", subject: "Welcome - your Boreal Risk Management page and PIN", transactional: true });
+    expect(welcome.text).toContain(`/rep/${r.body.rep.code}`);
+    expect(welcome.text).not.toContain("?sign=");
+    const pin = /Your PIN: (\d{4,8})/.exec(welcome.text)![1]!;
+    const token = (await request(app).post("/api/v1/field/login").send({ code: r.body.rep.code, pin })).body.token;
+    const auth = { Authorization: `Bearer ${token}` };
     h.calls.length = 0;
     expect((await request(app).get("/api/v1/field/me").set(auth)).status).toBe(200);
     expect(h.calls).toEqual([]);
@@ -80,17 +96,29 @@ const haveDb = !!process.env.DATABASE_URL;
     expect((await request(app).post(`/api/v1/bi/field-reps/${r.body.rep.id}/agreement`).send({})).body).toMatchObject({ error: "already_signed" });
   });
 
-  it("if the agreement cannot be issued the rep is still added, the page stays locked, and staff can send it again", async () => {
+  it("a rep who signs and closes the tab is welcomed by the sweep", async () => {
+    const r = await request(app).post("/api/v1/bi/field-reps").send({ full_name: "Sam Sweep", email: "sam@itest.local" });
+    made.push(r.body.rep.id);
+    expect(await runSigningSweep(pool as any)).toBe(0);
+    expect(h.emails).toHaveLength(1);
+    h.signed = true;
+    expect(await runSigningSweep(pool as any)).toBeGreaterThanOrEqual(1);
+    const mine = h.emails.filter((e) => e.to === "sam@itest.local");
+    expect(mine.map((e) => e.subject)).toEqual(["Your Boreal Risk Management Introducer Agreement", "Welcome - your Boreal Risk Management page and PIN"]);
+    await runSigningSweep(pool as any);
+    expect(h.emails.filter((e) => e.to === "sam@itest.local")).toHaveLength(2);
+  });
+
+  it("if the agreement cannot be issued the rep is still added, nothing is emailed, and staff can send it again", async () => {
     h.down = true;
     const r = await request(app).post("/api/v1/bi/field-reps").send({ full_name: "Later Rep", email: "later@itest.local" });
     made.push(r.body.rep.id);
-    expect(r.body.agreement).toMatchObject({ status: "not_sent", emailed: true, error: "signing_not_configured" });
-    const token = (await request(app).post("/api/v1/field/login").send({ code: r.body.rep.code, pin: r.body.pin })).body.token;
-    expect((await request(app).get("/api/v1/field/me").set({ Authorization: `Bearer ${token}` })).status).toBe(403);
-    expect((await request(app).get("/api/v1/field/agreement").set({ Authorization: `Bearer ${token}` })).status).toBe(409);
+    expect(r.body.agreement).toMatchObject({ status: "not_sent", emailed: false, error: "signing_not_configured" });
+    expect(h.emails).toHaveLength(0);
     h.down = false;
     expect((await request(app).post(`/api/v1/bi/field-reps/${r.body.rep.id}/agreement`).send({})).body).toEqual({ ok: true, agreement: "sent" });
-    expect(h.emails.at(-1).subject).toContain("ready to sign");
+    expect(h.emails.at(-1).subject).toBe("Your Boreal Risk Management Introducer Agreement");
+    expect(h.emails.at(-1).text).toContain("?sign=");
   });
 
 });
@@ -100,5 +128,8 @@ describe("the rep's Introducer Agreement: parts that need no database", () => {
     expect(agreementStatus({ agreement_required: false } as any)).toBe("not_required");
     expect(agreementStatus({ agreement_required: true } as any)).toBe("not_sent");
     expect(welcomeMessage({ full_name: "Alex Introducer", code: "ab12cd" }, "123456").html).toContain("/rep/ab12cd");
+    const a = agreementMessage({ id: "11111111-1111-4111-8111-111111111111", full_name: "Alex Introducer", code: "ab12cd" });
+    expect(a.text).toContain("/rep/ab12cd?sign=");
+    expect(a.text).not.toContain("PIN:");
   });
 });

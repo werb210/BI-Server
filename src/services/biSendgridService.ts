@@ -8,6 +8,8 @@ export interface SendgridMessage {
   fromEmail?: string;
   fromName?: string;
   replyTo?: string;
+  /** One-to-one service mail (a contract to sign, a PIN): no unsubscribe footer or list headers. */
+  transactional?: boolean;
 }
 
 export interface SendgridResult { status: "accepted"; statusCode: number }
@@ -45,6 +47,7 @@ export async function sendBiMarketingEmail(message: SendgridMessage): Promise<Se
     subject: message.subject,
     html: message.html,
     text: message.text,
+    ...(message.transactional ? { trackingSettings: { subscriptionTracking: { enable: false } } } : {}),
   });
   const [response] = await Promise.race([request, timeout]);
   if (response.statusCode !== 202) throw new Error(`SendGrid returned ${response.statusCode}`);
