@@ -6,7 +6,7 @@
     "newer than the baseline manifest (src/db/baseline/000000_baseline.files.txt).",
     "Regenerate after adding a migration: node scripts/generate-live-schema.mjs",
     "scripts/check-schema-drift.mjs fails when this file is stale.",
-    "Newer migrations folded in: 2026_09_27_v601_bi_applicant_passkeys.sql, 2026_10_09_v719_unstick_enrollments.sql, 2026_10_12_v789_audit2.sql, 2026_10_25_v856_crm_unify.sql, 2026_11_24_bi_custom_fields.sql, 2026_11_25_field_reps.sql, 2026_11_26_field_contact_audience.sql, 2026_11_27_field_rep_pin_sent.sql"
+    "Newer migrations folded in: 2026_09_27_v601_bi_applicant_passkeys.sql, 2026_10_09_v719_unstick_enrollments.sql, 2026_10_12_v789_audit2.sql, 2026_10_25_v856_crm_unify.sql, 2026_11_24_bi_custom_fields.sql, 2026_11_25_field_reps.sql, 2026_11_26_field_contact_audience.sql, 2026_11_27_field_rep_pin_sent.sql, 2026_12_10_field_rep_agreement.sql"
   ],
   "admin_audit_logs": ["id","event_type","ip_address","user_agent","created_at"],
   "admin_login_security": ["id","email","failed_attempts","locked_until","updated_at"],
@@ -66,7 +66,7 @@
   "bi_email_templates": ["id","name","subject","body_text","body_html","category","is_active","created_by","created_at","updated_at","fields"],
   "bi_events": ["id","application_id","type","payload","silo","created_at"],
   "bi_field_contacts": ["id","rep_id","full_name","company_name","title","email","phone_e164","notes","source","contact_id","track_token","email_sent_at","email_opened_at","email_error","sms_due_at","sms_sent_at","sms_error","created_at","updated_at","audience"],
-  "bi_field_reps": ["id","code","full_name","company_name","email","phone_e164","pin_hash","active","failed_pins","locked_until","created_by","created_at","updated_at","pin_sent_at"],
+  "bi_field_reps": ["id","code","full_name","company_name","email","phone_e164","pin_hash","active","failed_pins","locked_until","created_by","created_at","updated_at","pin_sent_at","agreement_required","agreement_group_id","agreement_invite_id","agreement_document_id","agreement_version","agreement_sent_at","agreement_signed_at","agreement_error"],
   "bi_idempotency": ["id","scope","payload_hash","created_at","expires_at"],
   "bi_idempotency_keys": ["id","lender_id","idem_key","route","response","created_at"],
   "bi_industries": ["code","display_name","naics_code","wants_contract","sort_order","active","updated_at"],

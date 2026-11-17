@@ -15,7 +15,8 @@ import { agreementStatus, welcomeMessage } from "../../services/repAgreement";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
-describe("the rep's Introducer Agreement", () => {
+const haveDb = !!process.env.DATABASE_URL;
+(haveDb ? describe : describe.skip)("the rep's Introducer Agreement", () => {
   let pool: Pool;
   const app = express();
   app.use(express.json());
@@ -92,6 +93,9 @@ describe("the rep's Introducer Agreement", () => {
     expect(h.emails.at(-1).subject).toContain("ready to sign");
   });
 
+});
+
+describe("the rep's Introducer Agreement: parts that need no database", () => {
   it("small parts", () => {
     expect(agreementStatus({ agreement_required: false } as any)).toBe("not_required");
     expect(agreementStatus({ agreement_required: true } as any)).toBe("not_sent");
