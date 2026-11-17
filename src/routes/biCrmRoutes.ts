@@ -32,6 +32,8 @@ function requireStaffOrAdmin(req: any, res: any, next: any) {
 // The legacy four-column shape (id, full_name, email, phone_e164)
 // is preserved; new columns are additive so existing callers
 // continue to work without code changes.
+/** Marketing = Yes unless the person unsubscribed, bounced, or was taken out of outreach. */
+export const CONTACT_MARKETING_SQL = `(NOT COALESCE(c.outreach_excluded, false) AND NOT EXISTS (SELECT 1 FROM bi_suppressions s WHERE s.channel IN ('email', 'all') AND (s.contact_id = c.id OR (c.email IS NOT NULL AND (lower(s.email) = lower(c.email) OR lower(s.identifier) = lower(c.email))))))`;
 const CONTACTS_SORT_COLS: Record<string, string> = {
   name: "c.full_name",
   full_name: "c.full_name",
@@ -40,6 +42,9 @@ const CONTACTS_SORT_COLS: Record<string, string> = {
   outreach_status: "c.outreach_status",
   owner_name: "c.outreach_owner_id",
   created_at: "c.created_at",
+  // BI_SERVER_CRM_MARKETING_COLUMN_v1 - the same columns, all sortable, as the Financial contact list.
+  tags: "NULLIF(lower(array_to_string(coalesce(c.tags, '{}'::text[]), ' ')), '')",
+  marketing_contact: CONTACT_MARKETING_SQL,
 };
 
 // BI_SERVER_BLOCK_60_MAILBOX_ENGAGEMENT_TEMPLATES_v1
@@ -161,11 +166,12 @@ router.get("/crm/contacts", async (req, res) => {
            c.outreach_updated_at,
            c.company_id,
            COALESCE(NULLIF(btrim(co.legal_name), ''), NULLIF(btrim(c.organization_name), '')) AS company_name,
+           ${CONTACT_MARKETING_SQL} AS marketing_contact,
            c.created_at
       FROM bi_contacts c
       LEFT JOIN bi_companies co ON co.id = c.company_id
      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-     ORDER BY ${sortCol} ${sortDir}
+     ORDER BY ${sortCol} ${sortDir} NULLS LAST, c.created_at DESC
      LIMIT ${pageSize}
      OFFSET ${offset}
   `;
