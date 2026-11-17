@@ -14,6 +14,7 @@
 // First submit attempt will return PGI's 400 errors dict naming these fields.
 // Acceptable per Todd 2026-05-25 launch-window decision.
 
+import { limitsFor, money } from "./marketLimits";
 export const ALLOWED_COUNTRIES = ["CA", "Canada", "US", "USA"] as const;
 export type AllowedCountry = typeof ALLOWED_COUNTRIES[number];
 
@@ -167,10 +168,12 @@ export function validatePgiSubmissionV2(input: unknown): { ok: true; value: PgiS
 
   // BI_SERVER_BLOCK_v351_CARRIER_CORRECTIONS_v1 — Boreal-side $50K floor added.
   // BI_SERVER_BLOCK_v353_PGI_COVERAGE_CAP_v1 — pgi_limit ≤ 80% of loan_amount.
+  const lim = limitsFor(fd.q0_country); // BI_SERVER_US_MARKET_LIMITS_v1 - Canada $1,000,000 / 80%; United States $5,000,000 / 90%
+  void LOAN_AMOUNT_MAX; void PGI_LIMIT_MAX; void PGI_COVERAGE_RATIO;
   const loan = Number(fd.q41_loan_amount);
   if (!Number.isFinite(loan) || loan <= 0) issues.push({ field: "form_data.q41_loan_amount", message: "must be > 0" });
   else if (loan < LOAN_AMOUNT_MIN) issues.push({ field: "form_data.q41_loan_amount", message: `Loan amount ${loan} is below the 50,000 minimum.` });
-  else if (loan > LOAN_AMOUNT_MAX) issues.push({ field: "form_data.q41_loan_amount", message: `Loan amount ${loan} exceeds the 1,000,000 maximum.` });
+  else if (loan > lim.loanMax) issues.push({ field: "form_data.q41_loan_amount", message: `Loan amount ${loan} exceeds the ${money(lim.loanMax)} maximum.` });
 
   // BI_SERVER_BLOCK_v353_PGI_COVERAGE_CAP_v1
   // Coverage cap rule (Boreal-side):
@@ -180,13 +183,13 @@ export function validatePgiSubmissionV2(input: unknown): { ok: true; value: PgiS
   const limit = Number(fd.q42_pgi_limit);
   if (!Number.isFinite(limit) || limit <= 0) {
     issues.push({ field: "form_data.q42_pgi_limit", message: "must be > 0" });
-  } else if (limit > PGI_LIMIT_MAX) {
-    issues.push({ field: "form_data.q42_pgi_limit", message: `PGI limit ${limit} exceeds the 1,000,000 maximum.` });
-  } else if (Number.isFinite(loan) && limit > Math.floor(loan * PGI_COVERAGE_RATIO)) {
-    const maxAllowed = Math.floor(loan * PGI_COVERAGE_RATIO);
+  } else if (limit > lim.pgiLimitMax) {
+    issues.push({ field: "form_data.q42_pgi_limit", message: `PGI limit ${limit} exceeds the ${money(lim.pgiLimitMax)} maximum.` });
+  } else if (Number.isFinite(loan) && limit > Math.floor(loan * lim.ratio)) {
+    const maxAllowed = Math.floor(loan * lim.ratio);
     issues.push({
       field: "form_data.q42_pgi_limit",
-      message: `PGI limit ${limit} exceeds the 80% coverage cap (max ${maxAllowed} at a loan of ${loan}).`,
+      message: `PGI limit ${limit} exceeds the ${Math.round(lim.ratio * 100)}% coverage cap (max ${maxAllowed} at a loan of ${loan}).`,
     });
   }
 

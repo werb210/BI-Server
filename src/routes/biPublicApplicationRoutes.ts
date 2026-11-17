@@ -1,3 +1,4 @@
+import { limitsFor, money } from "../lib/validation/marketLimits";
 import { logHiddenError } from "../platform/safeError";
 import { Router } from "express";
 import crypto from "node:crypto";
@@ -222,9 +223,13 @@ router.post("/applications/score", publicApplicationLimiter, async (req, res) =>
       });
     }
   }
-  if (Number(b.loan_amount) > LOAN_MAX) return res.status(400).json({ error: "loan_amount_exceeds_max", max: LOAN_MAX });
+  // BI_SERVER_US_MARKET_LIMITS_v1 - Canada keeps $1,000,000 and 80%; the United States is $5,000,000 and 90%.
+  const lim = limitsFor(b.country);
+  void LOAN_MAX;
+  if (Number(b.loan_amount) > lim.loanMax) return res.status(400).json({ error: "loan_amount_exceeds_max", max: lim.loanMax });
+  if (Number(b.pgi_limit) > lim.pgiLimitMax) return res.status(400).json({ error: "pgi_limit_over_cap", max: lim.pgiLimitMax, message: `PGI limit exceeds the ${money(lim.pgiLimitMax)} maximum.` });
   if (Number(b.pgi_limit) > Number(b.loan_amount)) return res.status(400).json({ error: "pgi_limit_exceeds_loan" });
-  if (Number(b.pgi_limit) > Number(b.loan_amount) * 0.80) return res.status(400).json({ error: "pgi_limit_exceeds_80pct" });
+  if (Number(b.pgi_limit) > Number(b.loan_amount) * lim.ratio) return res.status(400).json({ error: lim.market === "US" ? "pgi_limit_exceeds_share" : "pgi_limit_exceeds_80pct", max_share: lim.ratio });
     // BI_SERVER_BLOCK_v207_HOTFIX_AND_APPLICANT_OTP_v1 — Optional applicant JWT.
   let verifiedPhone: string | null = null;
   try {

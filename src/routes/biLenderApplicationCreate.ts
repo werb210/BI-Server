@@ -8,6 +8,7 @@
 //   lender apps). Also adds POST /api/v1/lender/applications/:code/documents
 //   for the BI-Website lender form's post-create doc upload step
 //   (previously 404'd because no server route handled that path).
+import { limitsFor, money } from "../lib/validation/marketLimits";
 import { logHiddenError } from "../platform/safeError";
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
@@ -123,12 +124,13 @@ router.post("/api/v1/lender/applications", nestedShapeOnly, lenderJwtAuth, lende
 
   // 1M caps (loan amount + PGI limit).
   const loanAmtN = Number(b.loan?.amount);
-  if (Number.isFinite(loanAmtN) && loanAmtN > 1_000_000) {
-    return res.status(400).json({ error: "loan_amount_over_cap", message: `Loan amount ${loanAmtN} exceeds the 1,000,000 maximum.` });
+  const lim = limitsFor(businessCountry); // BI_SERVER_US_MARKET_LIMITS_v1
+  if (Number.isFinite(loanAmtN) && loanAmtN > lim.loanMax) {
+    return res.status(400).json({ error: "loan_amount_over_cap", message: `Loan amount ${loanAmtN} exceeds the ${money(lim.loanMax)} maximum.` });
   }
   const pgiLimitN = Number(b.loan?.pgi_limit);
-  if (Number.isFinite(pgiLimitN) && pgiLimitN > 1_000_000) {
-    return res.status(400).json({ error: "pgi_limit_over_cap", message: `PGI limit ${pgiLimitN} exceeds the 1,000,000 maximum.` });
+  if (Number.isFinite(pgiLimitN) && pgiLimitN > lim.pgiLimitMax) {
+    return res.status(400).json({ error: "pgi_limit_over_cap", message: `PGI limit ${pgiLimitN} exceeds the ${money(lim.pgiLimitMax)} maximum.` });
   }
   if (Number.isFinite(loanAmtN) && Number.isFinite(pgiLimitN) && pgiLimitN > loanAmtN) {
     return res.status(400).json({ error: "pgi_limit_over_loan", message: "PGI limit cannot exceed loan amount." });
