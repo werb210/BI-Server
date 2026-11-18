@@ -20,3 +20,9 @@ export const marketOf = (country: unknown): Market => {
 };
 export const limitsFor = (country: unknown): MarketLimits => MARKET_LIMITS[marketOf(country)];
 export const money = (n: number): string => Math.round(n).toLocaleString("en-US");
+
+// BI_SERVER_US_READY_v1 - US cover is up to 90% on secured loans and up to 70% on unsecured loans, so a US file may be
+// an unsecured loan. Canada stays secured-only.
+export const CA_LOAN_TYPES = ["Commercial Mortgage", "Other Secured Loan"] as const;
+export const US_LOAN_TYPES = ["Commercial Mortgage", "Other Secured Loan", "Unsecured Loan"] as const;
+export const loanTypesFor = (country: unknown): readonly string[] => (marketOf(country) === "US" ? US_LOAN_TYPES : CA_LOAN_TYPES);

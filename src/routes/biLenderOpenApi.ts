@@ -16,11 +16,8 @@ const SPEC = {
       "Submit Personal Guarantee Insurance (PGI) applications programmatically.\n\n" +
       "**JSON over HTTPS. Bearer-key auth.** CORE Score returned synchronously on submit.\n\n" +
       "### Eligibility (carrier rules)\n" +
-      "- **Canada and United States** — `business.country` is `\"CA\"` or `\"US\"`.\n" +
-      "- **Quebec excluded** — for `CA`, `business.province` must NOT be `QC`.\n" +
-      "- **Loan amount** — between **$50,000** and **$1,000,000**, in the currency of the country of business.\n" +
-      "- **PGI limit** — at most **80% of loan amount**, never above **$1,000,000**.\n" +
-      "- **Loan type** — one of `Commercial Mortgage` or `Other Secured Loan`. Others are rejected.\n" +
+      "- **United States** — `business.country` = `\"US\"`, `business.province` = two-letter state. PGI limit up to **$5,000,000** per guarantor; at most **90%** of the loan if secured, **70%** if unsecured. Loan types: `Commercial Mortgage`, `Other Secured Loan`, `Unsecured Loan`. US quotes open January 1, 2027.\n" +
+      "- **Canada** — `business.country` = `\"CA\"` (default); not Quebec. Loan **$50,000**–**$1,000,000** CAD; PGI limit at most **80%** of the loan. Loan types: `Commercial Mortgage` or `Other Secured Loan`.\n" +
       "- **Government ID type** — one of `Passport`, `National ID`, `Driving Licence`, `Other`.\n\n" +
       "### What's required\n" +
       "14 carrier form_data fields (split across `guarantor` / `business` / `loan`), the 11 `declarations`, " +
@@ -76,9 +73,9 @@ const SPEC = {
         type: "object",
         required: ["amount", "pgi_limit", "q_ca_loan_type"],
         properties: {
-          amount:           { type: "number", minimum: 50000, maximum: 1000000, description: "In the currency of the country of business. Carrier q41_loan_amount.", example: 500000 },
-          pgi_limit:        { type: "number", minimum: 1, maximum: 1000000, description: "In the currency of the country of business. Must be ≤ 80% of `amount`. Carrier q42_pgi_limit.", example: 400000 },
-          q_ca_loan_type:   { type: "string", enum: ["Commercial Mortgage", "Other Secured Loan"], description: "Only these two loan types are carrier-eligible." },
+          amount:           { type: "number", minimum: 1, description: "In the currency of the country of business. Canada: $50,000 to $1,000,000. Carrier q41_loan_amount.", example: 2000000 },
+          pgi_limit:        { type: "number", minimum: 1, maximum: 5000000, description: "In the currency of the country of business. US: up to $5,000,000 and 90% of `amount` (secured) or 70% (unsecured). Canada: up to $1,000,000 and 80% of `amount`. Carrier q42_pgi_limit.", example: 1500000 },
+          q_ca_loan_type:   { type: "string", enum: ["Commercial Mortgage", "Other Secured Loan", "Unsecured Loan"], description: "`Unsecured Loan` is US only." },
           use_of_proceeds:  { type: "string", enum: ["working_capital", "acquisition", "expansion", "equipment", "real_estate", "refinance"] },
           loan_funding_date: { type: "string", format: "date", example: "2026-06-15" },
           policy_start_date: { type: "string", format: "date", example: "2026-06-15" },

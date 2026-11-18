@@ -14,7 +14,7 @@
 // First submit attempt will return PGI's 400 errors dict naming these fields.
 // Acceptable per Todd 2026-05-25 launch-window decision.
 
-import { limitsFor, money } from "./marketLimits";
+import { limitsFor, loanTypesFor, money } from "./marketLimits";
 export const ALLOWED_COUNTRIES = ["CA", "Canada", "US", "USA"] as const;
 export type AllowedCountry = typeof ALLOWED_COUNTRIES[number];
 
@@ -164,7 +164,7 @@ export function validatePgiSubmissionV2(input: unknown): { ok: true; value: PgiS
   if (detectQuebecFromAddress(fd.q17_business_operating_address)) issues.push({ field: "form_data.q17_business_operating_address", message: "PGI does not currently write business in Quebec." });
   if (detectQuebecFromAddress(fd.q5_residential_address)) issues.push({ field: "form_data.q5_residential_address", message: "PGI does not currently write business in Quebec." });
 
-  if (typeof fd.q_ca_loan_type !== "string" || !(ELIGIBLE_LOAN_TYPES as readonly string[]).includes(fd.q_ca_loan_type)) issues.push({ field: "form_data.q_ca_loan_type", message: `must be one of ${ELIGIBLE_LOAN_TYPES.join(", ")}` });
+  if (typeof fd.q_ca_loan_type !== "string" || !loanTypesFor(fd.q0_country).includes(fd.q_ca_loan_type)) issues.push({ field: "form_data.q_ca_loan_type", message: `must be one of ${loanTypesFor(fd.q0_country).join(", ")}` }); // BI_SERVER_US_READY_v1
 
   // BI_SERVER_BLOCK_v351_CARRIER_CORRECTIONS_v1 — Boreal-side $50K floor added.
   // BI_SERVER_BLOCK_v353_PGI_COVERAGE_CAP_v1 — pgi_limit ≤ 80% of loan_amount.

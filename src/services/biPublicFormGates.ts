@@ -53,7 +53,7 @@ export const PUBLIC_SUBMIT_CONSENT_KEYS = [
   "no_undisclosed_events", "data_use", "credit_pull", "coverage_understood",
 ] as const;
 
-import { limitsFor, money } from "../lib/validation/marketLimits";
+import { limitsFor, loanTypesFor, money } from "../lib/validation/marketLimits";
 export const ELIGIBLE_LOAN_TYPES = ["Commercial Mortgage", "Other Secured Loan"] as const;
 export const SUBMIT_AMOUNT_CAP = 1_000_000;
 
@@ -105,13 +105,13 @@ export function evaluatePublicSubmitGates(app: Record<string, any>): SubmitGateR
   if (Number(app.pgi_limit) > lim.pgiLimitMax) {
     return { ok: false, consents: c, failure: { error: "pgi_limit_over_cap", message: `PGI limit exceeds the ${money(lim.pgiLimitMax)} maximum.` } };
   }
-  if (app.q_ca_loan_type && !(ELIGIBLE_LOAN_TYPES as readonly string[]).includes(app.q_ca_loan_type)) {
+  if (app.q_ca_loan_type && !loanTypesFor(app.country).includes(app.q_ca_loan_type)) { // BI_SERVER_US_READY_v1
     return {
       ok: false,
       consents: c,
       failure: {
         error: "loan_type_ineligible",
-        message: `Loan type '${app.q_ca_loan_type}' is not eligible for PGI coverage. Eligible types are: ${ELIGIBLE_LOAN_TYPES.join(", ")}.`,
+        message: `Loan type '${app.q_ca_loan_type}' is not eligible for PGI coverage. Eligible types are: ${loanTypesFor(app.country).join(", ")}.`,
       },
     };
   }
