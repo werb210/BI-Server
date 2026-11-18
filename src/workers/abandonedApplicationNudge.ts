@@ -26,6 +26,25 @@ export function startUrl(): string {
 }
 const BATCH = 25;
 
+// BI_SERVER_BF_ADDON_QUIET_v1 - a PGI add-on opened from a Boreal Financial application
+// (source 'bf_pgi_referral') is created the moment the applicant ticks "send me PGI details",
+// long before there is a loan. The applicant must not be texted about it until the signed
+// term sheet (loan agreement) has come across from BF; the nudge clock starts then.
+export const BF_ADDON_GATE = `
+        AND (
+          COALESCE(source, '') <> 'bf_pgi_referral'
+          OR EXISTS (
+            SELECT 1 FROM bi_documents d
+             WHERE d.application_id = bi_applications.id
+               AND d.purged_at IS NULL
+               AND (d.doc_type::text LIKE 'loan_agreement%'
+                    OR lower(COALESCE(d.document_type_legacy, '')) LIKE 'loan_agreement%'
+                    OR lower(COALESCE(d.document_type_legacy, '')) LIKE '%term_sheet%')
+               AND d.created_at <= NOW() - INTERVAL '1 hour'
+               AND d.created_at >= NOW() - INTERVAL '7 days'
+          )
+        )`;
+
 function nudgeBody(publicId: string): string {
   const url = resumeUrl(publicId);
   return (
@@ -75,8 +94,8 @@ export async function runAbandonedNudgeTick(): Promise<{ first: number; second: 
         AND public_id IS NOT NULL
         AND COALESCE(applicant_phone_e164, '') <> ''
         AND created_at <= NOW() - INTERVAL '1 hour'
-        AND created_at >= NOW() - INTERVAL '7 days'
-        AND (data ->> 'abandon_nudge_sent_at') IS NULL
+        AND (created_at >= NOW() - INTERVAL '7 days' OR COALESCE(source, '') = 'bf_pgi_referral')
+        AND (data ->> 'abandon_nudge_sent_at') IS NULL${BF_ADDON_GATE}
       ORDER BY created_at ASC
       LIMIT $1`,
     [BATCH],
@@ -89,8 +108,8 @@ export async function runAbandonedNudgeTick(): Promise<{ first: number; second: 
       WHERE COALESCE(NULLIF(lower(status), ''), 'created') = 'created'
         AND public_id IS NOT NULL
         AND COALESCE(applicant_phone_e164, '') <> ''
-        AND created_at >= NOW() - INTERVAL '7 days'
-        AND (data ->> 'abandon_nudge_sent_at') IS NOT NULL
+        AND (created_at >= NOW() - INTERVAL '7 days' OR COALESCE(source, '') = 'bf_pgi_referral')
+        AND (data ->> 'abandon_nudge_sent_at') IS NOT NULL${BF_ADDON_GATE}
         AND (data ->> 'abandon_nudge_sent_at')::timestamp <= NOW() - INTERVAL '24 hours'
         AND (data ->> 'abandon_nudge2_sent_at') IS NULL
       ORDER BY created_at ASC
