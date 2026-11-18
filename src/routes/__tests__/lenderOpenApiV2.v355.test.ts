@@ -42,7 +42,7 @@ describe("v355 — OpenAPI v2 carrier alignment", () => {
   it("Loan schema requires q_ca_loan_type and constrains to the 2 allowed values", () => {
     const m = src.match(/Loan:\s*\{[\s\S]*?required:\s*\[([\s\S]*?)\]/);
     expect(m![1]).toMatch(/"q_ca_loan_type"/);
-    expect(src).toMatch(/enum:\s*\["Commercial Mortgage",\s*"Other Secured Loan"\]/);
+    expect(src).toMatch(/enum:\s*\["Commercial Mortgage",\s*"Other Secured Loan",\s*"Unsecured Loan"\]/); // BI_SERVER_US_READY_v1
   });
 
   it("Declarations schema requires all 11 keys", () => {
@@ -84,8 +84,9 @@ describe("v355 — OpenAPI v2 carrier alignment", () => {
     // BI_SERVER_US_SWEEP_v23 - the carrier now writes United States business, so
     // "Canada only" is no longer true and the spec must not tell lenders it is.
     expect(src).not.toMatch(/Canada only/);
-    expect(src).toMatch(/Canada and United States/);
-    expect(src).toMatch(/Quebec excluded/);
+    expect(src).toMatch(/\*\*United States\*\*/);
+    expect(src).toMatch(/5,000,000/);
+    expect(src).toMatch(/not Quebec/);
     expect(src).toMatch(/50,000/);
     expect(src).toMatch(/1,000,000/);
     expect(src).toMatch(/80%/);

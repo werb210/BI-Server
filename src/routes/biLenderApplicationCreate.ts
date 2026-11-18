@@ -8,7 +8,7 @@
 //   lender apps). Also adds POST /api/v1/lender/applications/:code/documents
 //   for the BI-Website lender form's post-create doc upload step
 //   (previously 404'd because no server route handled that path).
-import { limitsFor, money } from "../lib/validation/marketLimits";
+import { limitsFor, loanTypesFor, money } from "../lib/validation/marketLimits";
 import { logHiddenError } from "../platform/safeError";
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
@@ -137,7 +137,7 @@ router.post("/api/v1/lender/applications", nestedShapeOnly, lenderJwtAuth, lende
   }
 
   // q_ca_loan_type allowlist.
-  const ELIGIBLE_LOAN_TYPES = ["Commercial Mortgage", "Other Secured Loan"];
+  const ELIGIBLE_LOAN_TYPES = loanTypesFor(businessCountry); // BI_SERVER_US_READY_v1
   const loanType = String(b.loan?.q_ca_loan_type || "");
   if (!ELIGIBLE_LOAN_TYPES.includes(loanType)) {
     return res.status(400).json({
