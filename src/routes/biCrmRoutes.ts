@@ -33,7 +33,16 @@ function requireStaffOrAdmin(req: any, res: any, next: any) {
 // is preserved; new columns are additive so existing callers
 // continue to work without code changes.
 /** Marketing = Yes unless the person unsubscribed, bounced, or was taken out of outreach. */
-export const CONTACT_MARKETING_SQL = `(NOT COALESCE(c.outreach_excluded, false) AND NOT EXISTS (SELECT 1 FROM bi_suppressions s WHERE s.channel IN ('email', 'all') AND (s.contact_id = c.id OR (c.email IS NOT NULL AND (lower(s.email) = lower(c.email) OR lower(s.identifier) = lower(c.email))))))`;
+// BI_SERVER_CRM_MARKETING_SORT_FAST_v1 - sorting 5,000+ contacts by this column timed out (503): the old form ran an
+// OR-joined EXISTS against every suppression row for every contact. NOT IN over the suppression lists lets Postgres
+// build each list once as a hash and look contacts up in it. Same answer: not excluded, and neither the contact nor
+// its email is suppressed for email.
+export const CONTACT_MARKETING_SQL = `(NOT COALESCE(c.outreach_excluded, false)
+  AND c.id NOT IN (SELECT s.contact_id FROM bi_suppressions s WHERE s.channel IN ('email', 'all') AND s.contact_id IS NOT NULL)
+  AND (c.email IS NULL OR lower(c.email) NOT IN (
+        SELECT lower(s.email) FROM bi_suppressions s WHERE s.channel IN ('email', 'all') AND s.email IS NOT NULL
+        UNION ALL
+        SELECT lower(s.identifier) FROM bi_suppressions s WHERE s.channel IN ('email', 'all') AND s.identifier IS NOT NULL)))`;
 const CONTACTS_SORT_COLS: Record<string, string> = {
   name: "c.full_name",
   full_name: "c.full_name",
