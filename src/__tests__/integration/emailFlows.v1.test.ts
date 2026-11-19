@@ -78,7 +78,7 @@ const haveDb = !!process.env.DATABASE_URL;
     expect(added.body.added).toBe(5); // the Canadian lender is not in the US flow
     const shown = await request(app).get(`/api/v1/bi/flows/${flowId}`);
     expect(shown.body.emails).toHaveLength(7);
-    expect(shown.body.emails[0].subject).toContain("personal guarantee");
+    expect(shown.body.emails[0].subject).toBe("An option your borrowers may not know about"); // BI_SERVER_PGI_COMPLIANCE_v1
     expect((await request(app).post(`/api/v1/bi/flows/${flowId}/start`)).body.status).toBe("active");
   });
 
