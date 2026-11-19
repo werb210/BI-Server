@@ -27,7 +27,7 @@ import {
   CONTACT_MERGE_FIELDS, companyDuplicates, contactDuplicates, dismissDuplicate, duplicateGroups, mergePreview, pickFieldChoices,
 } from "../services/crmUnify/duplicates";
 import { mergeCompanies } from "../services/crmUnify/companyMerge";
-import { applyCleanup, listBatches, scanCleanup, undoCleanup, validChange } from "../services/crmUnify/cleanup";
+import { applyCleanup, ignoreChanges, listBatches, scanCleanup, undoCleanup, unignoreAll, validChange } from "../services/crmUnify/cleanup";
 import { cachedSummary, generateSummary } from "../services/crmUnify/aiSummary";
 
 const router = Router();
@@ -436,6 +436,22 @@ router.post("/crm/unified/cleanup/apply", async (req, res) => {
   } finally {
     client.release();
   }
+});
+
+// BI_SERVER_CLEANUP_IGNORE_v1 - "Ignore" and "Show ignored again" (the portal already calls these; they 404'd).
+router.post("/crm/unified/cleanup/ignore", async (req, res) => {
+  const list: unknown[] = Array.isArray(req.body?.changes) ? req.body.changes : [];
+  const changes = list.filter(validChange).slice(0, 5000);
+  if (!changes.length) return res.status(400).json({ ok: false, error: "no_valid_changes" });
+  try {
+    const ignored = await ignoreChanges(pool, changes, crmActorFrom(req).id);
+    await audit(req, "crm.cleanup_ignored", "crm_cleanup_ignore", "-", { ignored });
+    return res.json({ ok: true, data: { ignored } });
+  } catch (err) { return fail(req, res, err, "cleanup_ignore_failed"); }
+});
+router.post("/crm/unified/cleanup/ignore/clear", async (req, res) => {
+  const entity = entityOf(req.body?.entity) ?? "contact";
+  try { return res.json({ ok: true, data: { cleared: await unignoreAll(pool, entity) } }); } catch (err) { return fail(req, res, err, "cleanup_ignore_clear_failed"); }
 });
 
 router.get("/crm/unified/cleanup/batches", async (req, res) => {
