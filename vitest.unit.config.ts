@@ -25,6 +25,7 @@ export default defineConfig({
     environment: "node",
     env: {
       JWT_SECRET,
+      PGI_MARKETING_HOLD: "off", // BI_SERVER_PGI_MARKETING_HOLD_v1 - the suites test sending; the hold has its own test
     },
     // BI_SERVER_SQL_CONTENT_MOCKS_v713 - biOutreachCrm.v251 and biOutreachImport.v252 mock the database fully, so
     // they now run here too.

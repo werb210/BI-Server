@@ -3,6 +3,7 @@ import { pool } from "../db";
 import { skipTextedDaysOf, audienceParams, buildAudienceBreakdownSql, buildAudienceCountSql, type AudienceFilter } from "../services/biEmailAudience";
 import { renderEmailTemplate, type BrandedEmailTemplate } from "../services/emailTemplateRender";
 import { mergeFields, sendBiMarketingEmail, sendgridConfigured } from "../services/biSendgridService";
+import { PGI_HOLD_MESSAGE, pgiMarketingHeld } from "../lib/pgiMarketingHold";
 import { resolveScheduledAt, SendScheduleError } from "../services/sendSchedule";
 
 const router: Router = Router();
@@ -146,6 +147,7 @@ router.post("/email/send-template", async (req, res) => {
   const template = templateFrom(body);
   if (!template.subject) return res.status(400).json({ error: { code: "subject_required" } });
   const test = typeof body.test === "string" ? body.test.trim() : "";
+  if (!test && pgiMarketingHeld()) return res.status(409).json({ ok: false, error: "pgi_marketing_hold", message: PGI_HOLD_MESSAGE }); // BI_SERVER_PGI_MARKETING_HOLD_v1 - test sends still work
   if (test) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(test)) return res.status(400).json({ error: { code: "invalid_test_address" } });
     // BI_SERVER_PUBLIC_ASSET_MOUNT_ORDER_v13 - resolve the test recipient

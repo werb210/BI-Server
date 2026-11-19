@@ -8,6 +8,7 @@ import { pool } from "../db";
 import { logger } from "../platform/logger";
 import { hasCapability } from "../platform/capabilities";
 import { scheduleFromNow } from "../services/sequenceSchedule"; // BI_SEQ_ENROLL_HARDENING_v1
+import { PGI_HOLD_MESSAGE, pgiMarketingHeld } from "../lib/pgiMarketingHold";
 import { emptyEmailSteps, emptyStepsMessage } from "../services/emptyEmailSteps"; // BI_SERVER_NO_EMPTY_EMAIL_STEPS_v398
 
 const router: Router = Router();
@@ -178,6 +179,7 @@ router.delete("/sequences/:id", async (req, res) => {
 });
 
 router.post("/sequences/:id/start", async (req, res) => {
+  if (pgiMarketingHeld()) return res.status(409).json({ ok: false, error: "pgi_marketing_hold", message: PGI_HOLD_MESSAGE }); // BI_SERVER_PGI_MARKETING_HOLD_v1
   try {
     const empty = await emptyEmailSteps(req.params.id);
     if (empty.length) {

@@ -13,6 +13,7 @@ import { pool } from "../db";
 import { logger } from "../platform/logger";
 import { mergeFields, sendBiMarketingEmail } from "../services/biSendgridService";
 import { FLOW_KEYS, FLOW_KEY_LABEL, dailyNewCap, htmlToText, isFlowKey, withFooter } from "../services/flows/flowEngine";
+import { PGI_HOLD_MESSAGE, pgiMarketingHeld } from "../lib/pgiMarketingHold";
 import { FLOW_PRESETS, presetByKey } from "../services/flows/flowPresets";
 
 const router = express.Router();
@@ -181,6 +182,7 @@ for (const [action, status] of [["start", "active"], ["pause", "paused"]] as con
   router.post(`/flows/:id/${action}`, wrap(async (req, res) => {
     if (!adminOnly(req, res)) return;
     if (!UUID.test(String(req.params.id))) return res.status(404).json({ ok: false, error: "not_found" });
+    if (action === "start" && pgiMarketingHeld()) return res.status(409).json({ ok: false, error: "pgi_marketing_hold", message: PGI_HOLD_MESSAGE }); // BI_SERVER_PGI_MARKETING_HOLD_v1
     if (action === "start") {
       const people = await pool.query(`SELECT count(*)::int AS n FROM bi_flow_members WHERE flow_id = $1`, [req.params.id]);
       if (!Number(people.rows[0]?.n)) return res.status(400).json({ ok: false, error: "no_people", message: "Add the people first." });

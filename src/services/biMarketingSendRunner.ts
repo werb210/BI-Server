@@ -1,9 +1,11 @@
 import type { Pool } from "pg";
 import { buildAudienceSelectSql, audienceParams, contactMergeVars, type AudienceFilter } from "./biEmailAudience";
 import { mergeFields, sendBiMarketingEmail } from "./biSendgridService";
+import { pgiMarketingHeld } from "../lib/pgiMarketingHold";
 import { logger } from "../platform/logger";
 
 export async function drainBiSendQueue(pool: Pool): Promise<boolean> {
+  if (pgiMarketingHeld()) return false; // BI_SERVER_PGI_MARKETING_HOLD_v1 - queued campaign emails wait
   const claim = await pool.query(`UPDATE bi_marketing_send_jobs SET status='running', started_at=NOW()
     WHERE id=(SELECT id FROM bi_marketing_send_jobs WHERE status='queued' AND scheduled_at<=NOW()
       ORDER BY scheduled_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`);
