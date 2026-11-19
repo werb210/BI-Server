@@ -66,10 +66,11 @@ describe("what comes next in a flow", () => {
     }
     const us = FLOW_PRESETS.find((x) => x.key === "lender_us")!;
     const ca = FLOW_PRESETS.find((x) => x.key === "lender_ca")!;
-    expect(us.emails.e1.body).toContain("90%");
-    expect(us.emails.e1.body).toContain("$5,000,000");
-    expect(ca.emails.e1.body).toContain("80%");
-    expect(ca.emails.e1.body).toContain("2.7%");
+    // BI_SERVER_PGI_COMPLIANCE_v1 - only the authorized Canadian rate line; no US figures (PGI notice 2026-11-19).
+    expect(us.emails.e1.body).toContain("PGI America Ltd.");
+    expect(us.emails.e1.body).not.toMatch(/%/);
+    expect(ca.emails.e1.body).toContain("Rates start as low as 1.8% of the limit of insurance.");
+    expect(ca.emails.e1.body).toContain("PGI Canada Ltd.");
     expect(ca.emails.n3.body).not.toContain("SBA");
     const html = withFooter("<p>Hello</p>", "Andrew");
     expect(html).toContain("450 Sparling Crt SW");
