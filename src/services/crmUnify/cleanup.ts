@@ -14,8 +14,32 @@ export type CleanupChange = { entity: "contact" | "company"; entityId: string; r
 const CONTACT_TO_BI: Record<string, string> = { name: "full_name", first_name: "first_name", last_name: "last_name", email: "email", phone: "phone_e164", job_title: "title" };
 const COMPANY_TO_BI: Record<string, string> = { name: "legal_name", dba_name: "operating_name", email: "email", phone: "phone", website: "website", domain: "domain", industry: "industry", city: "city" };
 
+// BI_SERVER_CLEANUP_IGNORE_v1 - proposals staff chose to ignore are not proposed again.
+const ignoreKey = (c: Pick<CleanupChange, "entityId" | "field" | "after">) => `${c.entityId}|${c.field}|${c.after}`;
+export async function ignoredSet(db: Q, entity: "contact" | "company"): Promise<Set<string>> {
+  const r = await db.query(`SELECT entity_id::text AS id, field, after_value FROM bi_crm_cleanup_ignores WHERE entity = $1`, [entity]);
+  return new Set((r.rows ?? []).map((x: any) => ignoreKey({ entityId: String(x.id), field: String(x.field), after: String(x.after_value) })));
+}
+export async function ignoreChanges(db: Q, changes: CleanupChange[], userId: string | null): Promise<number> {
+  let n = 0;
+  for (const c of changes) {
+    const r = await db.query(
+      `INSERT INTO bi_crm_cleanup_ignores (entity, entity_id, field, after_value, before_value, ignored_by)
+       VALUES ($1, $2::uuid, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
+      [c.entity, c.entityId, c.field, c.after, c.before, userId],
+    );
+    n += r.rowCount ?? 0;
+  }
+  return n;
+}
+export async function unignoreAll(db: Q, entity: "contact" | "company"): Promise<number> {
+  const r = await db.query(`DELETE FROM bi_crm_cleanup_ignores WHERE entity = $1`, [entity]);
+  return r.rowCount ?? 0;
+}
+
 export async function scanCleanup(db: Q, entity: "contact" | "company", limit = 2000): Promise<CleanupChange[]> {
   const out: CleanupChange[] = [];
+  const ignored = await ignoredSet(db, entity);
   if (entity === "contact") {
     const r = await db.query(
       `SELECT c.id::text AS id, c.full_name, c.first_name, c.last_name, c.email, c.phone_e164, c.title,
@@ -32,6 +56,7 @@ export async function scanCleanup(db: Q, entity: "contact" | "company", limit = 
       for (const p of proposeContactFixes(shaped, known)) {
         const field = CONTACT_TO_BI[p.field];
         if (!field) continue;
+        if (ignored.has(ignoreKey({ entityId: String(row.id), field, after: p.after }))) continue;
         out.push({ entity, entityId: String(row.id), record: String(row.full_name ?? row.email ?? row.id), ...p, field });
         if (out.length >= limit) return out;
       }
@@ -43,6 +68,7 @@ export async function scanCleanup(db: Q, entity: "contact" | "company", limit = 
       for (const p of proposeCompanyFixes(shaped)) {
         const field = COMPANY_TO_BI[p.field];
         if (!field) continue;
+        if (ignored.has(ignoreKey({ entityId: String(row.id), field, after: p.after }))) continue;
         out.push({ entity, entityId: String(row.id), record: String(row.legal_name ?? row.id), ...p, field });
         if (out.length >= limit) return out;
       }
