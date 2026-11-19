@@ -64,6 +64,12 @@ const haveDb = !!process.env.DATABASE_URL;
     flowId = made.body.id;
     expect((await request(app).post("/api/v1/bi/flows").send({ preset: "lender_us" })).status).toBe(409);
     expect((await request(app).post(`/api/v1/bi/flows/${flowId}/start`)).status).toBe(400);
+    // BI_SERVER_PGI_COMPLIANCE_v1 - edited copy can be put back to the ready-made wording.
+    await request(app).patch(`/api/v1/bi/flows/${flowId}`).send({ emails: { e1: { subject: "Edited", body: "<p>Edited {{link}}</p>" } } });
+    expect((await request(app).post(`/api/v1/bi/flows/${flowId}/reset-copy`)).status).toBe(200);
+    const after = (await pool.query(`SELECT emails, status FROM bi_flows WHERE id = $1`, [flowId])).rows[0];
+    expect(after.emails.e1.subject).toBe("An option your borrowers may not know about");
+    expect(after.status).toBe("draft");
     // keep the test to its own people: everyone else in the database stays out of this flow
     await pool.query(`INSERT INTO bi_flow_members (flow_id, contact_id, email, status, stop_reason)
                       SELECT $1, id, lower(email), 'stopped', 'test_excluded' FROM bi_contacts WHERE email IS NOT NULL AND NOT ($2 = ANY(tags))

@@ -127,6 +127,19 @@ router.patch("/flows/:id", wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// BI_SERVER_PGI_COMPLIANCE_v1 - put a flow's emails and link back to its ready-made wording (used to reissue the
+// four flows after PGI Canada Ltd.'s notice of 2026-11-19). Admins only; the flow's status is not changed.
+router.post("/flows/:id/reset-copy", wrap(async (req, res) => {
+  if (!adminOnly(req, res)) return;
+  if (!UUID.test(String(req.params.id))) return res.status(404).json({ ok: false, error: "not_found" });
+  const cur = await pool.query(`SELECT preset FROM bi_flows WHERE id = $1 AND status <> 'archived'`, [req.params.id]);
+  if (!cur.rowCount) return res.status(404).json({ ok: false, error: "not_found" });
+  const preset = presetByKey(cur.rows[0].preset);
+  if (!preset) return res.status(400).json({ ok: false, error: "no_preset", message: "This flow was not made from a ready-made flow." });
+  await pool.query(`UPDATE bi_flows SET emails = $2::jsonb, link_url = $3, updated_at = now() WHERE id = $1`, [req.params.id, JSON.stringify(preset.emails), preset.link_url]);
+  res.json({ ok: true });
+}));
+
 router.post("/flows/:id/audience", wrap(async (req, res) => {
   if (!adminOnly(req, res)) return;
   if (!UUID.test(String(req.params.id))) return res.status(404).json({ ok: false, error: "not_found" });
