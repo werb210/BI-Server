@@ -54,6 +54,20 @@ function isHardBounce(ev: any): boolean {
   return String(ev?.type ?? "bounce") === "bounce";
 }
 
+// BI_SENDGRID_FORWARD_AUTH_v1 - batches BF-Server passes on fail SendGrid's signature here (this app's
+// SENDGRID_WEBHOOK_PUBLIC_KEY is not the key of the webhook that points at BF-Server: every forward answered 403). BF-Server
+// has already checked SendGrid's signature, so it also signs the same bytes with the secret both servers share
+// (JWT_SECRET): HMAC-SHA256 of "<timestamp>.<body>". Same 5-minute freshness rule.
+export function forwardSignatureValid(rawBody: Buffer, timestamp: string, given: string, secret = process.env.JWT_SECRET ?? ""): boolean {
+  if (!secret || !given || !timestamp) return false;
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > SIGNATURE_TOLERANCE_SECONDS) return false;
+  const want = crypto.createHmac("sha256", secret).update(`${timestamp}.${rawBody.toString("utf8")}`).digest("hex");
+  const a = Buffer.from(want);
+  const b = Buffer.from(String(given).trim());
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export function isBiEvent(ev: any): boolean {
   return ev?.bi_mkt === "1" || /^flow:[0-9a-f-]{36}:/i.test(String(ev?.job_id ?? ""));
 }
@@ -91,7 +105,8 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
     return;
   }
 
-  if (!verify(rawBody, sig, ts)) {
+  const forwardSig = String(req.header("X-Boreal-Forward-Signature") ?? "");
+  if (!verify(rawBody, sig, ts) && !forwardSignatureValid(rawBody, ts, forwardSig)) {
     res.status(403).json({ ok: false, error: "bad_signature" });
     return;
   }
