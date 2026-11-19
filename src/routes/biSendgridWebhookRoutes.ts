@@ -54,6 +54,10 @@ function isHardBounce(ev: any): boolean {
   return String(ev?.type ?? "bounce") === "bounce";
 }
 
+export function isBiEvent(ev: any): boolean {
+  return ev?.bi_mkt === "1" || /^flow:[0-9a-f-]{36}:/i.test(String(ev?.job_id ?? ""));
+}
+
 function verify(rawBody: Buffer, signature: string, timestamp: string): boolean {
   const key = process.env.SENDGRID_WEBHOOK_PUBLIC_KEY;
   // BI_SERVER_v784_SENDGRID_SIGNED_ONLY - never accept unsigned writes.
@@ -104,6 +108,12 @@ router.post("/api/v1/bi/webhooks/sendgrid", raw({ type: "*/*", limit: "5mb" }), 
   let suppressed = 0;
   let logged = 0;
   let linkClicks = 0;
+
+  // BI_SENDGRID_EVENTS_v1 - a batch passed on by BF-Server also holds Boreal Financial and Keystone events; only BI's
+  // own (bi_mkt=1, or a flow job id) are ours, so a BF unsubscribe never suppresses a BI contact.
+  const forwarded = String(req.header("X-Boreal-Forwarded-By") ?? "") !== "";
+  if (forwarded) events = events.filter(isBiEvent);
+  else events = events.filter((ev) => !(ev?.ks_mkt_send_id || ev?.ks_mkt === "1" || ev?.ks_mkt_test === "1"));
 
   for (const ev of events) {
     const email = String(ev?.email ?? "").trim().toLowerCase();

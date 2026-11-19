@@ -49,7 +49,9 @@ export async function sendBiMarketingEmail(message: SendgridMessage): Promise<Se
     subject: message.subject,
     html: message.html,
     text: message.text,
-    ...(message.customArgs ? { customArgs: message.customArgs } : {}),
+    // BI_SENDGRID_EVENTS_v1 - bi_mkt marks every BI email, so BF-Server (where the shared SendGrid account's event
+    // webhook points) passes its opens, clicks and bounces on to BI-Server.
+    customArgs: { ...(message.customArgs ?? {}), bi_mkt: "1" },
     ...(message.transactional ? { trackingSettings: { subscriptionTracking: { enable: false } } } : {}),
   });
   const [response] = await Promise.race([request, timeout]);
