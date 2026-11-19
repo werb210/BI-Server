@@ -6,7 +6,7 @@
     "newer than the baseline manifest (src/db/baseline/000000_baseline.files.txt).",
     "Regenerate after adding a migration: node scripts/generate-live-schema.mjs",
     "scripts/check-schema-drift.mjs fails when this file is stale.",
-    "Newer migrations folded in: 2026_09_27_v601_bi_applicant_passkeys.sql, 2026_10_09_v719_unstick_enrollments.sql, 2026_10_12_v789_audit2.sql, 2026_10_25_v856_crm_unify.sql, 2026_11_24_bi_custom_fields.sql, 2026_11_25_field_reps.sql, 2026_11_26_field_contact_audience.sql, 2026_11_27_field_rep_pin_sent.sql, 2026_12_10_field_rep_agreement.sql, 2026_12_11_pgi_limit_by_country.sql, 2026_12_12_bi_flows.sql, 2026_12_13_lenders_brokers_marketable.sql"
+    "Newer migrations folded in: 2026_09_27_v601_bi_applicant_passkeys.sql, 2026_10_09_v719_unstick_enrollments.sql, 2026_10_12_v789_audit2.sql, 2026_10_25_v856_crm_unify.sql, 2026_11_24_bi_custom_fields.sql, 2026_11_25_field_reps.sql, 2026_11_26_field_contact_audience.sql, 2026_11_27_field_rep_pin_sent.sql, 2026_12_10_field_rep_agreement.sql, 2026_12_11_pgi_limit_by_country.sql, 2026_12_12_bi_flows.sql, 2026_12_13_lenders_brokers_marketable.sql, 2026_12_14_crm_cleanup_ignores.sql"
   ],
   "admin_audit_logs": ["id","event_type","ip_address","user_agent","created_at"],
   "admin_login_security": ["id","email","failed_attempts","locked_until","updated_at"],
@@ -51,6 +51,7 @@
   "bi_crm_backfill_runs": ["key","started_at","finished_at","result"],
   "bi_crm_cleanup_batches": ["id","created_by","created_at","change_count","undone_at","undone_by"],
   "bi_crm_cleanup_changes": ["id","batch_id","entity","entity_id","field","before_value","after_value","reason"],
+  "bi_crm_cleanup_ignores": ["entity","entity_id","field","after_value","before_value","ignored_by","ignored_at"],
   "bi_crm_company_people": ["id","company_id","contact_id","role","created_by","created_at","detail","source"],
   "bi_crm_company_people_hidden": ["company_id","person_key","created_by","created_at"],
   "bi_crm_duplicate_dismissals": ["entity","a_id","b_id","created_by","created_at"],
