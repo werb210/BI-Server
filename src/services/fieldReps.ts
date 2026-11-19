@@ -108,6 +108,8 @@ export type FollowUpDeps = {
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 const firstName = (full: string | null) => (full ?? "").trim().split(/\s+/)[0] ?? "";
+// BI_SERVER_PGI_COMPLIANCE_v1 (2026-11-19) - no figures, no lender benefit: PGI's notice. Reps meet US lenders and brokers.
+export const REP_PGI_LINE = "Personal Guarantee Insurance covers a personal guarantee given to a recognised lender on a business loan, and can cap the owner's personal loss from an insolvency event. In the United States it will be arranged by PGI America Ltd. and is not yet available; we will let you know when it is. Boreal Risk Management makes introductions only and does not sell insurance.";
 export const MAIL_ADDRESS = "Boreal Risk Management, 450 Sparling Crt SW, Edmonton, AB T6X 1G9, Canada";
 
 /** The email a new contact gets: what PGI is, the information page, and how to book a call. */
@@ -119,13 +121,13 @@ export function followUpEmail(c: CleanContact, rep: Rep, token: string, source: 
   const info = contactInfoUrl(rep.code, token, c.audience), book = bookUrl(rep.code);
   const lines = [
     hi, "", why, "",
-    "Personal Guarantee Insurance (PGI) covers the person who signs the personal guarantee on a business loan. If the business fails and the lender calls the guarantee, the policy pays up to 80% of it. Lenders and loan brokers offer it so more borrowers are willing to sign.",
+    REP_PGI_LINE, // BI_SERVER_PGI_COMPLIANCE_v1
     "", `${c.audience === "broker" ? "The details for commercial loan brokers" : c.audience === "lender" ? "The details for banks and lenders" : "The details for banks, lenders and brokers"}: ${info}`, `Book a 15-minute call or a Teams meeting: ${book}`, "Or call us at (866) 631-8939.",
     "", "Boreal Risk Management", "", `You are getting this one email because ${source === "qr" ? "you asked for it on our page" : `you met ${rep.full_name}`}. If you would rather not hear from us, reply with "unsubscribe".`, MAIL_ADDRESS,
   ];
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.5;color:#0b1f3a;max-width:600px">
 <p>${esc(hi)}</p><p>${esc(why)}</p>
-<p><strong>Personal Guarantee Insurance (PGI)</strong> covers the person who signs the personal guarantee on a business loan. If the business fails and the lender calls the guarantee, the policy pays up to 80% of it. Lenders and loan brokers offer it so more borrowers are willing to sign.</p>
+<p>${esc(REP_PGI_LINE)}</p>
 <p><a href="${esc(info)}" style="display:inline-block;background:#0b1f3a;color:#ffffff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:bold">See the details for lenders and brokers</a></p>
 <p><a href="${esc(book)}" style="color:#0b1f3a;font-weight:bold">Book a 15-minute call or a Teams meeting</a>, or call us at (866) 631-8939.</p>
 <p>Boreal Risk Management</p>

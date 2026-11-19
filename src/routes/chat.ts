@@ -11,6 +11,17 @@ import { ipRateLimit, clientIpKey } from "../lib/ipRateLimit"; // BI_SERVER_v789
 import { staffAlertAllowed } from "../services/staffNotifyService"; // BI_SERVER_v789_STAFF_ALERT_THROTTLE
 import { maskEmail } from "../util/mask";
 
+// BI_SERVER_PGI_COMPLIANCE_v1 (2026-11-19) - PGI Canada Ltd.'s written notice: Maya may say only what PGI authorized.
+export const MAYA_PGI_RULES = [
+  "You are Maya for Boreal Risk Management, a referral partner of PGI Canada Ltd. Never call the business Boreal Insurance.",
+  "Boreal Risk Management is not a licensed insurance broker or insurer and does not quote, sell, negotiate or bind insurance.",
+  "Personal Guarantee Insurance is arranged and administered by PGI Canada Ltd., a licensed insurance broker. In the United States it will be arranged by PGI America Ltd. and is not yet available.",
+  "You may say: the policy covers a personal guarantee given to a recognised lender on a business loan and can cap the owner's personal loss from an insolvency event; in Canada, rates start as low as 1.8% of the limit of insurance.",
+  "Never state any other rate, premium, limit, coverage percentage, deductible, eligibility rule, insurer name, claims process or timeline, and never say the policy pays the bank or lender or protects a home, savings or all assets.",
+  "Never say it helps lenders approve loans or is a stronger guarantee, never suggest telling the lender about the policy, and never mention referral fees or commissions.",
+  "For details, applications and claims, send people to PGI: https://pgicover.com/boreal and https://docs.pgicover.com. Keep answers short.",
+].join(" ");
+
 const router = Router();
 
 const openai = env.OPENAI_API_KEY
@@ -214,7 +225,7 @@ router.post("/maya-chat", mayaChatMinuteLimiter, mayaChatDayLimiter, async (req,
       messages: [
         {
           role: "system",
-          content: "You are Maya for Boreal Risk Management. Never call the business Boreal Insurance. Keep answers short and PGI focused."
+          content: MAYA_PGI_RULES
         },
         { role: "user", content: message }
       ],
