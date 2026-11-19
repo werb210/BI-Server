@@ -39,3 +39,25 @@ describe("forwarded SendGrid batches", () => {
     expect(suppressions()).toHaveLength(1);
   });
 });
+
+// BI_SENDGRID_FORWARD_AUTH_v1
+import crypto from "node:crypto";
+describe("forwarded batches signed with the shared secret", () => {
+  beforeEach(() => { queryMock.mockReset(); queryMock.mockResolvedValue({ rowCount: 1, rows: [] }); process.env.SENDGRID_WEBHOOK_PUBLIC_KEY = signer.publicKeyBase64; process.env.JWT_SECRET = "shared-secret-for-tests"; });
+  const send = (sig: string) => {
+    const raw = JSON.stringify([{ email: "lender@bank.test", event: "open", job_id: "flow:cf53f3ce-5157-4f40-b536-b2ed836aa18e:e1" }]);
+    const ts = String(Math.floor(Date.now() / 1000));
+    const fsig = sig === "good" ? crypto.createHmac("sha256", "shared-secret-for-tests").update(`${ts}.${raw}`).digest("hex") : "deadbeef";
+    return request(app).post("/api/v1/bi/webhooks/sendgrid").set("Content-Type", "application/json")
+      .set("X-Twilio-Email-Event-Webhook-Signature", "not-a-sendgrid-signature").set("X-Twilio-Email-Event-Webhook-Timestamp", ts)
+      .set("X-Boreal-Forwarded-By", "bf-server").set("X-Boreal-Forward-Signature", fsig).send(raw);
+  };
+  it("accepts a forward BF-Server signed, even when SendGrid's signature does not match this key", async () => {
+    await send("good").expect(200);
+    expect(ledgerEmails()).toEqual(["lender@bank.test"]);
+  });
+  it("refuses a forward with a wrong shared-secret signature", async () => {
+    await send("bad").expect(403);
+    expect(ledgerEmails()).toEqual([]);
+  });
+});
