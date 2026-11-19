@@ -32,7 +32,7 @@ const small = (t: string) => `<p style="font-size:12px;color:#64748b">${t}</p>`;
 const WHAT = "Personal Guarantee Insurance covers a personal guarantee given to a recognised lender on a business loan, and can cap the owner's personal loss if the business becomes insolvent.";
 
 function lenderEmails(m: Mkt): Record<FlowKey, FlowEmail> {
-  const avail = m.live ? `It is arranged and administered by ${m.broker}, a licensed insurance broker. ${m.rateLine}` : `In the United States it will be arranged by ${m.broker}. It is not available yet, and program details have not been published.`;
+  const avail = m.live ? `It is arranged and administered by ${m.broker}, a licensed insurance broker. ${m.rateLine}` : `In the United States it will be arranged by ${m.broker} It is not available yet, and program details have not been published.`;
   const cta = m.live ? "See the details from PGI" : "Be told when it is available";
   return {
     e1: { subject: "An option your borrowers may not know about", body: p(hi,
@@ -62,7 +62,7 @@ function lenderEmails(m: Mkt): Record<FlowKey, FlowEmail> {
 }
 
 function brokerEmails(m: Mkt): Record<FlowKey, FlowEmail> {
-  const avail = m.live ? `It is arranged and administered by ${m.broker}, a licensed insurance broker. ${m.rateLine}` : `In the United States it will be arranged by ${m.broker}. It is not available yet, and program details have not been published.`;
+  const avail = m.live ? `It is arranged and administered by ${m.broker}, a licensed insurance broker. ${m.rateLine}` : `In the United States it will be arranged by ${m.broker} It is not available yet, and program details have not been published.`;
   const cta = m.live ? "See the details from PGI" : "Be told when it is available";
   return {
     e1: { subject: "For clients asked to sign a personal guarantee", body: p(hi,
