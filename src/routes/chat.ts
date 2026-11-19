@@ -189,7 +189,7 @@ router.post("/maya-chat", mayaChatMinuteLimiter, mayaChatDayLimiter, async (req,
             from: process.env.SENDGRID_FROM,
             subject: "We Received Your PGI Inquiry",
             html: `
-          <p>Thanks for contacting Boreal Insurance.</p>
+          <p>Thanks for contacting Boreal Risk Management.</p>
           <p>A PGI specialist will contact you shortly.</p>
         `
           });
@@ -214,7 +214,7 @@ router.post("/maya-chat", mayaChatMinuteLimiter, mayaChatDayLimiter, async (req,
       messages: [
         {
           role: "system",
-          content: "You are Maya for Boreal Insurance. Keep answers short and PGI focused."
+          content: "You are Maya for Boreal Risk Management. Never call the business Boreal Insurance. Keep answers short and PGI focused."
         },
         { role: "user", content: message }
       ],

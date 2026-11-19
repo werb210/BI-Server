@@ -684,7 +684,7 @@ router.post(
       ? `${customMessage}
 
 Book a time: ${bookingsUrl}`
-      : `Hi ${firstName}, this is Boreal Insurance. Pick a 30-minute slot that works for you: ${bookingsUrl}`;
+      : `Hi ${firstName}, this is Boreal Risk Management. Pick a 30-minute slot that works for you: ${bookingsUrl}`;
 
     let sid: string | null = null;
     let smsOk = false;
