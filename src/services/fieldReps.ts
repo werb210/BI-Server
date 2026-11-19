@@ -6,6 +6,7 @@ import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from 
 import jwt from "jsonwebtoken";
 import { getJwtSecret } from "../platform/jwtSecret";
 import { logger } from "../platform/logger";
+import { pgiMarketingHeld } from "../lib/pgiMarketingHold";
 import { normalizeE164 } from "../util/phoneE164";
 
 export type Q = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
@@ -171,7 +172,7 @@ export async function addFieldContact(db: Q, rep: Rep, c: CleanContact, source: 
   } catch (err) { logger.warn({ err: String(err), field_contact_id: id }, "[field-reps] CRM tag failed"); }
 
   let emailed = false;
-  if (c.email && !alreadyEmailed) {
+  if (c.email && !alreadyEmailed && !pgiMarketingHeld()) { // BI_SERVER_PGI_MARKETING_HOLD_v1
     const m = followUpEmail(c, rep, token, source);
     try {
       await deps.sendEmail({ to: c.email, ...m });
@@ -207,6 +208,7 @@ export function smsWindowOpen(now: Date): boolean {
 export async function runFollowUpSmsTick(db: Q, sendSms: (to: string, body: string) => Promise<unknown>, now: Date = new Date()): Promise<{ sent: number; failed: number; skipped: boolean }> {
   // BI_FIELD_SMS=off stops the follow-up text entirely (the email and everything else carry on).
   if (String(process.env.BI_FIELD_SMS ?? "").trim().toLowerCase() === "off") return { sent: 0, failed: 0, skipped: true };
+  if (pgiMarketingHeld()) return { sent: 0, failed: 0, skipped: true }; // BI_SERVER_PGI_MARKETING_HOLD_v1
   if (!smsWindowOpen(now)) return { sent: 0, failed: 0, skipped: true };
   const due = await db.query(
     `UPDATE bi_field_contacts fc SET sms_sent_at = $1

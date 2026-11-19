@@ -10,6 +10,7 @@ import {
   FLOW_WINDOW, dailyNewCap, flowJobId, htmlToText, isFlowKey, nextAfterSend, onClick, onOpen, parseFlowJobId, withFooter,
   type Click, type FlowKey, type Track,
 } from "../services/flows/flowEngine";
+import { pgiMarketingHeld } from "../lib/pgiMarketingHold";
 import { createTask } from "./marketingWorker";
 
 type Db = Pick<Pool, "query"> | Pick<PoolClient, "query">;
@@ -267,6 +268,7 @@ export async function sendDue(db: Db, deps: FlowDeps, now: Date): Promise<{ sent
 }
 
 export async function runFlowTick(db: Db, deps: FlowDeps, now = new Date(), pollReplies = true): Promise<Record<string, number>> {
+  if (pgiMarketingHeld()) return { held: 1 }; // BI_SERVER_PGI_MARKETING_HOLD_v1
   const replied = pollReplies ? (await stopRepliedMembers(db, deps, now)).stopped : 0;
   const events = await ingestEvents(db);
   const tasks = await createCallTasks(db, deps);

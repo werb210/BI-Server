@@ -11,6 +11,7 @@ export default defineConfig({
     env: {
       DATABASE_URL: TEST_DB,
       JWT_SECRET,
+      PGI_MARKETING_HOLD: "off", // BI_SERVER_PGI_MARKETING_HOLD_v1
     },
     exclude: [
       ...configDefaults.exclude,
