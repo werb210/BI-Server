@@ -11,7 +11,7 @@ const validCredential = (value: string) => typeof value === "string" && value.le
 export async function beginApplicantPasskeyRegistration(query: Query, phone: string, rpId: string) {
   const value = challenge();
   await query(`INSERT INTO bi_applicant_passkey_challenges (challenge, phone_e164, ceremony, expires_at) VALUES ($1,$2,'register',now()+interval '5 minutes')`, [value, phone]);
-  return { challenge: value, rp: { id: rpId, name: "Boreal Insurance" }, user: { id: base64url(Buffer.from(phone)), name: phone, displayName: phone }, pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }], timeout: 300000, attestation: "none", authenticatorSelection: { residentKey: "required", userVerification: "required" } };
+  return { challenge: value, rp: { id: rpId, name: "Boreal Risk Management" }, user: { id: base64url(Buffer.from(phone)), name: phone, displayName: phone }, pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }], timeout: 300000, attestation: "none", authenticatorSelection: { residentKey: "required", userVerification: "required" } };
 }
 
 export async function finishApplicantPasskeyRegistration(query: Query, phone: string, body: any, rpId = "client.boreal.insure", origin = "https://client.boreal.insure") {
