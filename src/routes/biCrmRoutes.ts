@@ -137,6 +137,11 @@ router.get("/crm/contacts", async (req, res) => {
     where.push(`c.outreach_status = $${i++}`);
     params.push(leadStatus);
   }
+  // BI_SERVER_CRM_MARKETING_FILTER_v1 - the contact list's Marketing filter (same as Boreal Financial's):
+  // marketing=yes -> marketing contacts, marketing=no -> non-marketing contacts.
+  const marketing = typeof req.query.marketing === "string" ? req.query.marketing.trim().toLowerCase() : "";
+  if (marketing === "yes") where.push(CONTACT_MARKETING_SQL);
+  else if (marketing === "no") where.push(`NOT ${CONTACT_MARKETING_SQL}`);
   const tagsQueryRaw = typeof req.query.tags === "string" ? req.query.tags : "";
   if (tagsQueryRaw) {
     // BI_SERVER_BLOCK_v349_VIEWBY — multi-select (any-of) plus "__none__" = untagged.
