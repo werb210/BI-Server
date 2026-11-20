@@ -58,14 +58,40 @@ function rankOf(status: string): number {
   return n;
 }
 
-function verifySignature(rawBody: Buffer, signatureHeader: string | undefined): boolean {
-  if (!env.PGI_WEBHOOK_SECRET || !signatureHeader) return false;
-  const expected = crypto.createHmac("sha256", env.PGI_WEBHOOK_SECRET).update(rawBody).digest("hex");
-  const expectedBuf = Buffer.from(expected, "hex");
-  let receivedBuf: Buffer;
-  try { receivedBuf = Buffer.from(signatureHeader, "hex"); } catch { return false; }
-  if (expectedBuf.length !== receivedBuf.length) return false;
-  return crypto.timingSafeEqual(expectedBuf, receivedBuf);
+// BI_SERVER_PGI_API_NOV20 - PGicover's documented scheme (docs.pgicover.com/api/webhooks):
+//   X-PGI-Signature: v1=<hex HMAC-SHA256 of "{X-PGI-Timestamp}.{raw body}" with the webhook secret>
+//   X-PGI-Timestamp: unix seconds; reject anything older than 300 s.
+// The bare-hex HMAC of the raw body (the original scheme) is still accepted when no timestamp header is sent.
+export const PGI_SIGNATURE_MAX_SKEW_S = 300;
+function safeEqualHex(expectedHex: string, receivedHex: string): boolean {
+  if (!/^[0-9a-f]+$/i.test(receivedHex)) return false;
+  const a = Buffer.from(expectedHex, "hex"), b = Buffer.from(receivedHex, "hex");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+export function verifySignature(rawBody: Buffer, signatureHeader: string | undefined, timestampHeader?: string | undefined, nowMs = Date.now(), secret = env.PGI_WEBHOOK_SECRET): boolean {
+  if (!secret || !signatureHeader) return false;
+  const sigs = String(signatureHeader).split(",").map((p) => p.trim()).filter(Boolean)
+    .map((p) => (p.startsWith("v1=") ? p.slice(3) : p));
+  const ts = String(timestampHeader ?? "").trim();
+  if (ts) {
+    const tsNum = Number(ts);
+    if (!Number.isFinite(tsNum)) return false;
+    const tsMs = tsNum < 1e12 ? tsNum * 1000 : tsNum;
+    if (Math.abs(nowMs - tsMs) > PGI_SIGNATURE_MAX_SKEW_S * 1000) return false;
+    const expected = crypto.createHmac("sha256", secret).update(`${ts}.`).update(rawBody).digest("hex");
+    return sigs.some((sig) => safeEqualHex(expected, sig));
+  }
+  const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+  return sigs.some((sig) => safeEqualHex(expected, sig));
+}
+
+/** BI_SERVER_PGI_API_NOV20 - PGicover documents a {event, data:{...}} envelope but some examples put the fields at the
+ * top level. Read both: top-level fields win, data fills the rest; the event name may also come from X-PGI-Event. */
+export function normalizePgiEvent(parsed: Record<string, any>, eventHeader?: string): Record<string, any> {
+  const data = parsed.data && typeof parsed.data === "object" && !Array.isArray(parsed.data) ? parsed.data : {};
+  const evt: Record<string, any> = { ...data, ...parsed };
+  if (!evt.event) evt.event = parsed.type ?? eventHeader ?? data.event;
+  return evt;
 }
 
 /** The event's own timestamp in ms, or null when it carries none we can read. */
@@ -143,13 +169,13 @@ function pushAfterCommit(after: AfterCommit[], pgiApplicationId: unknown, notice
 router.post("/api/v1/webhooks/pgi", express.raw({ type: "application/json" }), async (req, res) => {
   const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
   const signature = req.header("X-PGI-Signature");
-  if (!verifySignature(rawBody, signature)) return res.status(401).json({ error: "invalid_signature" });
+  if (!verifySignature(rawBody, signature, req.header("X-PGI-Timestamp"))) return res.status(401).json({ error: "invalid_signature" });
 
   let evt: Record<string, any>;
   try {
     const parsed = JSON.parse(rawBody.toString("utf8"));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
-    evt = parsed;
+    evt = normalizePgiEvent(parsed, req.header("X-PGI-Event"));
   } catch (err) {
     logger.warn({ err }, "pgi_webhook_bad_json");
     return res.status(400).json({ error: "bad_json" });
