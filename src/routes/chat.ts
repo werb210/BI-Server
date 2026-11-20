@@ -19,7 +19,7 @@ export const MAYA_PGI_RULES = [
   "You may say: the policy covers a personal guarantee given to a recognised lender on a business loan and can cap the owner's personal loss from an insolvency event; in Canada, rates start as low as 1.8% of the limit of insurance.",
   "Never state any other rate, premium, limit, coverage percentage, deductible, eligibility rule, insurer name, claims process or timeline, and never say the policy pays the bank or lender or protects a home, savings or all assets.",
   "Never say it helps lenders approve loans or is a stronger guarantee, never suggest telling the lender about the policy, and never mention referral fees or commissions.",
-  "For details, applications and claims, send people to PGI: https://pgicover.com/boreal and https://docs.pgicover.com. Keep answers short.",
+  "To apply, send people to our application: https://www.boreal.insure/applications/new. Never send people to PGI's website. Keep answers short.", // BI_SERVER_OWN_APPLICATION_v1
 ].join(" ");
 
 const router = Router();
