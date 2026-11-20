@@ -33,7 +33,7 @@ const WHAT = "Personal Guarantee Insurance covers a personal guarantee given to 
 
 function lenderEmails(m: Mkt): Record<FlowKey, FlowEmail> {
   const avail = m.live ? `It is arranged and administered by ${m.broker}, a licensed insurance broker. ${m.rateLine}` : `In the United States it will be arranged by ${m.broker} It is not available yet, and program details have not been published.`;
-  const cta = m.live ? "See the details from PGI" : "Be told when it is available";
+  const cta = m.live ? "Learn more" : "Be told when it is available";
   return {
     e1: { subject: "An option your borrowers may not know about", body: p(hi,
       "Business owners who sign a personal guarantee on a loan from {{company}} often do not know the guarantee can be insured.",
@@ -63,7 +63,7 @@ function lenderEmails(m: Mkt): Record<FlowKey, FlowEmail> {
 
 function brokerEmails(m: Mkt): Record<FlowKey, FlowEmail> {
   const avail = m.live ? `It is arranged and administered by ${m.broker}, a licensed insurance broker. ${m.rateLine}` : `In the United States it will be arranged by ${m.broker} It is not available yet, and program details have not been published.`;
-  const cta = m.live ? "See the details from PGI" : "Be told when it is available";
+  const cta = m.live ? "Learn more" : "Be told when it is available";
   return {
     e1: { subject: "For clients asked to sign a personal guarantee", body: p(hi,
       "Many of your clients are asked to sign a personal guarantee, and most do not know it can be insured.",
@@ -91,7 +91,8 @@ function brokerEmails(m: Mkt): Record<FlowKey, FlowEmail> {
   };
 }
 
-const PGI_LINK = "https://pgicover.com/boreal";
+// BI_SERVER_OWN_APPLICATION_v1 (2026-11-20) - Todd: links go to our own site and application, never to PGI's site.
+const PGI_LINK = "https://www.boreal.insure";
 export const FLOW_PRESETS: FlowPreset[] = [
   { key: "lender_us", name: "Lenders - United States", audience: "lender", market: "US", link_url: "https://www.boreal.insure/us-lenders", booking_url: TEAM_BOOKING, emails: lenderEmails(US_M) },
   { key: "lender_ca", name: "Lenders - Canada", audience: "lender", market: "CA", link_url: PGI_LINK, booking_url: TEAM_BOOKING, emails: lenderEmails(CA_M) },

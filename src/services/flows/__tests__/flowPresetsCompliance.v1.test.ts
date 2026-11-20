@@ -16,7 +16,7 @@ describe("flow presets", () => {
       for (const re of BANNED) expect(all, `${f.name} matches ${re}`).not.toMatch(re);
       expect(all).toMatch(f.market === "CA" ? /PGI Canada Ltd\./ : /PGI America Ltd\./);
       if (f.market === "US") expect(all).not.toMatch(/1\.8%/);
-      if (f.market === "CA") expect(f.link_url).toBe("https://pgicover.com/boreal");
+      if (f.market === "CA") expect(f.link_url).toBe("https://www.boreal.insure"); // BI_SERVER_OWN_APPLICATION_v1
     });
   }
 });
