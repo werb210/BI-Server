@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { env } from "../platform/env";
 import { logger } from "../platform/logger";
 import { truncateForLog } from "../util/mask";
@@ -126,6 +127,43 @@ function authHeaders() {
   return { Authorization: `Bearer ${env.PGI_API_KEY}`, "Content-Type": "application/json" };
 }
 
+// BI_SERVER_PGI_API_NOV20 - PGicover now documents idempotent POSTs ("24-hour cache with conflict detection").
+// The key is derived from what is being sent, so a retry of the same request (ours, or the Retry-After retry
+// below) cannot create a second record, while a changed payload gets a new key.
+export function pgiIdempotencyKey(scope: string, body: string | Buffer): string {
+  return `bi-${scope}-${crypto.createHash("sha256").update(body).digest("hex").slice(0, 40)}`;
+}
+
+/** BI_SERVER_PGI_API_NOV20 - 409 company_already_in_progress: PGicover already has an application in progress for
+ * this company. Not retryable; staff follow up through the contact_url PGicover returns. */
+export class PgiCompanyInProgressError extends Error {
+  readonly code = "company_already_in_progress";
+  readonly contactUrl: string | null;
+  constructor(contactUrl: string | null, message?: string) {
+    super(message || "PGicover already has an application in progress for this company");
+    this.name = "PgiCompanyInProgressError";
+    this.contactUrl = contactUrl;
+  }
+}
+
+/** Reads PGicover's documented error envelope {error:{code,message,details}} and the older shapes. */
+export function readPgiError(body: unknown): { code: string | null; message: string | null; details: unknown; contactUrl: string | null } {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, any>;
+  const e = b.error && typeof b.error === "object" ? b.error : {};
+  const code = (typeof e.code === "string" && e.code) || (typeof b.code === "string" && b.code) || (typeof b.error === "string" && b.error) || null;
+  const message = (typeof e.message === "string" && e.message) || (typeof b.message === "string" && b.message) || null;
+  const details = e.details ?? b.details ?? b.errors ?? null;
+  const d = (details && typeof details === "object" ? details : {}) as Record<string, any>;
+  const contactUrl = e.contact_url ?? b.contact_url ?? d.contact_url ?? null;
+  return { code, message, details, contactUrl: typeof contactUrl === "string" ? contactUrl : null };
+}
+
+function throwIfCompanyInProgress(status: number, body: unknown) {
+  if (status !== 409) return;
+  const e = readPgiError(body);
+  if (e.code === "company_already_in_progress" || e.contactUrl) throw new PgiCompanyInProgressError(e.contactUrl, e.message ?? undefined);
+}
+
 export async function pgiScore(body: PgiScoreRequest): Promise<PgiScoreResponse> {
   if (STUB) {
     if (body.naics_code === "721110") {
@@ -134,7 +172,8 @@ export async function pgiScore(body: PgiScoreRequest): Promise<PgiScoreResponse>
     return { score_id: `STUB_APPROVE_${Date.now()}`, score: 78, decision: "approve", country: body.country, naics_code: body.naics_code, created_at: new Date().toISOString() };
   }
   return withCarrierTimeout("score", async (signal) => {
-    const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/score/`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) }, signal);
+    const json = JSON.stringify(body);
+    const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/score/`, { method: "POST", headers: { ...authHeaders(), "Idempotency-Key": pgiIdempotencyKey("score", json) }, body: json }, signal);
     const data = await r.json();
     if (!r.ok) {
       logger.error({ status: r.status, body: truncateForLog(data) }, "pgi_score_failed");
@@ -147,8 +186,10 @@ export async function pgiScore(body: PgiScoreRequest): Promise<PgiScoreResponse>
 export async function pgiSubmit(body: PgiApplicationSubmitRequest): Promise<PgiApplicationSubmitResponse> {
   if (STUB) return { application_id: `STUB_APP_${Date.now()}`, status: "received", message: "stubbed: pending quote" };
   return withCarrierTimeout("submit", async (signal) => {
-    const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/applications/`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) }, signal);
-    const data = await r.json();
+    const json = JSON.stringify(body);
+    const r = await fetchWithRetryAfter(`${PGI_BASE}/api/v2/applications/`, { method: "POST", headers: { ...authHeaders(), "Idempotency-Key": pgiIdempotencyKey("app", json) }, body: json }, signal);
+    const data = await r.json().catch(() => ({}));
+    throwIfCompanyInProgress(r.status, data);
     if (!r.ok) {
       logger.error({ status: r.status, body: truncateForLog(data) }, "pgi_submit_failed");
       throw new Error(`PGI submit failed: ${r.status}`);
@@ -243,7 +284,7 @@ export async function pgiUploadDocument(args: {
   return withCarrierTimeout("doc_upload", async (signal) => {
     const r = await fetchWithRetryAfter(url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${env.PGI_API_KEY}` }, // NO Content-Type - FormData sets boundary
+      headers: { Authorization: `Bearer ${env.PGI_API_KEY}`, "Idempotency-Key": pgiIdempotencyKey("doc", Buffer.concat([Buffer.from(`${args.pgiApplicationId}|${args.docType}|${args.filename}|`), args.buffer])) }, // NO Content-Type - FormData sets boundary
       body: fd as any,
     }, signal);
     const data = await r.json().catch((err: unknown) => {
@@ -282,13 +323,21 @@ export async function pgiSubmitV2(payload: CarrierPayloadV2): Promise<{ applicat
   if (STUB) return { application_id: `STUB-${Math.random().toString(36).slice(2, 10).toUpperCase()}`, status: "received", message: "stub" };
   const url = `${PGI_BASE.replace(/\/$/, "")}/api/v2/applications/`;
   return withCarrierTimeout("submit_v2", async (signal) => {
-    const res = await fetch(url, { method: "POST", headers: authHeaders(), body: JSON.stringify(payload), signal });
+    const json = JSON.stringify(payload);
+    const res = await fetch(url, { method: "POST", headers: { ...authHeaders(), "Idempotency-Key": pgiIdempotencyKey("app", json) }, body: json, signal });
     if (res.status === 400) {
       const body = (await res.json().catch((err: unknown) => {
         logger.warn({ err }, "pgi_submit_v2_400_body_unparseable");
         return {};
-      })) as { errors?: Record<string, string> };
-      throw new PgiCarrierValidationError(body.errors ?? { _root: "carrier returned 400 with no errors dict" });
+      })) as Record<string, any>;
+      // Older shape {errors:{field:msg}}; documented shape {error:{code,message,details}}.
+      const e = readPgiError(body);
+      const details = body.errors ?? (e.details && typeof e.details === "object" ? e.details : null);
+      throw new PgiCarrierValidationError(details ?? { _root: e.message ?? "carrier returned 400 with no errors dict" });
+    }
+    if (res.status === 409) {
+      const body = await res.json().catch(() => ({}));
+      throwIfCompanyInProgress(409, body);
     }
     if (!res.ok) {
       const text = await res.text().catch((err: unknown) => {

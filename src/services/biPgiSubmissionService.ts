@@ -1,6 +1,6 @@
 import { pool } from "../db";
 import { buildCarrierPayloadFromRow, buildCarrierPayloadV2 } from "./pgiCarrierMapper"; // PGI_API_ALIGN_v57 + v383
-import { pgiSubmitV2, pgiUploadDocument, type BIApplication } from "./pgiAdapter";
+import { PgiCompanyInProgressError, pgiSubmitV2, pgiUploadDocument, type BIApplication } from "./pgiAdapter";
 import { requiredSlotsFor, type BiDocSlot } from "../lib/biDocumentRequirements";
 import { getStorage } from "../lib/storage";
 import { fetchBfDocumentFile } from "./bfDocumentFile"; // BI_SERVER_BF_DOC_FILE_v4
@@ -226,6 +226,14 @@ export async function submitApplicationToPGI(
     // failure is recorded; every route that submits goes through here.
     logger.error({ err, applicationId }, "pgi_submit_failed");
     await recordCarrierSubmissionFailed(applicationId, err, { path: "submitApplicationToPGI" });
+    // BI_SERVER_PGI_API_NOV20 - 409 company_already_in_progress: tell staff on the file, with PGicover's contact link.
+    if (err instanceof PgiCompanyInProgressError) {
+      await pool.query(
+        `INSERT INTO bi_activity(application_id, actor_type, event_type, summary, meta)
+         VALUES($1, 'system', 'pgi.company_already_in_progress', $2, $3::jsonb)`,
+        [applicationId, `PGicover already has an application in progress for this company.${err.contactUrl ? ` Contact PGicover: ${err.contactUrl}` : ""}`, JSON.stringify({ contact_url: err.contactUrl })],
+      ).catch((noteErr) => { logger.warn({ err: noteErr, applicationId }, "pgi_company_in_progress_note_failed"); });
+    }
     throw err;
   }
 

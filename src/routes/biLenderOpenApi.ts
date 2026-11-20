@@ -14,7 +14,7 @@ const SPEC = {
     version: "2.0.0",
     description:
       "Submit Personal Guarantee Insurance (PGI) applications programmatically.\n\n" +
-      "**JSON over HTTPS. Bearer-key auth.** CORE Score returned synchronously on submit.\n\n" +
+      "**JSON over HTTPS. Bearer-key auth.** Pre-Approval Score returned synchronously on submit.\n\n" +
       "### Eligibility (carrier rules)\n" +
       "- **United States** — `business.country` = `\"US\"`, `business.province` = two-letter state. PGI limit up to **$5,000,000** per guarantor; at most **90%** of the loan if secured, **70%** if unsecured. Loan types: `Commercial Mortgage`, `Other Secured Loan`, `Unsecured Loan`. US quotes open January 1, 2027.\n" +
       "- **Canada** — `business.country` = `\"CA\"` (default); not Quebec. Loan **$50,000**–**$1,000,000** CAD; PGI limit at most **80%** of the loan. Loan types: `Commercial Mortgage` or `Other Secured Loan`.\n" +
@@ -22,7 +22,7 @@ const SPEC = {
       "### What's required\n" +
       "14 carrier form_data fields (split across `guarantor` / `business` / `loan`), the 11 `declarations`, " +
       "and 5 required documents (plus 2 more if the business is under 3 years old). " +
-      "Internal CORE Score fields (`financials.*`) are accepted but not carrier-required; include them " +
+      "Internal Pre-Approval Score fields (`financials.*`) are accepted but not carrier-required; include them " +
       "to speed up our underwriting.\n\n" +
       "### v1 → v2 migration\n" +
       "Flat-shape payloads (v1) are still accepted with a `Deprecation: true` HTTP header. New " +
@@ -86,7 +86,7 @@ const SPEC = {
       },
       Financials: {
         type: "object",
-        description: "Optional. Used for our internal CORE Score (not carrier-required).",
+        description: "Optional. Used for our internal Pre-Approval Score (not carrier-required).",
         properties: {
           revenue_last_year:    { type: "number", description: "Annual revenue, in the currency of the country of business.", example: 4000000 },
           ebitda_last_year:     { type: "number", example: 670000 },
@@ -195,7 +195,7 @@ const SPEC = {
           public_id:          { type: "string" },
           status:             { type: "string", enum: ["created", "in_progress", "ready_for_submission", "submitted", "under_review", "information_required", "approved", "declined", "policy_issued", "cancelled"] },
           score_id:           { type: "string" },
-          score:              { type: "number", description: "Synchronous CORE Score." },
+          score:              { type: "number", description: "Synchronous Pre-Approval Score." },
           pgi_application_id: { type: "string", nullable: true, description: "Set once the application has been forwarded to the carrier." },
           pgi_status:         { type: "string", nullable: true },
           pgi_error:          { type: "string", nullable: true },
@@ -243,7 +243,7 @@ const SPEC = {
           "201": { description: "Created. Application persisted + forwarded to carrier.", content: { "application/json": { schema: { $ref: "#/components/schemas/ApplicationResponse" } } } },
           "400": { description: "Validation failed (one or more carrier-required fields missing/invalid).", content: { "application/json": { schema: { $ref: "#/components/schemas/ValidationError" } } } },
           "401": { description: "Missing or invalid API key." },
-          "422": { description: "CORE Score declined — refer to `score_id` for our internal reason." },
+          "422": { description: "Pre-Approval Score declined — refer to `score_id` for our internal reason." },
           "429": { description: "Rate limited (per API key)." },
         },
       },
