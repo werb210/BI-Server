@@ -16,7 +16,8 @@ export type GateRow = { score_decision?: string | null; source?: string | null }
 export function passesScoreGate(row: GateRow): boolean {
   const decision = String(row.score_decision ?? "").toLowerCase();
   if (decision === "approve") return true;
-  return row.source === "bf_pgi_referral" && decision !== "decline";
+  // BI_SERVER_QUICK_APPLY_v1 - PGI's new short form has no score step.
+  return (row.source === "bf_pgi_referral" || row.source === "pgi_quick_apply") && decision !== "decline";
 }
 
 const DATE_ONLY_FIELDS = ["guarantor_dob", "formation_date", "loan_funding_date", "policy_start_date"];

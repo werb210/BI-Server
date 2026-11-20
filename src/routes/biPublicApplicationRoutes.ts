@@ -913,4 +913,110 @@ router.get("/applications/:publicId/documents", publicApplicationLimiter, async 
   return res.json({ documents: docs.rows });
 });
 
+// BI_SERVER_QUICK_APPLY_v1 (2026-11-20) - the application rebuilt to PGI's new short form (Todd). One call creates
+// the application from three steps the applicant has already finished: amounts, the business, and contact details
+// verified by a code. Documents follow on /applications/:publicId/documents. Requires the applicant token from the
+// phone code; the phone on the application is the verified one. No score call: PGI's new form does not ask for the
+// financial figures the old score needed.
+export const QUICK_APPLY_SOURCE = "pgi_quick_apply";
+const QUICK_LOAN_TYPES = new Set(["secured", "unsecured"]);
+const QUICK_MIN = 50_000, QUICK_LOAN_MAX = 5_000_000, QUICK_GUARANTEE_MAX = 1_000_000, QUICK_COVER_SHARE = 0.8;
+const QUICK_PURPOSES = new Set(["Working Capital", "Acquisition", "Expansion", "Equipment Purchase", "Real Estate", "Refinance", "Other"]);
+router.post("/applications/quick-apply", publicApplicationLimiter, async (req, res) => {
+  let verifiedPhone: string | null = null;
+  try {
+    const auth = String(req.headers.authorization ?? "");
+    if (auth.startsWith("Bearer ")) {
+      const claims: any = verifyBiToken(auth.slice(7).trim(), getJwtSecret());
+      if (claims && claims.kind === "applicant" && claims.phone) verifiedPhone = String(claims.phone);
+    }
+  } catch { /* invalid token: refused below */ }
+  if (!verifiedPhone) return res.status(401).json({ error: "verify_phone_first" });
+
+  const b = req.body ?? {};
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const issues: { field: string; message: string }[] = [];
+  const country = str(b.country).toUpperCase();
+  if (!isSupportedCountry(country)) issues.push({ field: "country", message: "choose USA or Canada" });
+  // PGI's step 1: loan $50,000-$5,000,000, personal guarantee $50,000-$1,000,000, covered up to 80% of the guarantee.
+  const loan = Number(b.loan_amount), guarantee = Number(b.guarantee_amount);
+  if (!Number.isFinite(loan) || loan < QUICK_MIN || loan > QUICK_LOAN_MAX) issues.push({ field: "loan_amount", message: "between $50,000 and $5,000,000" });
+  if (!Number.isFinite(guarantee) || guarantee < QUICK_MIN || guarantee > QUICK_GUARANTEE_MAX) issues.push({ field: "guarantee_amount", message: "between $50,000 and $1,000,000" });
+  else if (Number.isFinite(loan) && guarantee > loan) issues.push({ field: "guarantee_amount", message: "cannot be more than the loan" });
+  const loanType = str(b.loan_type).toLowerCase();
+  if (!QUICK_LOAN_TYPES.has(loanType)) issues.push({ field: "loan_type", message: "choose secured or unsecured" });
+  const company = str(b.company_name);
+  if (!company) issues.push({ field: "company_name", message: "required" });
+  const address = str(b.business_address);
+  if (!address) issues.push({ field: "business_address", message: "required" });
+  const naics = str(b.naics_code);
+  if (!/^\d{6}$/.test(naics)) issues.push({ field: "naics_code", message: "must be a 6-digit code" });
+  const revenueStart = str(b.revenue_start);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(revenueStart)) issues.push({ field: "revenue_start", message: "must be YYYY-MM" });
+  const lender = str(b.lender_name);
+  if (!lender) issues.push({ field: "lender_name", message: "required" });
+  const purpose = str(b.loan_purpose);
+  if (!QUICK_PURPOSES.has(purpose)) issues.push({ field: "loan_purpose", message: "choose a purpose" });
+  for (const k of ["pg_signed", "other_guarantors"]) if (typeof b[k] !== "boolean") issues.push({ field: k, message: "answer yes or no" });
+  const rateType = str(b.rate_type).toLowerCase();
+  if (rateType !== "fixed" && rateType !== "variable") issues.push({ field: "rate_type", message: "choose fixed or variable" });
+  const name = str(b.guarantor_name);
+  if (!name) issues.push({ field: "guarantor_name", message: "required" });
+  const email = str(b.guarantor_email);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) issues.push({ field: "guarantor_email", message: "enter a valid email" });
+  if (issues.length) return res.status(400).json({ error: "validation_failed", issues });
+
+  // PGI's form: "Currently available in Canada, excluding Quebec."
+  if (country === "CA" && /(^|[\s,])(QC|Qu[eé]bec)([\s,]|$)/i.test(address)) return res.status(400).json({ error: "quebec_not_available", message: "Not available to Quebec businesses." });
+  const pg = Math.round(guarantee * QUICK_COVER_SHARE);
+
+  const id = crypto.randomUUID();
+  const publicId = generatePublicId();
+  const businessNumber = str(b.business_number) || null;
+  const answers = {
+    loan_amount: loan, guarantee_amount: guarantee, pgi_limit: pg, loan_type: loanType, country, company_name: company, business_address: address,
+    business_number: businessNumber, naics_code: naics, naics_label: str(b.naics_label) || null, revenue_start: revenueStart,
+    lender_name: lender, loan_purpose: purpose, pg_signed: b.pg_signed, other_guarantors: b.other_guarantors,
+    rate_type: rateType, guarantor_name: name, guarantor_email: email, guarantor_phone: verifiedPhone,
+    code_channel: str(b.code_channel) || "sms",
+  };
+  await pool.query(
+    `INSERT INTO bi_applications
+       (id, public_id, status, source, created_by_actor, country, naics_code, formation_date, loan_amount, pgi_limit,
+        company_name, business_address, business_number, lender_name, loan_purpose, has_other_guarantors, has_co_guarantors,
+        guarantor_name, guarantor_email, guarantor_phone, applicant_phone_e164, data, created_at, updated_at)
+     VALUES ($1,$2,'in_progress',$3,'applicant',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,$16,$17,$17,$18::jsonb,NOW(),NOW())`,
+    [id, publicId, QUICK_APPLY_SOURCE, country, naics, `${revenueStart}-01`, loan, pg, company, address, businessNumber,
+     lender, purpose, b.other_guarantors, name, email, verifiedPhone, JSON.stringify({ quick_apply: answers })],
+  );
+
+  // Referral attribution, as on /applications/score: keep the raw code; link a bi_referrals row when one matches.
+  const rawRef = str(b.ref_code ?? b.ref);
+  if (rawRef) {
+    await pool.query(`UPDATE bi_applications SET referrer_code = $1 WHERE id = $2`, [rawRef, id])
+      .catch((err) => { logger.warn({ err, appId: id }, "quick-apply referrer_code persist failed"); });
+    await pool.query(
+      `WITH r AS (SELECT id, referrer_id FROM bi_referrals WHERE (short_code = LOWER($1) OR id::text = $1) AND application_id IS NULL LIMIT 1),
+            u AS (UPDATE bi_applications SET referrer_id = (SELECT referrer_id FROM r), referral_id = (SELECT id FROM r) WHERE id = $2 AND EXISTS (SELECT 1 FROM r))
+       UPDATE bi_referrals SET application_id = $2, status = CASE WHEN status = 'invited' THEN 'applied' ELSE status END, updated_at = NOW()
+        WHERE id = (SELECT id FROM r)`,
+      [rawRef, id],
+    ).catch((err) => { logger.warn({ err, appId: id }, "quick-apply referral link failed"); });
+  }
+
+  {
+    const { notifyBiClient } = await import("../services/notifyBiClient");
+    const docsUrl = `${process.env.BI_PUBLIC_URL || "https://www.boreal.insure"}/applications/${publicId}/documents`;
+    const r = await notifyBiClient({
+      applicationId: id, kind: "DOCUMENT_REQUEST", title: "Application received",
+      body: "Next step: upload your loan documents.",
+      sms: `Boreal Risk: We got your application. Next step — upload your loan documents here: ${docsUrl}`,
+      smsTo: verifiedPhone,
+    });
+    if (r.channel === "none") logger.warn({ appId: id, error: r.error }, "quick-apply confirmation not sent");
+  }
+  void ensureContactAndCompanyForApp(id).catch((err) => { logger.warn({ err, appId: id }, "ensure contact/company failed"); });
+  return res.status(201).json({ ok: true, public_id: publicId, status: "in_progress" });
+});
+
 export default router;
