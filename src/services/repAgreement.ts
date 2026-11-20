@@ -119,7 +119,7 @@ export function signLinkToken(repId: string): string {
 }
 export function readSignLinkToken(token: string): string | null {
   try {
-    const c = jwt.verify(token, getJwtSecret(), { audience: SIGN_AUD }) as { kind?: string; rep_id?: string };
+    const c = jwt.verify(token, getJwtSecret(), { audience: SIGN_AUD, algorithms: ["HS256"] }) as { kind?: string; rep_id?: string };
     return c.kind === "field_rep_sign" && c.rep_id ? String(c.rep_id) : null;
   } catch { return null; }
 }

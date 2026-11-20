@@ -2,10 +2,15 @@ import { Router } from "express";
 import { pool } from "../db";
 import { logger } from "../platform/logger";
 import { badRequest, ok } from "../utils/apiResponse";
+import { ipRateLimit } from "../lib/ipRateLimit";
+
+// SECURITY_SWEEP_2026_11_19 - the server-wide throttle is keyed by IP + email, so a new email each time went straight
+// through. 20 submissions an hour per IP on top of it.
+const intakeLimiter = ipRateLimit({ windowMs: 60 * 60 * 1000, limit: 20 });
 
 const router = Router();
 
-router.post("/pgi-intake", async (req, res) => {
+router.post("/pgi-intake", intakeLimiter, async (req, res) => {
   try {
     const body = req.body ?? {};
     if (!body.email || !body.businessName) {

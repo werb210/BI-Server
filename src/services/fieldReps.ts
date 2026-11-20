@@ -64,7 +64,7 @@ export function signRepToken(repId: string): string {
 }
 export function readRepToken(token: string): string | null {
   try {
-    const c = jwt.verify(token, getJwtSecret(), { audience: AUD }) as { kind?: string; rep_id?: string };
+    const c = jwt.verify(token, getJwtSecret(), { audience: AUD, algorithms: ["HS256"] }) as { kind?: string; rep_id?: string };
     return c.kind === "field_rep" && c.rep_id ? String(c.rep_id) : null;
   } catch { return null; }
 }
