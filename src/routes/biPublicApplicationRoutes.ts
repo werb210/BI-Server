@@ -920,6 +920,7 @@ router.get("/applications/:publicId/documents", publicApplicationLimiter, async 
 // financial figures the old score needed.
 export const QUICK_APPLY_SOURCE = "pgi_quick_apply";
 const QUICK_LOAN_TYPES = new Set(["secured", "unsecured"]);
+const QUICK_MIN = 50_000, QUICK_LOAN_MAX = 5_000_000, QUICK_GUARANTEE_MAX = 1_000_000, QUICK_COVER_SHARE = 0.8;
 const QUICK_PURPOSES = new Set(["Working Capital", "Acquisition", "Expansion", "Equipment Purchase", "Real Estate", "Refinance", "Other"]);
 router.post("/applications/quick-apply", publicApplicationLimiter, async (req, res) => {
   let verifiedPhone: string | null = null;
@@ -937,9 +938,11 @@ router.post("/applications/quick-apply", publicApplicationLimiter, async (req, r
   const issues: { field: string; message: string }[] = [];
   const country = str(b.country).toUpperCase();
   if (!isSupportedCountry(country)) issues.push({ field: "country", message: "choose USA or Canada" });
-  const loan = Number(b.loan_amount), pg = Number(b.pgi_limit);
-  if (!Number.isFinite(loan) || loan <= 0) issues.push({ field: "loan_amount", message: "required" });
-  if (!Number.isFinite(pg) || pg <= 0) issues.push({ field: "pgi_limit", message: "required" });
+  // PGI's step 1: loan $50,000-$5,000,000, personal guarantee $50,000-$1,000,000, covered up to 80% of the guarantee.
+  const loan = Number(b.loan_amount), guarantee = Number(b.guarantee_amount);
+  if (!Number.isFinite(loan) || loan < QUICK_MIN || loan > QUICK_LOAN_MAX) issues.push({ field: "loan_amount", message: "between $50,000 and $5,000,000" });
+  if (!Number.isFinite(guarantee) || guarantee < QUICK_MIN || guarantee > QUICK_GUARANTEE_MAX) issues.push({ field: "guarantee_amount", message: "between $50,000 and $1,000,000" });
+  else if (Number.isFinite(loan) && guarantee > loan) issues.push({ field: "guarantee_amount", message: "cannot be more than the loan" });
   const loanType = str(b.loan_type).toLowerCase();
   if (!QUICK_LOAN_TYPES.has(loanType)) issues.push({ field: "loan_type", message: "choose secured or unsecured" });
   const company = str(b.company_name);
@@ -965,16 +968,13 @@ router.post("/applications/quick-apply", publicApplicationLimiter, async (req, r
 
   // PGI's form: "Currently available in Canada, excluding Quebec."
   if (country === "CA" && /(^|[\s,])(QC|Qu[eé]bec)([\s,]|$)/i.test(address)) return res.status(400).json({ error: "quebec_not_available", message: "Not available to Quebec businesses." });
-  const lim = limitsFor(country);
-  if (loan > lim.loanMax) return res.status(400).json({ error: "loan_amount_exceeds_max", max: lim.loanMax });
-  if (pg > loan) return res.status(400).json({ error: "pgi_limit_exceeds_loan" });
-  if (pg > lim.pgiLimitMax) return res.status(400).json({ error: "pgi_limit_over_cap", max: lim.pgiLimitMax, message: `The guarantee amount is over the ${money(lim.pgiLimitMax)} maximum.` });
+  const pg = Math.round(guarantee * QUICK_COVER_SHARE);
 
   const id = crypto.randomUUID();
   const publicId = generatePublicId();
   const businessNumber = str(b.business_number) || null;
   const answers = {
-    loan_amount: loan, pgi_limit: pg, loan_type: loanType, country, company_name: company, business_address: address,
+    loan_amount: loan, guarantee_amount: guarantee, pgi_limit: pg, loan_type: loanType, country, company_name: company, business_address: address,
     business_number: businessNumber, naics_code: naics, naics_label: str(b.naics_label) || null, revenue_start: revenueStart,
     lender_name: lender, loan_purpose: purpose, pg_signed: b.pg_signed, other_guarantors: b.other_guarantors,
     rate_type: rateType, guarantor_name: name, guarantor_email: email, guarantor_phone: verifiedPhone,

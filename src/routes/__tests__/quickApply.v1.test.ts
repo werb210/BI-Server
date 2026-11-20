@@ -21,7 +21,7 @@ let ip = 1;
 const xff = () => `198.51.100.${(ip++ % 250) + 1}`;
 const token = () => signBiToken({ kind: "applicant", phone: "+14035550101" }, "1h");
 const body = {
-  loan_amount: 500000, pgi_limit: 400000, loan_type: "secured", country: "CA", company_name: "Acme Ltd.",
+  loan_amount: 500000, guarantee_amount: 400000, loan_type: "secured", country: "CA", company_name: "Acme Ltd.",
   business_address: "1 Main St, Calgary AB", business_number: "", naics_code: "541330", revenue_start: "2018-06",
   lender_name: "ATB", loan_purpose: "Working Capital", pg_signed: false, other_guarantors: false, rate_type: "fixed",
   guarantor_name: "Jane Doe", guarantor_email: "jane@example.com",
@@ -59,9 +59,15 @@ describe("POST /applications/quick-apply", () => {
     expect(r.body.issues.map((i: { field: string }) => i.field)).toEqual(expect.arrayContaining(["naics_code", "pg_signed", "rate_type"]));
   });
 
-  it("refuses a guarantee larger than the loan", async () => {
-    const r = await request(app).post("/applications/quick-apply").set("X-Forwarded-For", xff()).set("Authorization", `Bearer ${token()}`).send({ ...body, pgi_limit: 600000 });
-    expect(r.body.error).toBe("pgi_limit_exceeds_loan");
+  it("refuses a guarantee larger than the loan or over $1,000,000, and covers 80% of the guarantee", async () => {
+    const t = `Bearer ${token()}`;
+    const r1 = await request(app).post("/applications/quick-apply").set("X-Forwarded-For", xff()).set("Authorization", t).send({ ...body, guarantee_amount: 600000 });
+    expect(r1.body.issues[0].field).toBe("guarantee_amount");
+    const r2 = await request(app).post("/applications/quick-apply").set("X-Forwarded-For", xff()).set("Authorization", t).send({ ...body, loan_amount: 5000000, guarantee_amount: 1200000 });
+    expect(r2.status).toBe(400);
+    queryMock.mockClear();
+    await request(app).post("/applications/quick-apply").set("X-Forwarded-For", xff()).set("Authorization", t).send({ ...body, loan_amount: 5000000, guarantee_amount: 1000000 });
+    expect((callsMatching(queryMock, /INSERT INTO bi_applications/)[0]![1] as unknown[])[7]).toBe(800000);
   });
 
   it("refuses Quebec businesses", async () => {
