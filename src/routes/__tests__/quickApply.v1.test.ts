@@ -25,6 +25,7 @@ const body = {
   business_address: "1 Main St, Calgary AB", business_number: "", naics_code: "541330", revenue_start: "2018-06",
   lender_name: "ATB", loan_purpose: "Working Capital", pg_signed: false, other_guarantors: false, rate_type: "fixed",
   guarantor_name: "Jane Doe", guarantor_email: "jane@example.com",
+  fee_disclosure_ack: true, consent_share_pgi: true, consent_text: "I consent", fee_disclosure_text: "We may receive a fee", consent_version: "2026-11-20",
 };
 
 beforeEach(() => {
@@ -68,6 +69,18 @@ describe("POST /applications/quick-apply", () => {
     queryMock.mockClear();
     await request(app).post("/applications/quick-apply").set("X-Forwarded-For", xff()).set("Authorization", t).send({ ...body, loan_amount: 5000000, guarantee_amount: 1000000 });
     expect((callsMatching(queryMock, /INSERT INTO bi_applications/)[0]![1] as unknown[])[7]).toBe(800000);
+  });
+
+  it("needs the fee disclosure and the consent to share with PGI, and keeps them as evidence", async () => {
+    const t = `Bearer ${token()}`;
+    const r = await request(app).post("/applications/quick-apply").set("X-Forwarded-For", xff()).set("Authorization", t).send({ ...body, fee_disclosure_ack: false, consent_share_pgi: undefined });
+    expect(r.body.issues.map((i: { field: string }) => i.field)).toEqual(expect.arrayContaining(["fee_disclosure_ack", "consent_share_pgi"]));
+    queryMock.mockClear();
+    await request(app).post("/applications/quick-apply").set("X-Forwarded-For", xff()).set("Authorization", t).send(body);
+    const p = callsMatching(queryMock, /INSERT INTO bi_applications/)[0]![1] as unknown[];
+    const data = JSON.parse(String(p[p.length - 1]));
+    expect(data.consent_evidence.share_with_pgi).toMatchObject({ accepted: true, text: "I consent" });
+    expect(data.consent_evidence.phone).toBe("+14035550101");
   });
 
   it("refuses Quebec businesses", async () => {
