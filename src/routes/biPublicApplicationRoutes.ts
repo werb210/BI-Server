@@ -964,6 +964,11 @@ router.post("/applications/quick-apply", publicApplicationLimiter, async (req, r
   if (!name) issues.push({ field: "guarantor_name", message: "required" });
   const email = str(b.guarantor_email);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) issues.push({ field: "guarantor_email", message: "enter a valid email" });
+  // BI_SERVER_QUICK_APPLY_CONSENT_v1 - Referral Partner Agreement s.9 (fee disclosure before referral) and s.10
+  // (express written consent before sharing with PGI). Both must be accepted; the wording shown is kept with the
+  // application as evidence.
+  if (b.fee_disclosure_ack !== true) issues.push({ field: "fee_disclosure_ack", message: "please confirm you have read how Boreal Risk Management is paid" });
+  if (b.consent_share_pgi !== true) issues.push({ field: "consent_share_pgi", message: "consent is needed to send your application to PGI Canada Ltd." });
   if (issues.length) return res.status(400).json({ error: "validation_failed", issues });
 
   // PGI's form: "Currently available in Canada, excluding Quebec."
@@ -980,6 +985,11 @@ router.post("/applications/quick-apply", publicApplicationLimiter, async (req, r
     rate_type: rateType, guarantor_name: name, guarantor_email: email, guarantor_phone: verifiedPhone,
     code_channel: str(b.code_channel) || "sms",
   };
+  const consentEvidence = {
+    fee_disclosure: { accepted: true, text: str(b.fee_disclosure_text) || null, version: str(b.consent_version) || null },
+    share_with_pgi: { accepted: true, text: str(b.consent_text) || null, version: str(b.consent_version) || null },
+    at: new Date().toISOString(), ip: req.ip ?? null, user_agent: String(req.headers["user-agent"] ?? "").slice(0, 300), phone: verifiedPhone,
+  };
   await pool.query(
     `INSERT INTO bi_applications
        (id, public_id, status, source, created_by_actor, country, naics_code, formation_date, loan_amount, pgi_limit,
@@ -987,7 +997,7 @@ router.post("/applications/quick-apply", publicApplicationLimiter, async (req, r
         guarantor_name, guarantor_email, guarantor_phone, applicant_phone_e164, data, created_at, updated_at)
      VALUES ($1,$2,'in_progress',$3,'applicant',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,$16,$17,$17,$18::jsonb,NOW(),NOW())`,
     [id, publicId, QUICK_APPLY_SOURCE, country, naics, `${revenueStart}-01`, loan, pg, company, address, businessNumber,
-     lender, purpose, b.other_guarantors, name, email, verifiedPhone, JSON.stringify({ quick_apply: answers })],
+     lender, purpose, b.other_guarantors, name, email, verifiedPhone, JSON.stringify({ quick_apply: answers, consent_evidence: consentEvidence })],
   );
 
   // Referral attribution, as on /applications/score: keep the raw code; link a bi_referrals row when one matches.
