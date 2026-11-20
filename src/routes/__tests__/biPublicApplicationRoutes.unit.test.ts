@@ -9,7 +9,7 @@ import biPublicApplicationRoutes from "../biPublicApplicationRoutes";
 // written. Regenerated from the source; it is a change-detector, and its
 // job is to make additions deliberate rather than to stay at three.
 describe("BI_AUDIT_FIX_v58 public application router", () => {
-  it("registers exactly the six public PGI endpoints", () => {
+  it("registers exactly the seven public PGI endpoints (BI_SERVER_QUICK_APPLY_v1 added quick-apply)", () => {
     const stack = (biPublicApplicationRoutes as any).stack;
     const routes = stack.map((l:any)=>l.route).filter(Boolean).map((r:any)=>`${Object.keys(r.methods)[0]?.toUpperCase()} ${r.path}`).sort();
     expect(routes).toEqual([
@@ -18,6 +18,7 @@ describe("BI_AUDIT_FIX_v58 public application router", () => {
       "PATCH /applications/:publicId",
       "POST /applications/:publicId/documents",
       "POST /applications/:publicId/submit",
+      "POST /applications/quick-apply",
       "POST /applications/score",
     ]);
   });
