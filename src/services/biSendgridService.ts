@@ -12,6 +12,8 @@ export interface SendgridMessage {
   transactional?: boolean;
   /** Carried back on every event for this email (open, click, bounce), so it can be tied to what sent it. */
   customArgs?: Record<string, string>;
+  /** BI_SERVER_FLOW_ATTACHMENTS_v1 - files sent with the email (base64). */
+  attachments?: Array<{ content: string; filename: string; type: string; disposition: "attachment" }>;
 }
 
 export interface SendgridResult { status: "accepted"; statusCode: number }
@@ -52,6 +54,7 @@ export async function sendBiMarketingEmail(message: SendgridMessage): Promise<Se
     // BI_SENDGRID_EVENTS_v1 - bi_mkt marks every BI email, so BF-Server (where the shared SendGrid account's event
     // webhook points) passes its opens, clicks and bounces on to BI-Server.
     customArgs: { ...(message.customArgs ?? {}), bi_mkt: "1" },
+    ...(message.attachments?.length ? { attachments: message.attachments } : {}),
     ...(message.transactional ? { trackingSettings: { subscriptionTracking: { enable: false } } } : {}),
   });
   const [response] = await Promise.race([request, timeout]);
