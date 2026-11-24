@@ -77,4 +77,15 @@ describe("shared office phone", () => {
     expect(sets).toEqual(expect.arrayContaining([[3, 4], [5, 6], [7, 8]]));
     expect(sets).toHaveLength(3);
   });
+
+  // BI_SERVER_PLACEHOLDER_NAMES_v2
+  it("never groups research placeholders like (name not found) by name", async () => {
+    const rows = [
+      person(31, null, { full_name: "(name not found)", email: null }),
+      person(32, null, { full_name: "(name not found)", email: null }),
+      person(33, null, { full_name: "(CEO not identified)", email: null }),
+      person(34, null, { full_name: "(CEO not identified)", email: null }),
+    ];
+    expect(await duplicateGroups(db(rows), "contact")).toEqual([]);
+  });
 });

@@ -47,7 +47,9 @@ export function suggestSurvivor(records: Array<{ id: string; name?: unknown; app
   return String(ranked[0]?.id ?? "");
 }
 
-const PLACEHOLDER = /application started|^\s*unknown\s*$|^\s*new applicant/i;
+// BI_SERVER_PLACEHOLDER_NAMES_v2 - list research leaves "(name not found)", "(CEO not identified)", "(owner not
+// identified)" where no person was found; six different banks' rows were grouped as one person by that "name".
+const PLACEHOLDER = /application started|^\s*unknown\s*$|^\s*new applicant|^\s*\(?[^)]*\bnot (found|identified|known|available)\)?\s*$|^\s*\(?\s*(n\/?a|tbd|none)\s*\)?\s*$/i;
 const PLACEHOLDER_RE = PLACEHOLDER;
 const normName = (n: unknown) => String(n ?? "").toLowerCase().replace(/[^a-z\s'-]/g, " ").replace(/\s+/g, " ").trim();
 
