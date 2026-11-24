@@ -160,6 +160,7 @@ router.post("/crm/list-import", requireAuth, async (req: Request, res: Response)
     }
   }
   logger.info({ event: "crm_list_import", source: text(req.body?.source, 120), ...out, errors: out.errors.length }, "crm_list_import");
+  if (res.headersSent) return; // the timeout guard already answered
   return res.json(out);
 });
 
