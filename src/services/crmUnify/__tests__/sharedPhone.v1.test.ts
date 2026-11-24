@@ -24,7 +24,7 @@ describe("shared office phone", () => {
   });
 
   it("still groups a number shared by a few records", async () => {
-    const rows = [person(1, "+14035550101"), person(2, "+1 403 555 0101"), person(3, MAIN)];
+    const rows = [person(1, "+14035550101"), person(2, "+1 403 555 0101", { full_name: "Person 1 Surname1" }), person(3, MAIN)];
     const groups = await duplicateGroups(db(rows), "contact");
     expect(groups).toHaveLength(1);
     expect(groups[0]!.reasons).toEqual(["Same phone"]);
@@ -48,5 +48,33 @@ describe("shared office phone", () => {
       throw new Error(`unexpected SQL: ${sql}`);
     } } as any;
     expect(await contactDuplicates(q, me.id)).toEqual([]);
+  });
+
+  // BI_SERVER_DUP_NAMES_v2
+  it("does not group two different people who share a company phone", async () => {
+    const rows = [
+      person(1, "+15065550111", { full_name: "Jocelyn Parker-Whalley", email: "jpw@example.com" }),
+      person(2, "+15065550111", { full_name: "Larry Hachey", email: "lh@example.com" }),
+      person(3, "+15145550122", { full_name: "Christian Genesse", email: null }),
+      person(4, "+15145550122", { full_name: "Mathieu Marengere", email: null }),
+    ];
+    expect(await duplicateGroups(db(rows), "contact")).toEqual([]);
+  });
+
+  it("keeps real duplicates: same name, a placeholder on the same phone, a nickname on the same email", async () => {
+    const rows = [
+      person(1, "+15875550133", { full_name: "Dolly Myerson", email: "dolly@example.com" }),
+      person(2, "+15875550133", { full_name: "Dylan Myerson", email: "dylan@example.com" }),
+      person(3, "+14035550144", { full_name: "Ann Lee", email: "ann@example.com" }),
+      person(4, null, { full_name: "Ann Lee", email: "ann.lee@example.com" }),
+      person(5, "+17805550155", { full_name: "Sam Ray", email: "sr@example.com" }),
+      person(6, "+17805550155", { full_name: "Unknown (application started)", email: null }),
+      person(7, null, { full_name: "Bob Smith", email: "bsmith@example.com" }),
+      person(8, null, { full_name: "Robert Smith", email: "bsmith@example.com" }),
+    ];
+    const groups = await duplicateGroups(db(rows), "contact");
+    const sets = groups.map((g) => g.ids.map((id) => Number(id.slice(-2))).sort((a, b) => a - b));
+    expect(sets).toEqual(expect.arrayContaining([[3, 4], [5, 6], [7, 8]]));
+    expect(sets).toHaveLength(3);
   });
 });

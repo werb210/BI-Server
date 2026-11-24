@@ -1,5 +1,6 @@
 // BI_SERVER_v856_CRM_UNIFY - possible duplicates in the BI CRM, the same rules as BF-Server v856:
-//   contacts:  same email (case and spaces ignored), same phone (last 10 digits), exactly the same full name (any
+//   contacts:  same email (case and spaces ignored; names must not clearly differ), same phone (last 10 digits; names
+//              must agree - BI_SERVER_DUP_NAMES_v2), exactly the same full name (any
 //              company), or a similar name AND the same company. Placeholder names never match on name, but do match
 //              on phone / email - and the real record is suggested as the survivor.
 //   companies: the same name once legal suffixes and punctuation are ignored, one name the start of the other
@@ -64,7 +65,26 @@ export function samePersonName(a: unknown, b: unknown): boolean {
   if (xs.length < 2 || ys.length < 2 || sx !== sy || sx.length < 2) return false;
   const fx = xs[0]!;
   const fy = ys[0]!;
-  return fx === fy || (fx.length >= 3 && fy.startsWith(fx)) || (fy.length >= 3 && fx.startsWith(fy)) || fx[0] === fy[0];
+  // BI_SERVER_DUP_NAMES_v2 - a shared first letter alone ("Dolly" / "Dylan") is two people; an initial ("J" / "John")
+  // or the same first two letters ("Mike" / "Michael") still matches.
+  return fx === fy || (fx.length >= 3 && fy.startsWith(fx)) || (fy.length >= 3 && fx.startsWith(fy)) || ((fx.length <= 1 || fy.length <= 1) && fx[0] === fy[0]) || (fx.length >= 3 && fy.length >= 3 && fx.slice(0, 2) === fy.slice(0, 2));
+}
+
+const surname = (n: unknown) => { const parts = normName(n).split(" ").filter(Boolean); return parts.length >= 2 ? parts[parts.length - 1]! : ""; };
+
+/** BI_SERVER_DUP_NAMES_v2 - a shared phone only means the same person when the names agree (or one is a placeholder);
+ *  two different people at one office share its main line. */
+export function phoneNamesAgree(a: unknown, b: unknown): boolean {
+  if (isPlaceholderName(a) || isPlaceholderName(b)) return true;
+  return sameFullName(a, b) || samePersonName(a, b);
+}
+
+/** A shared email is strong evidence, but two clearly different people (different surnames and first names) on one
+ *  address is a shared inbox. A nickname with the same surname ("Bob Smith" / "Robert Smith") still matches. */
+export function emailNamesAgree(a: unknown, b: unknown): boolean {
+  if (phoneNamesAgree(a, b)) return true;
+  const sa = surname(a);
+  return !!sa && sa === surname(b);
 }
 
 const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -104,9 +124,9 @@ export async function contactDuplicates(db: Q, contactId: string): Promise<Dupli
   const out: DuplicateCandidate[] = [];
   for (const row of r.rows) {
     const reasons: string[] = [];
-    if (email && String(row.email ?? "").replace(/\s+/g, "").toLowerCase() === email) reasons.push("Same email");
+    if (email && String(row.email ?? "").replace(/\s+/g, "").toLowerCase() === email && emailNamesAgree(row.full_name, me.full_name)) reasons.push("Same email");
     const d = String(row.phone_e164 ?? "").replace(/\D/g, "");
-    if (p10 && !phoneShared && d.length >= 10 && d.slice(-10) === p10) reasons.push("Same phone");
+    if (p10 && !phoneShared && d.length >= 10 && d.slice(-10) === p10 && phoneNamesAgree(row.full_name, me.full_name)) reasons.push("Same phone");
     if (sameFullName(row.full_name, me.full_name)) reasons.push("Same name");
     else if (me.company_id && row.company_id === me.company_id && samePersonName(row.full_name, me.full_name)) reasons.push("Similar name, same company");
     if (!reasons.length || dismissed.has(pairKey(contactId, String(row.id)))) continue;
@@ -231,9 +251,9 @@ export async function duplicateGroups(db: Q, entity: "contact" | "company", limi
         seen.add(pk);
         const reasons: string[] = [];
         const ea = String(a.email ?? "").replace(/\s+/g, "").toLowerCase();
-        if (ea && ea === String(b.email ?? "").replace(/\s+/g, "").toLowerCase()) reasons.push("Same email");
+        if (ea && ea === String(b.email ?? "").replace(/\s+/g, "").toLowerCase() && emailNamesAgree(a.full_name, b.full_name)) reasons.push("Same email");
         const pa = phone10(a.phone_e164);
-        if (pa && pa === phone10(b.phone_e164) && (phoneCount.get(pa) ?? 0) <= SHARED_PHONE_LIMIT) reasons.push("Same phone");
+        if (pa && pa === phone10(b.phone_e164) && (phoneCount.get(pa) ?? 0) <= SHARED_PHONE_LIMIT && phoneNamesAgree(a.full_name, b.full_name)) reasons.push("Same phone");
         if (sameFullName(a.full_name, b.full_name)) reasons.push("Same name");
         else if (a.company_id && a.company_id === b.company_id && samePersonName(a.full_name, b.full_name)) reasons.push("Similar name, same company");
         if (reasons.length) pairs.push({ a: a.id, b: b.id, reasons });
