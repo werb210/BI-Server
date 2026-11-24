@@ -11,17 +11,21 @@ import {
   type Click, type FlowKey, type Track,
 } from "../services/flows/flowEngine";
 import { pgiMarketingHeld } from "../lib/pgiMarketingHold";
+import { loadAttachments, type FlowAttachment } from "../services/flows/flowAttachments";
 import { createTask } from "./marketingWorker";
 
 type Db = Pick<Pool, "query"> | Pick<PoolClient, "query">;
 export type FlowDeps = {
-  send: (m: { to: string; subject: string; html: string; text: string; fromName: string; replyTo?: string; customArgs: Record<string, string> }) => Promise<unknown>;
+  send: (m: { to: string; subject: string; html: string; text: string; fromName: string; replyTo?: string; customArgs: Record<string, string>; attachments?: FlowAttachment[] }) => Promise<unknown>;
+  /** BI_SERVER_FLOW_ATTACHMENTS_v1 - reads the collateral PDFs a flow email carries. */
+  attachments?: (ids: unknown) => Promise<FlowAttachment[]>;
   task: (assigneeUserId: string, title: string, notes: string) => Promise<{ ok: boolean; error?: string }>;
   /** Who has emailed this mailbox since a time (BF-Server reads the connected Microsoft 365 mailbox). */
   replies?: (mailbox: string, since: Date) => Promise<{ connected: boolean; replies: Array<{ from: string; at: string }> }>;
 };
 const liveDeps: FlowDeps = {
   send: (m) => sendBiMarketingEmail(m),
+  attachments: (ids) => loadAttachments(ids),
   task: (assignee, title, notes) => createTask(assignee, title, notes),
   replies: async (mailbox, since) => {
     const base = process.env.BF_SERVER_URL || "https://server.boreal.financial";
@@ -232,8 +236,10 @@ export async function sendDue(db: Db, deps: FlowDeps, now: Date): Promise<{ sent
     const fromName = String(row.from_name ?? "").trim() || "Boreal Risk Management";
     const html = withFooter(mergeFields(String(content.body), merge), fromName);
     try {
+      const files = Array.isArray(content.attachments) && content.attachments.length && deps.attachments ? await deps.attachments(content.attachments) : [];
       await deps.send({
         to, subject: mergeFields(String(content.subject), merge), html, text: htmlToText(html), fromName,
+        ...(files.length ? { attachments: files } : {}),
         replyTo: String(row.reply_to ?? "").trim() || undefined,
         customArgs: { job_id: flowJobId(row.flow_id, key as FlowKey), contact_id: String(row.contact_id) },
       });

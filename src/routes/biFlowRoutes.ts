@@ -13,6 +13,7 @@ import { pool } from "../db";
 import { logger } from "../platform/logger";
 import { mergeFields, sendBiMarketingEmail } from "../services/biSendgridService";
 import { FLOW_KEYS, FLOW_KEY_LABEL, dailyNewCap, htmlToText, isFlowKey, withFooter } from "../services/flows/flowEngine";
+import { cleanAttachmentIds, listCollateral } from "../services/flows/flowAttachments";
 import { PGI_HOLD_MESSAGE, pgiMarketingHeld } from "../lib/pgiMarketingHold";
 import { FLOW_PRESETS, presetByKey } from "../services/flows/flowPresets";
 
@@ -61,6 +62,15 @@ const COUNTS_SQL = `
     FROM bi_flows f LEFT JOIN bi_flow_members m ON m.flow_id = f.id
    WHERE f.status <> 'archived'`;
 
+// BI_SERVER_FLOW_ATTACHMENTS_v1 - the collateral PDFs a flow email can attach (from BF-Server).
+router.get("/flows/collateral", wrap(async (_req, res) => {
+  try {
+    res.json({ ok: true, items: await listCollateral() });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: "collateral_unavailable", message: (err as Error)?.message ?? "Could not read the collateral list." });
+  }
+}));
+
 router.get("/flows/presets", wrap(async (_req, res) => {
   res.json({ ok: true, presets: FLOW_PRESETS.map((p) => ({ key: p.key, name: p.name, audience: p.audience, market: p.market })) });
 }));
@@ -96,7 +106,7 @@ router.get("/flows/:id", wrap(async (req, res) => {
   const emails = e.rows[0]?.emails ?? {};
   const waiting = await pool.query(`SELECT count(*)::int AS n ${audienceSql(r.rows[0].market)} AND NOT EXISTS (SELECT 1 FROM bi_flow_members m WHERE m.flow_id = $2 AND m.contact_id = c.id)`, [r.rows[0].audience, req.params.id]);
   res.json({ ok: true, flow: r.rows[0], not_yet_added: waiting.rows[0]?.n ?? 0,
-    emails: FLOW_KEYS.map((key) => ({ key, label: FLOW_KEY_LABEL[key], subject: emails[key]?.subject ?? "", body: emails[key]?.body ?? "" })) });
+    emails: FLOW_KEYS.map((key) => ({ key, label: FLOW_KEY_LABEL[key], subject: emails[key]?.subject ?? "", body: emails[key]?.body ?? "", attachments: Array.isArray(emails[key]?.attachments) ? emails[key].attachments : [] })) });
 }));
 
 router.patch("/flows/:id", wrap(async (req, res) => {
@@ -105,14 +115,16 @@ router.patch("/flows/:id", wrap(async (req, res) => {
   const cur = await pool.query(`SELECT emails FROM bi_flows WHERE id = $1 AND status <> 'archived'`, [req.params.id]);
   if (!cur.rowCount) return res.status(404).json({ ok: false, error: "not_found" });
   const b = req.body ?? {};
-  const emails = { ...(cur.rows[0].emails ?? {}) } as Record<string, { subject: string; body: string }>;
+  const emails = { ...(cur.rows[0].emails ?? {}) } as Record<string, { subject: string; body: string; attachments?: string[] }>;
   if (b.emails && typeof b.emails === "object") {
     for (const [key, v] of Object.entries(b.emails as Record<string, any>)) {
       if (!isFlowKey(key)) continue;
       const subject = String(v?.subject ?? "").trim().slice(0, 200);
       const body = String(v?.body ?? "").trim().slice(0, 20_000);
       if (!subject || !body) return res.status(400).json({ ok: false, error: "empty_email", message: `${FLOW_KEY_LABEL[key]} needs a subject and a message.` });
-      emails[key] = { subject, body };
+      // BI_SERVER_FLOW_ATTACHMENTS_v1 - attachments kept unless the editor sends a new list.
+      const attachments = v?.attachments === undefined ? (emails[key]?.attachments ?? []) : cleanAttachmentIds(v.attachments);
+      emails[key] = attachments.length ? { subject, body, attachments } : { subject, body };
     }
   }
   const daily = b.daily_new === undefined ? null : Math.max(1, Math.min(1000, Math.trunc(Number(b.daily_new) || 100)));
