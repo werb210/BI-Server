@@ -10,6 +10,13 @@ vi.mock("../pgiAdapter", () => ({ pgiSubmit: (...a: unknown[]) => h.pgiSubmit(..
 vi.mock("../../platform/logger", () => ({ logger: { error: (...a: unknown[]) => h.logError(...a), warn: vi.fn(), info: vi.fn() } }));
 
 import { submitLenderApplicationToCarrier } from "../lenderCarrierSubmit";
+// BI_SERVER_PGI_CONSENT_GATE_v1 - these tests cover files that already have consent on file.
+vi.mock("../pgiConsent", async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  hasPgiConsent: async () => true,
+  requestPgiConsent: async () => ({ requested: true, emailed: false }),
+}));
+
 
 const input = (isDemo = false) => ({
   applicationId: "app-1",

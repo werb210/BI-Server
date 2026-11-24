@@ -14,6 +14,7 @@ import { pool } from "../db";
 import { env } from "../platform/env";
 import { logger } from "../platform/logger";
 import { isCompleteCoGuarantor, normalizeBfCoGuarantors } from "../services/bfCoGuarantors"; // BI_SERVER_BF_CO_APPLICANT_v391
+import { consentEvidence } from "../services/pgiConsent"; // BI_SERVER_PGI_CONSENT_GATE_v1
 
 const router = express.Router();
 
@@ -154,6 +155,10 @@ router.post("/applications/from-bf", async (req: Request, res: Response) => {
     loan_purpose: s(b.loan_purpose),
     annual_revenue: annualRevenue,
     collateral_value: collateralValue,
+    // BI_SERVER_PGI_CONSENT_GATE_v1 - BF-client records the fee disclosure and consent on Step 6.
+    ...(b.fee_disclosure_ack === true && b.consent_share_pgi === true
+      ? { consent_evidence: consentEvidence({ feeText: s(b.fee_disclosure_text), consentText: s(b.consent_text), version: s(b.consent_version), via: "bf_client_step6" }) }
+      : {}),
   };
 
   try {

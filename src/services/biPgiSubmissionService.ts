@@ -6,6 +6,7 @@ import { getStorage } from "../lib/storage";
 import { fetchBfDocumentFile } from "./bfDocumentFile"; // BI_SERVER_BF_DOC_FILE_v4
 import { logger } from "../platform/logger";
 import { recordCarrierSubmissionFailed } from "./biCarrierEvents"; // BI_SERVER_v789_CARRIER_EVENTS
+import { hasPgiConsent, requestPgiConsent } from "./pgiConsent";
 // BI_PGI_ALIGNMENT_v56 - reads from bi_applications.data which now contains the full PGI form_data shape.
 // BI_BLOCK_1_21_DOC_POLICY_OCR_BISERVER - adds documents_text bundle to PGI submission.
 
@@ -84,6 +85,11 @@ export async function submitApplicationToPGI(
   applicationId: string,
   opts: { payload?: Record<string, unknown> } = {},
 ): Promise<{ externalId: string; status: string; alreadySubmitted: boolean }> {
+  // BI_SERVER_PGI_CONSENT_GATE_v1 - nothing goes to PGI without the fee disclosure and consent on file.
+  if (!(await hasPgiConsent(applicationId))) {
+    await requestPgiConsent(applicationId, { path: "pgi" });
+    return { externalId: "", status: "awaiting_guarantor_consent", alreadySubmitted: false };
+  }
   // BI_SERVER_BLOCK_v270_ORCHESTRATOR_RACE_CLAIM_v1
   // Atomic claim: only one request can flip submission_locked=FALSE->TRUE
   // for a row that hasn't already been carrier-submitted. Closes the

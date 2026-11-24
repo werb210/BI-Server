@@ -29,6 +29,13 @@ import biLenderApiRoutes from "../biLenderApiRoutes";
 import biLenderApplicationDetail from "../biLenderApplicationDetail";
 import { signBiToken } from "../../platform/serviceTokens";
 import { resetLenderActiveCache } from "../../services/lenderActiveCache";
+// BI_SERVER_PGI_CONSENT_GATE_v1 - these tests cover files that already have consent on file.
+vi.mock("../../services/pgiConsent", async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  hasPgiConsent: async () => true,
+  requestPgiConsent: async () => ({ requested: true, emailed: false }),
+}));
+
 
 const LENDER_ID = "11111111-1111-4111-8111-111111111111";
 const CONTACT_ID = "22222222-2222-4222-8222-222222222222";

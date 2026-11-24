@@ -1029,4 +1029,21 @@ router.post("/applications/quick-apply", publicApplicationLimiter, async (req, r
   return res.status(201).json({ ok: true, public_id: publicId, status: "in_progress" });
 });
 
+
+// BI_SERVER_PGI_CONSENT_GATE_v1 - the guarantor's own confirmation for a file their lender submitted.
+router.get("/consent/:token", publicApplicationLimiter, async (req, res) => {
+  const { getConsentRequest } = await import("../services/pgiConsent");
+  const r = await getConsentRequest(String(req.params.token));
+  if (!r) return res.status(404).json({ ok: false, error: "not_found" });
+  return res.json({ ok: true, guarantor_name: r.guarantorName, business: r.business, country: r.country, already_confirmed: r.alreadyConfirmed, fee_disclosure: r.feeDisclosure, consent_text: r.consentText, version: r.version });
+});
+router.post("/consent/:token", publicApplicationLimiter, async (req, res) => {
+  const b = req.body ?? {};
+  if (b.fee_disclosure_ack !== true || b.consent_share_pgi !== true) return res.status(400).json({ ok: false, error: "both_required" });
+  const { acceptConsent } = await import("../services/pgiConsent");
+  const r = await acceptConsent(String(req.params.token), { ip: req.ip ?? null, userAgent: String(req.headers["user-agent"] ?? "") });
+  if (!r.ok) return res.status(404).json({ ok: false, error: r.error });
+  return res.json({ ok: true });
+});
+
 export default router;
