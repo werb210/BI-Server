@@ -163,4 +163,43 @@ router.post("/crm/list-import", requireAuth, async (req: Request, res: Response)
   return res.json(out);
 });
 
+
+// BF_SHARED_CONTACTS_STAGE2_v1 (2026-11-24) - BF-Server's shared contact list pulls every broker, lender and bank person
+// from here each night (service token), so lists loaded before the shared list existed are in it too. Read only.
+// GET /api/v1/bi/crm/directory-export?after=<contact id>&limit=1000
+export const DIRECTORY_EXPORT_SQL = `
+  SELECT c.id, c.full_name, c.email, c.phone_e164, c.title, c.city, c.state,
+         CASE WHEN lower(btrim(coalesce(c.country, ''))) IN ('us', 'usa', 'united states', 'united states of america')
+                OR EXISTS (SELECT 1 FROM unnest(coalesce(c.tags, '{}')) t WHERE lower(btrim(t)) LIKE 'us %') THEN 'US'
+              WHEN lower(btrim(coalesce(c.country, ''))) IN ('ca', 'can', 'canada') OR coalesce(c.country, '') = '' THEN 'CA'
+              ELSE upper(left(btrim(c.country), 2)) END AS country,
+         CASE WHEN EXISTS (SELECT 1 FROM unnest(coalesce(c.tags, '{}')) t WHERE lower(btrim(t)) LIKE 'broker%') THEN 'broker'
+              WHEN EXISTS (SELECT 1 FROM unnest(coalesce(c.tags, '{}')) t WHERE lower(btrim(t)) LIKE 'bank%') THEN 'bank'
+              ELSE 'lender' END AS kind,
+         COALESCE(co.operating_name, co.legal_name, c.organization_name) AS company, co.website,
+         EXISTS (SELECT 1 FROM bi_suppressions s
+                  WHERE (lower(s.email) = lower(c.email) OR lower(s.identifier) = lower(c.email) OR s.contact_id = c.id)
+                    AND s.channel IN ('email', 'all')) AS opted_out,
+         c.outreach_status, c.updated_at
+    FROM bi_contacts c
+    LEFT JOIN bi_companies co ON co.id = c.company_id
+   WHERE EXISTS (SELECT 1 FROM unnest(coalesce(c.tags, '{}')) t
+                  WHERE lower(btrim(t)) LIKE 'broker%' OR lower(btrim(t)) LIKE 'lender%' OR lower(btrim(t)) LIKE 'bank%')
+     AND ($1::uuid IS NULL OR c.id > $1::uuid)
+   ORDER BY c.id
+   LIMIT $2`;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+router.get("/crm/directory-export", requireAuth, async (req: Request, res: Response) => {
+  const after = UUID_RE.test(String(req.query.after ?? "")) ? String(req.query.after) : null;
+  const limit = Math.max(1, Math.min(2000, Math.trunc(Number(req.query.limit) || 1000)));
+  try {
+    const r = await pool.query(DIRECTORY_EXPORT_SQL, [after, limit]);
+    const items = r.rows;
+    return res.json({ ok: true, items, next: items.length === limit ? items[items.length - 1].id : null });
+  } catch (err) {
+    logger.error({ err }, "directory_export_failed");
+    return res.status(500).json({ ok: false, error: "export_failed" });
+  }
+});
+
 export default router;
