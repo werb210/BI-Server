@@ -23,6 +23,13 @@ afterAll(() => {
 });
 import biLenderApplicationCreate from "../../routes/biLenderApplicationCreate";
 import biLenderApiRoutes from "../../routes/biLenderApiRoutes";
+// BI_SERVER_PGI_CONSENT_GATE_v1 - these tests cover files that already have consent on file.
+vi.mock("../../services/pgiConsent", async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  hasPgiConsent: async () => true,
+  requestPgiConsent: async () => ({ requested: true, emailed: false }),
+}));
+
 
 const haveDb = !!process.env.DATABASE_URL;
 const ints = haveDb ? describe : describe.skip;

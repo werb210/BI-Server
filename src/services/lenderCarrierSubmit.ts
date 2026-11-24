@@ -8,6 +8,7 @@ import { pool } from "../db";
 import { buildCarrierPayloadV2 } from "./pgiCarrierMapper";
 import { pgiSubmit } from "./pgiAdapter";
 import { logger } from "../platform/logger";
+import { hasPgiConsent, requestPgiConsent } from "./pgiConsent";
 
 export interface LenderCarrierSubmitInput {
   applicationId: string;
@@ -33,6 +34,11 @@ export interface LenderCarrierSubmitResult {
 }
 
 export async function submitLenderApplicationToCarrier(input: LenderCarrierSubmitInput): Promise<LenderCarrierSubmitResult> {
+  // BI_SERVER_PGI_CONSENT_GATE_v1 - a real file waits for the guarantor's own consent (demo files use the stub).
+  if (!input.isDemo && !(await hasPgiConsent(input.applicationId))) {
+    await requestPgiConsent(input.applicationId, { path: "lender", input });
+    return { pgi_application_id: null, pgi_status: "awaiting_guarantor_consent", pgi_error: null, carrier_request_body: null, carrier_response: null };
+  }
   const carrierRequestBody = buildCarrierPayloadV2(
     input.rowSnapshot as any,
     input.formData as any,

@@ -8,6 +8,13 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vites
 import express from "express";
 import request from "supertest";
 import crypto from "node:crypto";
+// BI_SERVER_PGI_CONSENT_GATE_v1 - these tests cover files that already have consent on file.
+vi.mock("../../services/pgiConsent", async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  hasPgiConsent: async () => true,
+  requestPgiConsent: async () => ({ requested: true, emailed: false }),
+}));
+
 
 const h = vi.hoisted(() => ({ submitFails: false }));
 vi.mock("../../services/pgiAdapter", async () => {

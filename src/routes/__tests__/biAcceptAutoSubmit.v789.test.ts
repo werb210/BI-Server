@@ -40,6 +40,13 @@ import biDocumentRoutes from "../biDocumentRoutes";
 import biApplicationDetailRoutes from "../biApplicationDetailRoutes";
 import biApplicationRoutes from "../biApplicationRoutes";
 import { answerBySql, callsMatching, sqlText } from "../../__tests__/helpers/answerBySql";
+// BI_SERVER_PGI_CONSENT_GATE_v1 - these tests cover files that already have consent on file.
+vi.mock("../../services/pgiConsent", async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  hasPgiConsent: async () => true,
+  requestPgiConsent: async () => ({ requested: true, emailed: false }),
+}));
+
 
 const APP = "22222222-2222-4222-8222-222222222222";
 const DOC = "33333333-3333-4333-8333-333333333333";

@@ -36,6 +36,13 @@ import { resetDb, seedApplication, seedDocument } from "../../test-support/integ
 import biDocumentRoutes from "../../routes/biDocumentRoutes";
 import pgiWebhookRoutes from "../../routes/pgiWebhookRoutes";
 import { forwardAcceptedDocsToCarrier } from "../../services/biPgiSubmissionService";
+// BI_SERVER_PGI_CONSENT_GATE_v1 - these tests cover files that already have consent on file.
+vi.mock("../../services/pgiConsent", async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  hasPgiConsent: async () => true,
+  requestPgiConsent: async () => ({ requested: true, emailed: false }),
+}));
+
 
 const haveDb = Boolean(process.env.DATABASE_URL);
 

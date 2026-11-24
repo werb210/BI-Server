@@ -24,6 +24,13 @@ vi.mock("../../lib/storage", () => ({
 
 import router from "../biApplicationDetailRoutes";
 import { answerBySql, callsMatching } from "../../__tests__/helpers/answerBySql";
+// BI_SERVER_PGI_CONSENT_GATE_v1 - these tests cover files that already have consent on file.
+vi.mock("../../services/pgiConsent", async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  hasPgiConsent: async () => true,
+  requestPgiConsent: async () => ({ requested: true, emailed: false }),
+}));
+
 
 const APP = "77777777-7777-4777-8777-777777777777";
 const DOC = "88888888-8888-4888-8888-888888888888";
