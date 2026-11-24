@@ -396,7 +396,7 @@ export const openApiSpec = {
             "Quote Created",
             "Application Started",
             "Application Submitted",
-            "Under Review (Purbeck underwriting)",
+            "Under Review (underwriting)",
             "Approved",
             "Policy Issued",
             "Declined"

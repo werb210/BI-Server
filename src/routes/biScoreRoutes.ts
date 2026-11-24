@@ -95,7 +95,7 @@ router.post("/applications/:id/submit-to-pgi", requireAuth, async (req, res) => 
   if (!docCheck.rows.length) {
     return res.status(412).json({
       error: "loan_agreement_required",
-      message: "Cannot submit to Purbeck without an accepted loan_agreement document on file.",
+      message: "Cannot submit to PGI without an accepted loan_agreement document on file.",
     });
   }
 
@@ -125,7 +125,7 @@ router.post("/applications/:id/submit-to-pgi", requireAuth, async (req, res) => 
         if (missing.length > 0) {
           return res.status(412).json({
             error: "startup_docs_required",
-            message: `Business is under 3 years old (formed ${formationDate.toISOString().slice(0, 10)}). Purbeck requires additional documents: ${missing.join(", ")}.`,
+            message: `Business is under 3 years old (formed ${formationDate.toISOString().slice(0, 10)}). PGI requires additional documents: ${missing.join(", ")}.`,
             missing_documents: missing,
             business_age_years: Number(ageYears.toFixed(2)),
           });
