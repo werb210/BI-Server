@@ -106,7 +106,7 @@ router.get("/flows/:id", wrap(async (req, res) => {
   const emails = e.rows[0]?.emails ?? {};
   const waiting = await pool.query(`SELECT count(*)::int AS n ${audienceSql(r.rows[0].market)} AND NOT EXISTS (SELECT 1 FROM bi_flow_members m WHERE m.flow_id = $2 AND m.contact_id = c.id)`, [r.rows[0].audience, req.params.id]);
   res.json({ ok: true, flow: r.rows[0], not_yet_added: waiting.rows[0]?.n ?? 0,
-    emails: FLOW_KEYS.map((key) => ({ key, label: FLOW_KEY_LABEL[key], subject: emails[key]?.subject ?? "", body: emails[key]?.body ?? "" })) });
+    emails: FLOW_KEYS.map((key) => ({ key, label: FLOW_KEY_LABEL[key], subject: emails[key]?.subject ?? "", body: emails[key]?.body ?? "", attachments: Array.isArray(emails[key]?.attachments) ? emails[key].attachments : [] })) });
 }));
 
 router.patch("/flows/:id", wrap(async (req, res) => {
