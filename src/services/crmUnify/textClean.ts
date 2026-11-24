@@ -102,7 +102,8 @@ export function cleanEmail(input: unknown): string {
   return String(input ?? "").replace(/\s+/g, "").toLowerCase();
 }
 
-export const PLACEHOLDER_NAME_RE = /^\s*(unknown|new applicant|applicant)?\s*\(?\s*application started\s*\)?\s*$|^\s*unknown\s*$/i;
+// BI_SERVER_PLACEHOLDER_NAMES_v2 - research placeholders ("(name not found)", "(CEO not identified)") are left alone.
+export const PLACEHOLDER_NAME_RE = /^\s*(unknown|new applicant|applicant)?\s*\(?\s*application started\s*\)?\s*$|^\s*unknown\s*$|^\s*\(?[^)]*\bnot (found|identified|known|available)\)?\s*$/i;
 
 export type Proposal = { field: string; before: string; after: string; reason: string };
 
