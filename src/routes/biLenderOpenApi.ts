@@ -235,7 +235,7 @@ const SPEC = {
         summary: "Submit a new PGI application (carrier-aligned v2)",
         operationId: "submitApplication",
         description:
-          "Validates against the carrier schema (14 form_data fields + 11 declarations) and forwards to Purbeck. " +
+          "Validates against the carrier schema (14 form_data fields + 11 declarations) and forwards to PGI. " +
           "On success, the response includes the carrier's application_id once acked. Legacy flat-shape v1 payloads " +
           "are still accepted but return a `Deprecation: true` header; migrate to the v2 nested shape documented here.",
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ApplicationSubmit" } } } },
