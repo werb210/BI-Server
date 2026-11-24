@@ -13,7 +13,7 @@ import { pool } from "../db";
 import { logger } from "../platform/logger";
 import { mergeFields, sendBiMarketingEmail } from "../services/biSendgridService";
 import { FLOW_KEYS, FLOW_KEY_LABEL, dailyNewCap, htmlToText, isFlowKey, withFooter } from "../services/flows/flowEngine";
-import { cleanAttachmentIds, listCollateral } from "../services/flows/flowAttachments";
+import { cleanAttachmentIds, listCollateral, loadAttachments } from "../services/flows/flowAttachments";
 import { PGI_HOLD_MESSAGE, pgiMarketingHeld } from "../lib/pgiMarketingHold";
 import { FLOW_PRESETS, presetByKey } from "../services/flows/flowPresets";
 
@@ -183,8 +183,10 @@ router.post("/flows/:id/test", wrap(async (req, res) => {
     const e = (flow.emails ?? {})[key];
     if (!e?.subject || !e?.body) continue;
     const html = withFooter(mergeFields(String(e.body), merge), flow.from_name ?? "Boreal Risk Management");
+    // BI_SERVER_FLOW_ATTACHMENTS_v1 - the test carries the same PDFs as the real email.
+    const files = Array.isArray(e.attachments) && e.attachments.length ? await loadAttachments(e.attachments) : [];
     await sendBiMarketingEmail({ to, subject: `[TEST ${sent + 1}/7 - ${FLOW_KEY_LABEL[key]}] ${mergeFields(String(e.subject), merge)}`, html, text: htmlToText(html),
-      fromName: flow.from_name ?? undefined, replyTo: flow.reply_to ?? undefined });
+      fromName: flow.from_name ?? undefined, replyTo: flow.reply_to ?? undefined, ...(files.length ? { attachments: files } : {}) });
     sent += 1;
   }
   res.json({ ok: true, sent });
