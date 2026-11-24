@@ -24,7 +24,7 @@ describe("shared office phone", () => {
   });
 
   it("still groups a number shared by a few records", async () => {
-    const rows = [person(1, "+14035550101"), person(2, "+1 403 555 0101", { full_name: "Person 1 Surname1" }), person(3, MAIN)];
+    const rows = [person(1, "+14035550101"), person(2, "+1 403 555 0101", { full_name: "Unknown (application started)" }), person(3, MAIN)];
     const groups = await duplicateGroups(db(rows), "contact");
     expect(groups).toHaveLength(1);
     expect(groups[0]!.reasons).toEqual(["Same phone"]);
