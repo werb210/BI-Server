@@ -13,6 +13,7 @@ import {
 import { pgiMarketingHeld } from "../lib/pgiMarketingHold";
 import { loadAttachments, type FlowAttachment } from "../services/flows/flowAttachments";
 import { createTask } from "./marketingWorker";
+import { addRunningAudiences } from "../services/flows/flowAudience"; // BI_SERVER_FLOWS_AUTO_ADD_v1
 
 type Db = Pick<Pool, "query"> | Pick<PoolClient, "query">;
 export type FlowDeps = {
@@ -278,11 +279,16 @@ export async function runFlowTick(db: Db, deps: FlowDeps, now = new Date(), poll
   const replied = pollReplies ? (await stopRepliedMembers(db, deps, now)).stopped : 0;
   const events = await ingestEvents(db);
   const tasks = await createCallTasks(db, deps);
+  // BI_SERVER_FLOWS_AUTO_ADD_v1 - new people who match a running flow join it by themselves, once an hour.
+  const joined = pollReplies && now.getTime() - lastAudienceAdd >= AUDIENCE_ADD_MS ? await addRunningAudiences(db) : 0;
+  if (pollReplies && now.getTime() - lastAudienceAdd >= AUDIENCE_ADD_MS) lastAudienceAdd = now.getTime();
   const started = await startNewPeople(db, now);
   const sends = await sendDue(db, deps, now);
-  return { replied, ...events, tasks, started, ...sends };
+  return { replied, ...events, tasks, joined, started, ...sends };
 }
 
+const AUDIENCE_ADD_MS = 60 * 60_000;
+let lastAudienceAdd = 0;
 let timer: NodeJS.Timeout | null = null;
 let busy = false;
 async function tick(pool: Pool): Promise<void> {
