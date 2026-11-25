@@ -5,7 +5,7 @@ import type { Pool, PoolClient } from "pg";
 import { pool as defaultPool } from "../db";
 import { logger } from "../platform/logger";
 import { isSendableAt } from "../services/sequenceSchedule";
-import { mergeFields, sendBiMarketingEmail, sendgridConfigured } from "../services/biSendgridService";
+import { biSendgridFrom, mergeFields, sendBiMarketingEmail, sendgridConfigured } from "../services/biSendgridService";
 import {
   FLOW_WINDOW, dailyNewCap, endsFirstRoundUnopened, flowJobId, htmlToText, isFlowKey, nextAfterSend, onClick, onOpen, parseFlowJobId, secondAddressStartAt, withFooter,
   type Click, type FlowKey, type Track,
@@ -47,11 +47,19 @@ let lastReplyPoll = 0;
 export async function stopRepliedMembers(db: Db, deps: FlowDeps, now: Date): Promise<{ stopped: number; mailboxes: Record<string, boolean> }> {
   const out = { stopped: 0, mailboxes: {} as Record<string, boolean> };
   if (!deps.replies) return out;
+  // BI_SERVER_REPLIES_FROM_MAILBOX_v1 - out-of-office replies go back to the address the email came FROM, not the reply-to,
+  // so the sending mailbox is read too (and it is the only one for a flow with no reply-to).
+  const fromBox = String(biSendgridFrom() ?? "").trim().toLowerCase();
   const boxes = await db.query(
-    `SELECT lower(btrim(f.reply_to)) AS mailbox, min(m.first_sent_at) AS since
-       FROM bi_flows f JOIN bi_flow_members m ON m.flow_id = f.id
-      WHERE f.status = 'active' AND coalesce(btrim(f.reply_to), '') <> '' AND m.status IN ('active', 'done') AND m.first_sent_at IS NOT NULL
-      GROUP BY 1`,
+    `SELECT mailbox, min(since) AS since FROM (
+       SELECT lower(btrim(coalesce(nullif(btrim(f.reply_to), ''), $1))) AS mailbox, m.first_sent_at AS since
+         FROM bi_flows f JOIN bi_flow_members m ON m.flow_id = f.id
+        WHERE f.status = 'active' AND m.status IN ('active', 'done') AND m.first_sent_at IS NOT NULL
+       UNION ALL
+       SELECT $1, m.first_sent_at FROM bi_flows f JOIN bi_flow_members m ON m.flow_id = f.id
+        WHERE f.status = 'active' AND m.status IN ('active', 'done') AND m.first_sent_at IS NOT NULL AND $1 <> ''
+     ) x WHERE coalesce(mailbox, '') <> '' GROUP BY 1`,
+    [fromBox],
   );
   for (const b of boxes.rows) {
     const since = new Date(Math.max(new Date(b.since).getTime(), now.getTime() - 14 * 86_400_000));
@@ -61,13 +69,17 @@ export async function stopRepliedMembers(db: Db, deps: FlowDeps, now: Date): Pro
     out.mailboxes[b.mailbox] = res.connected;
     for (const rep of res.replies) {
       if (rep.auto_reply) await addReferrals(db, rep);
+      // An out-of-office reply is not an answer: the person is only away, so their emails carry on. A real reply, or an
+      // automatic one saying they have left, stops them.
+      if (rep.auto_reply && !rep.left) continue;
       const r = await db.query(
         `UPDATE bi_flow_members m SET status = 'stopped', stop_reason = 'replied', next_key = NULL, next_at = NULL, updated_at = now()
            FROM bi_flows f
-          WHERE f.id = m.flow_id AND lower(btrim(f.reply_to)) = $1 AND m.email = $2 AND m.status IN ('active', 'done')
+          WHERE f.id = m.flow_id AND (lower(btrim(coalesce(nullif(btrim(f.reply_to), ''), $4))) = $1 OR $1 = $4)
+            AND m.email = $2 AND m.status IN ('active', 'done')
             AND m.first_sent_at IS NOT NULL AND m.first_sent_at < $3::timestamptz AND coalesce(m.stop_reason, '') <> 'replied'
           RETURNING m.contact_id, f.name`,
-        [b.mailbox, rep.from, rep.at],
+        [b.mailbox, rep.from, rep.at, fromBox],
       );
       for (const row of r.rows) {
         out.stopped += 1;
@@ -86,14 +98,27 @@ export async function stopRepliedMembers(db: Db, deps: FlowDeps, now: Date): Pro
  *  outreach (they will not read it); nobody is unsubscribed. */
 export async function addReferrals(db: Db, rep: FlowReply): Promise<number> {
   const src = await db.query(
-    `SELECT id, company_id, tags, country, full_name FROM bi_contacts WHERE lower(btrim(email)) = $1 ORDER BY created_at LIMIT 1`, [rep.from]);
+    `SELECT id, company_id, tags, country, full_name, COALESCE(outreach_excluded, false) AS excluded FROM bi_contacts WHERE lower(btrim(email)) = $1 ORDER BY created_at LIMIT 1`, [rep.from]);
   const orig = src.rows[0];
   if (!orig) return 0;
   let added = 0;
   for (const ref of (rep.referrals ?? []).slice(0, 5)) {
-    const exists = await db.query(`SELECT 1 FROM bi_contacts WHERE lower(btrim(email)) = $1 LIMIT 1`, [ref.email]);
+    const exists = await db.query(`SELECT 1 FROM bi_contacts WHERE lower(btrim(email)) = $1 OR lower(btrim(secondary_email)) = $1 LIMIT 1`, [ref.email]);
     if (exists.rowCount) continue;
     const name = ref.name || ref.email.split("@")[0]!.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    // BI_SERVER_REPLIES_FROM_MAILBOX_v1 - the colleague may already be a contact under another address (carrie@ vs crotman@):
+    // then this address becomes their second one instead of a duplicate contact.
+    if (ref.name && orig.company_id) {
+      const same = await db.query(
+        `UPDATE bi_contacts SET secondary_email = $3, updated_at = now()
+          WHERE id = (SELECT id FROM bi_contacts WHERE company_id = $1 AND lower(btrim(full_name)) = lower(btrim($2)) ORDER BY created_at LIMIT 1)
+            AND coalesce(btrim(secondary_email), '') = '' RETURNING id`,
+        [orig.company_id, ref.name, ref.email],
+      );
+      if (same.rowCount) continue;
+      const named = await db.query(`SELECT 1 FROM bi_contacts WHERE company_id = $1 AND lower(btrim(full_name)) = lower(btrim($2)) LIMIT 1`, [orig.company_id, ref.name]);
+      if (named.rowCount) continue;
+    }
     const parts = name.split(/\s+/);
     const tags = Array.from(new Set([...(orig.tags ?? []), "referred by auto-reply"]));
     const ins = await db.query(
@@ -104,6 +129,7 @@ export async function addReferrals(db: Db, rep: FlowReply): Promise<number> {
     );
     added += ins.rowCount ?? 0;
   }
+  if (rep.left && orig.excluded && !added) return 0; // already noted on an earlier pass
   const note = rep.left
     ? `Automatic reply says they have left${added ? `; added ${added} colleague(s) it named` : ""}. Taken off outreach.`
     : added ? `Automatic reply named ${added} colleague(s); they were added as contacts.` : null;

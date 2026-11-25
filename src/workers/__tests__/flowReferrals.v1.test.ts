@@ -3,11 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../../db", () => ({ pool: { query: vi.fn() } }));
 import { addReferrals } from "../flowWorker";
 
-function fakeDb(existing: string[] = []) {
+function fakeDb(existing: string[] = [], sameName: string[] = []) {
   const calls: Array<[string, unknown[]]> = [];
   const query = vi.fn(async (sql: string, params: unknown[] = []) => {
     calls.push([sql, params]);
     if (/FROM bi_contacts WHERE lower\(btrim\(email\)\) = \$1 ORDER BY/.test(sql)) return { rows: [{ id: "c1", company_id: "co1", tags: ["lender", "us lender list"], country: "US", full_name: "Dave Kenney" }], rowCount: 1 };
+    if (/SET secondary_email = \$3/.test(sql)) return { rows: [], rowCount: sameName.includes(String(params[1])) ? 1 : 0 };
+    if (/SELECT 1 FROM bi_contacts WHERE company_id/.test(sql)) return { rows: [], rowCount: 0 };
     if (/SELECT 1 FROM bi_contacts/.test(sql)) return { rows: [], rowCount: existing.includes(String(params[0])) ? 1 : 0 };
     return { rows: [{ id: "n" }], rowCount: 1 };
   });
@@ -29,5 +31,13 @@ describe("colleagues named in an auto-reply", () => {
     const { db, calls } = fakeDb();
     await addReferrals(db, { from: "scott@dbl.com", at: "x", auto_reply: true, left: true, referrals: [] });
     expect(calls.some(([s]) => /outreach_excluded = TRUE/.test(s))).toBe(true);
+  });
+
+  it("gives an existing colleague the new address as their second one instead of a duplicate (BI_SERVER_REPLIES_FROM_MAILBOX_v1)", async () => {
+    const { db, calls } = fakeDb([], ["Carrie Rotman"]);
+    const n = await addReferrals(db, { from: "dave@bank.com", at: "x", auto_reply: true, left: false, referrals: [{ email: "carrie@bank.com", name: "Carrie Rotman", phone: null }] });
+    expect(n).toBe(0);
+    expect(calls.some(([s]) => /INSERT INTO bi_contacts/.test(s))).toBe(false);
+    expect(calls.some(([s]) => /SET secondary_email = \$3/.test(s))).toBe(true);
   });
 });
