@@ -9,6 +9,7 @@ const lists: Record<string, any[]> = {
   "/v3/suppression/unsubscribes": [{ email: "Kelly@IntegrityLaw.co" }, { email: "a@b.ca" }],
   "/v3/suppression/spam_reports": [{ email: "spam@x.com" }],
   "/v3/suppression/bounces": [{ email: "hard@x.com", status: "5.1.1" }, { email: "soft@x.com", status: "4.2.2" }],
+  "/v3/asm/suppressions": [{ email: "Group@x.com", group_id: 7 }], // BI_SERVER_UNIVERSAL_SUPPRESSION_v1
 };
 const fakeFetch = vi.fn(async (url: string) => {
   const path = new URL(url).pathname;
@@ -19,12 +20,12 @@ describe("SendGrid suppressions reach bi_suppressions", () => {
   beforeEach(() => { q.calls.length = 0; process.env.SENDGRID_API_KEY = "test"; });
   it("copies unsubscribes, spam reports and permanent bounces, lower-cased", async () => {
     const r = await syncSendgridSuppressions(fakeFetch);
-    expect(r.checked).toBe(4);
+    expect(r.checked).toBe(5);
     const all = q.calls.flatMap((c) => c.params[0]);
-    expect(all).toEqual(expect.arrayContaining(["kelly@integritylaw.co", "a@b.ca", "spam@x.com", "hard@x.com"]));
+    expect(all).toEqual(expect.arrayContaining(["kelly@integritylaw.co", "a@b.ca", "spam@x.com", "hard@x.com", "group@x.com"]));
     expect(all).not.toContain("soft@x.com");
     expect(q.calls[0]!.sql).toContain("WHERE NOT EXISTS");
-    expect(q.calls.map((c) => c.params[1])).toEqual(["sendgrid_unsubscribe", "sendgrid_spam_report", "sendgrid_bounce"]);
+    expect(q.calls.map((c) => c.params[1])).toEqual(["sendgrid_unsubscribe", "sendgrid_spam_report", "sendgrid_bounce", "sendgrid_group_unsubscribe"]);
   });
   it("does nothing without an API key", async () => {
     delete process.env.SENDGRID_API_KEY;
