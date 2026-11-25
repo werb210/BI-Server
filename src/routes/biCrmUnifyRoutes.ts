@@ -309,6 +309,19 @@ async function mergeContactGroup(client: any, req: Request, survivorId: string, 
       [survivorId, ...choices.map(([, v]) => v)],
     );
   }
+  // BI_SERVER_FLOW_SECOND_ADDRESS_v1 - the email and phone the merge did not keep become the survivor's second ones (when
+  // that slot is empty), so flows can try the second address and staff still see the other number.
+  const kept = (await client.query(`SELECT email, phone_e164, secondary_email, secondary_phone FROM bi_contacts WHERE id = $1::uuid`, [survivorId])).rows[0] ?? {};
+  const norm = (v: unknown) => String(v ?? "").trim().toLowerCase();
+  const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "").slice(-10);
+  const otherEmail = rows.map((r: any) => String(r.email ?? "").trim()).find((e: string) => e.includes("@") && norm(e) !== norm(kept.email));
+  const otherPhone = rows.map((r: any) => String(r.phone_e164 ?? "").trim()).find((p: string) => digits(p).length >= 10 && digits(p) !== digits(kept.phone_e164));
+  if ((otherEmail && !norm(kept.secondary_email)) || (otherPhone && !digits(kept.secondary_phone))) {
+    await client.query(
+      `UPDATE bi_contacts SET secondary_email = COALESCE(NULLIF(btrim(secondary_email), ''), $2), secondary_phone = COALESCE(NULLIF(btrim(secondary_phone), ''), $3), updated_at = now() WHERE id = $1::uuid`,
+      [survivorId, otherEmail ?? null, otherPhone ?? null],
+    );
+  }
   return { survivorId, loserIds, moved };
 }
 

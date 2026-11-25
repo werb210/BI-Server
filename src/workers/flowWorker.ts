@@ -7,7 +7,7 @@ import { logger } from "../platform/logger";
 import { isSendableAt } from "../services/sequenceSchedule";
 import { mergeFields, sendBiMarketingEmail, sendgridConfigured } from "../services/biSendgridService";
 import {
-  FLOW_WINDOW, dailyNewCap, flowJobId, htmlToText, isFlowKey, nextAfterSend, onClick, onOpen, parseFlowJobId, withFooter,
+  FLOW_WINDOW, dailyNewCap, endsFirstRoundUnopened, flowJobId, htmlToText, isFlowKey, nextAfterSend, onClick, onOpen, parseFlowJobId, secondAddressStartAt, withFooter,
   type Click, type FlowKey, type Track,
 } from "../services/flows/flowEngine";
 import { pgiMarketingHeld } from "../lib/pgiMarketingHold";
@@ -246,9 +246,9 @@ export async function sendDue(db: Db, deps: FlowDeps, now: Date): Promise<{ sent
   const out = { sent: 0, failed: 0, stopped: 0 };
   if (!isSendableAt(now, FLOW_WINDOW)) return out;
   const due = await db.query(
-    `SELECT m.id, m.flow_id, m.contact_id, m.email, m.track, m.next_key, m.failures,
+    `SELECT m.id, m.flow_id, m.contact_id, m.email, m.track, m.next_key, m.failures, m.round,
             f.name AS flow_name, f.emails, f.from_name, f.reply_to, f.link_url, f.booking_url,
-            c.first_name, c.full_name, c.organization_name, c.email AS contact_email
+            c.first_name, c.full_name, c.organization_name, c.email AS contact_email, c.secondary_email
        FROM bi_flow_members m
        JOIN bi_flows f ON f.id = m.flow_id AND f.status = 'active'
        LEFT JOIN bi_contacts c ON c.id = m.contact_id
@@ -262,7 +262,9 @@ export async function sendDue(db: Db, deps: FlowDeps, now: Date): Promise<{ sent
   };
   for (const row of due.rows) {
     const key = row.next_key as string;
-    const to = String(row.contact_email ?? "").trim();
+    // BI_SERVER_FLOW_SECOND_ADDRESS_v1 - the second round goes to the address it was started on.
+    const round = Number(row.round ?? 1);
+    const to = String((round >= 2 ? row.email : row.contact_email) ?? "").trim();
     if (!to || !to.includes("@")) { await stop(row.id, "no_email"); continue; }
     if (await suppressed(db, row.contact_id, to)) { await stop(row.id, "unsubscribed_or_bounced"); continue; }
     const content = isFlowKey(key) ? (row.emails ?? {})[key] : null;
@@ -309,8 +311,32 @@ export async function sendDue(db: Db, deps: FlowDeps, now: Date): Promise<{ sent
       [row.contact_id],
     ).catch(() => undefined);
     out.sent += 1;
+    if (!next && endsFirstRoundUnopened(key as FlowKey, row.track as Track, round)) await startSecondRound(db, row, to, now);
   }
   return out;
+}
+
+/** BI_SERVER_FLOW_SECOND_ADDRESS_v1 - four weeks with no open on the first address: if the contact has a different second
+ *  address (not already in this flow), the flow starts again at "e1" on it, a week after the last email. Once only;
+ *  unsubscribes and bounces are still checked at each send. */
+export async function startSecondRound(db: Db, row: { id: string; flow_id: string; contact_id: string; flow_name?: string; secondary_email?: string | null }, firstAddress: string, now: Date): Promise<boolean> {
+  const second = String(row.secondary_email ?? "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(second) || second === firstAddress.trim().toLowerCase()) return false;
+  const taken = await db.query(`SELECT 1 FROM bi_flow_members WHERE flow_id = $1 AND lower(email) = $2 AND id <> $3 LIMIT 1`, [row.flow_id, second, row.id]);
+  if (taken.rowCount) return false;
+  await db.query(
+    `UPDATE bi_flow_members
+        SET round = 2, email = $2, prior_keys = prior_keys || sent_keys, sent_keys = ARRAY[]::text[], track = 'none',
+            next_key = 'e1', next_at = $3, status = 'active', updated_at = $4
+      WHERE id = $1 AND round < 2`,
+    [row.id, second, secondAddressStartAt(now), now],
+  );
+  await db.query(
+    `INSERT INTO bi_contact_activity (id, contact_id, actor_id, actor_name, event_type, outcome, body, meta)
+     VALUES (gen_random_uuid(), $1, NULL, 'Email flow', 'note', 'second_address', $2, $3::jsonb)`,
+    [row.contact_id, `No opens on ${firstAddress} after four weeks. The "${row.flow_name ?? "email"}" flow starts again at ${second}.`, JSON.stringify({ flow_id: row.flow_id })],
+  ).catch((err: unknown) => logger.warn({ err: (err as Error)?.message, memberId: row.id }, "flow.worker.activity_failed"));
+  return true;
 }
 
 export async function runFlowTick(db: Db, deps: FlowDeps, now = new Date(), pollReplies = true): Promise<Record<string, number>> {
