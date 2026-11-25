@@ -13,9 +13,6 @@ const KINDS: Kind[] = [
   { path: "/v3/suppression/spam_reports", reason: "sendgrid_spam_report" },
   // only permanent bounces (5.x.x); temporary ones are not a reason to stop writing to someone
   { path: "/v3/suppression/bounces", reason: "sendgrid_bounce", keep: (r) => /^5\./.test(String(r?.status ?? "5.")) },
-  // BI_SERVER_UNIVERSAL_SUPPRESSION_v1 - flows unsubscribe people from an email-preferences group, not globally, so a
-  // group unsubscribe (from any business on the shared SendGrid account) is a do-not-email too.
-  { path: "/v3/asm/suppressions", reason: "sendgrid_group_unsubscribe" },
 ];
 const PAGE = 500;
 
