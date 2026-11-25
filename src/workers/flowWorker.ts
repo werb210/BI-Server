@@ -365,9 +365,56 @@ export async function startSecondRound(db: Db, row: { id: string; flow_id: strin
   return true;
 }
 
+/** BI_SERVER_RESTART_AWAY_v1 - before out-of-office replies stopped being treated as answers (2026-11-25), some people's
+ *  emails were stopped by one. Once: read the replies again and put anyone stopped only by an out-of-office back where
+ *  they were (the next email in their path, or done if they had had them all). */
+export async function restartAwayMembers(db: Db, deps: FlowDeps, now: Date): Promise<number> {
+  if (!deps.replies) return 0;
+  const claim = await db.query(`INSERT INTO bi_one_time_jobs (name) VALUES ('restart_away_v1') ON CONFLICT (name) DO NOTHING RETURNING name`);
+  if (!claim.rowCount) return 0;
+  const fromBox = String(biSendgridFrom() ?? "").trim().toLowerCase();
+  const boxes = await db.query(
+    `SELECT DISTINCT lower(btrim(coalesce(nullif(btrim(f.reply_to), ''), $1))) AS mailbox FROM bi_flows f WHERE f.status = 'active'
+     UNION SELECT $1 WHERE $1 <> ''`, [fromBox]);
+  const away = new Set<string>();
+  for (const b of boxes.rows as Array<{ mailbox: string }>) {
+    if (!b.mailbox) continue;
+    try {
+      const res = await deps.replies(b.mailbox, new Date(now.getTime() - 14 * 86_400_000));
+      for (const rep of res.replies) if (rep.auto_reply && !rep.left) away.add(String(rep.from).toLowerCase());
+    } catch (err) {
+      logger.warn({ mailbox: b.mailbox, err: (err as Error)?.message }, "flow.worker.restart_away_read_failed");
+    }
+  }
+  let restarted = 0;
+  for (const email of away) {
+    const rows = await db.query(
+      `SELECT id, contact_id, track, sent_keys, last_sent_at FROM bi_flow_members WHERE lower(email) = $1 AND status = 'stopped' AND stop_reason = 'replied'`, [email]);
+    for (const m of rows.rows as Array<{ id: string; contact_id: string; track: Track; sent_keys: string[]; last_sent_at: Date | null }>) {
+      const last = (m.sent_keys ?? []).at(-1);
+      const next = last && isFlowKey(last) && m.last_sent_at ? nextAfterSend(last, m.track, new Date(m.last_sent_at)) : null;
+      const at = next ? new Date(Math.max(next.at.getTime(), now.getTime())) : null;
+      await db.query(
+        `UPDATE bi_flow_members SET status = $2, stop_reason = NULL, next_key = $3, next_at = $4, updated_at = now() WHERE id = $1`,
+        [m.id, next ? "active" : "done", next?.key ?? null, at],
+      );
+      await db.query(
+        `INSERT INTO bi_contact_activity (id, contact_id, actor_id, actor_name, event_type, outcome, body, meta)
+         VALUES (gen_random_uuid(), $1, NULL, 'Email flow', 'note', 'restarted', $2, '{}'::jsonb)`,
+        [m.contact_id, "Their emails were stopped by an out-of-office reply; they carry on where they left off."],
+      ).catch((err: unknown) => logger.warn({ err: (err as Error)?.message }, "flow.worker.restart_note_failed"));
+      restarted += 1;
+    }
+  }
+  await db.query(`UPDATE bi_one_time_jobs SET done_at = now(), result = $1::jsonb WHERE name = 'restart_away_v1'`, [JSON.stringify({ away: away.size, restarted })]);
+  logger.info({ away: away.size, restarted }, "flow.worker.restart_away_done");
+  return restarted;
+}
+
 export async function runFlowTick(db: Db, deps: FlowDeps, now = new Date(), pollReplies = true): Promise<Record<string, number>> {
   if (pgiMarketingHeld()) return { held: 1 }; // BI_SERVER_PGI_MARKETING_HOLD_v1
   const replied = pollReplies ? (await stopRepliedMembers(db, deps, now)).stopped : 0;
+  if (pollReplies) await restartAwayMembers(db, deps, now).catch((err) => logger.warn({ err: (err as Error)?.message }, "flow.worker.restart_away_failed"));
   const events = await ingestEvents(db);
   const tasks = await createCallTasks(db, deps);
   // BI_SERVER_FLOWS_AUTO_ADD_v1 - new people who match a running flow join it by themselves, once an hour.
