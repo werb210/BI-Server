@@ -22,8 +22,10 @@ export type FlowDeps = {
   attachments?: (ids: unknown) => Promise<FlowAttachment[]>;
   task: (assigneeUserId: string, title: string, notes: string) => Promise<{ ok: boolean; error?: string }>;
   /** Who has emailed this mailbox since a time (BF-Server reads the connected Microsoft 365 mailbox). */
-  replies?: (mailbox: string, since: Date) => Promise<{ connected: boolean; replies: Array<{ from: string; at: string }> }>;
+  replies?: (mailbox: string, since: Date) => Promise<{ connected: boolean; replies: FlowReply[] }>;
 };
+// BI_SERVER_AUTO_REPLY_REFERRALS_v1 - an auto-reply can say the person has left and name colleagues to contact instead.
+export type FlowReply = { from: string; at: string; auto_reply?: boolean; left?: boolean; referrals?: Array<{ email: string; name: string | null; phone: string | null }> };
 const liveDeps: FlowDeps = {
   send: (m) => sendBiMarketingEmail(m),
   attachments: (ids) => loadAttachments(ids),
@@ -34,7 +36,7 @@ const liveDeps: FlowDeps = {
     const r = await fetch(`${base}/api/service/mail/replies?mailbox=${encodeURIComponent(mailbox)}&since=${encodeURIComponent(since.toISOString())}`,
       { headers: { "X-Backend-Token": token, "X-Silo": "BI" }, signal: AbortSignal.timeout(30_000) });
     if (!r.ok) throw new Error(`BF-Server replies ${r.status}`);
-    const j = (await r.json()) as { connected?: boolean; replies?: Array<{ from: string; at: string }> };
+    const j = (await r.json()) as { connected?: boolean; replies?: FlowReply[] };
     return { connected: Boolean(j.connected), replies: Array.isArray(j.replies) ? j.replies : [] };
   },
 };
@@ -58,6 +60,7 @@ export async function stopRepliedMembers(db: Db, deps: FlowDeps, now: Date): Pro
     catch (err) { logger.warn({ mailbox: b.mailbox, err: (err as Error)?.message }, "flow.worker.replies_failed"); continue; }
     out.mailboxes[b.mailbox] = res.connected;
     for (const rep of res.replies) {
+      if (rep.auto_reply) await addReferrals(db, rep);
       const r = await db.query(
         `UPDATE bi_flow_members m SET status = 'stopped', stop_reason = 'replied', next_key = NULL, next_at = NULL, updated_at = now()
            FROM bi_flows f
@@ -77,6 +80,42 @@ export async function stopRepliedMembers(db: Db, deps: FlowDeps, now: Date): Pro
     }
   }
   return out;
+}
+/** BI_SERVER_AUTO_REPLY_REFERRALS_v1 - the colleagues an auto-reply names become contacts at the same company, with the
+ *  same tags, so they join the same flow on the next hourly pass. A sender who has left gets a note and is taken off
+ *  outreach (they will not read it); nobody is unsubscribed. */
+export async function addReferrals(db: Db, rep: FlowReply): Promise<number> {
+  const src = await db.query(
+    `SELECT id, company_id, tags, country, full_name FROM bi_contacts WHERE lower(btrim(email)) = $1 ORDER BY created_at LIMIT 1`, [rep.from]);
+  const orig = src.rows[0];
+  if (!orig) return 0;
+  let added = 0;
+  for (const ref of (rep.referrals ?? []).slice(0, 5)) {
+    const exists = await db.query(`SELECT 1 FROM bi_contacts WHERE lower(btrim(email)) = $1 LIMIT 1`, [ref.email]);
+    if (exists.rowCount) continue;
+    const name = ref.name || ref.email.split("@")[0]!.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    const parts = name.split(/\s+/);
+    const tags = Array.from(new Set([...(orig.tags ?? []), "referred by auto-reply"]));
+    const ins = await db.query(
+      `INSERT INTO bi_contacts (full_name, first_name, last_name, email, phone_e164, company_id, tags, country, notes, source_first, outreach_status, outreach_updated_at)
+       VALUES ($1, $2, $3, $4, NULL, $5, $6::text[], $7, $8, 'auto-reply referral', 'cold', now()) RETURNING id`,
+      [name, parts[0] ?? null, parts.slice(1).join(" ") || null, ref.email, orig.company_id, tags, orig.country,
+        `Named in ${orig.full_name ?? rep.from}'s automatic reply${ref.phone ? ` (phone given: ${ref.phone})` : ""}.`],
+    );
+    added += ins.rowCount ?? 0;
+  }
+  const note = rep.left
+    ? `Automatic reply says they have left${added ? `; added ${added} colleague(s) it named` : ""}. Taken off outreach.`
+    : added ? `Automatic reply named ${added} colleague(s); they were added as contacts.` : null;
+  if (rep.left) await db.query(`UPDATE bi_contacts SET outreach_excluded = TRUE, outreach_updated_at = now() WHERE id = $1`, [orig.id]);
+  if (note) {
+    await db.query(
+      `INSERT INTO bi_contact_activity (id, contact_id, actor_id, actor_name, event_type, outcome, body, meta)
+       VALUES (gen_random_uuid(), $1, NULL, 'Email flow', 'note', 'auto_reply', $2, $3::jsonb)`,
+      [orig.id, note, JSON.stringify({ at: rep.at, referrals: rep.referrals ?? [] })],
+    ).catch((err: unknown) => logger.warn({ err: (err as Error)?.message }, "flow.worker.referral_note_failed"));
+  }
+  return added;
 }
 const LOCK_KEY = 772_031_951; // any fixed number; only this worker uses it
 const MAX_FAILURES = 3;
