@@ -16,6 +16,7 @@ console.log(JSON.stringify({
   port_env: process.env.PORT || "(unset, default 8080)",
 }));
 
+import { startBrmUnsubscribeMove } from "./workers/brmUnsubscribeMove"; // BI_SERVER_MOVE_BRM_UNSUBSCRIBES_v1
 import app, { bootstrap } from "./server";
 import { env } from "./platform/env";
 import { logger } from "./platform/logger";
@@ -67,6 +68,7 @@ const server = app.listen(port, "0.0.0.0", () => {
     ["sendgridSuppressionSync", startSendgridSuppressionSync],
     ["abandonedApplicationNudge", startAbandonedApplicationNudge], // BI_SERVER_ABANDONED_NUDGE_v1
     ["biSendWorker", () => startBiSendWorker(pool)],
+    ["brmUnsubscribeMove", () => startBrmUnsubscribeMove(pool)], // BI_SERVER_MOVE_BRM_UNSUBSCRIBES_v1 - runs once
   ] as const) {
     try { fn(); } catch (err) {
       logger.error({ worker: name, err: err instanceof Error ? err.message : String(err) }, "BI worker start failed (non-blocking)");
