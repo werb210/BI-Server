@@ -164,9 +164,12 @@ router.get("/flows-diagnostics", wrap(async (req, res) => {
           AND EXISTS (SELECT 1 FROM unnest(COALESCE(c.tags, '{}')) t WHERE lower(btrim(t)) LIKE 'lender%' OR lower(btrim(t)) LIKE 'broker%'))
      SELECT lb.kind, lb.excluded, coalesce(s.reason, 'none') AS reason, count(DISTINCT lb.id)::int AS people
        FROM lb
-       LEFT JOIN LATERAL (SELECT s.reason FROM bi_suppressions s
-                           WHERE s.channel IN ('email', 'all') AND (s.contact_id = lb.id OR lower(s.email) = lb.email OR lower(s.identifier) = lb.email)
-                           LIMIT 1) s ON true
+       -- BI_SERVER_FLOWS_DIAGNOSTICS_FAST_v1 - two plain joins instead of a per-row OR lookup (that ran past the 10 s limit).
+       LEFT JOIN (SELECT DISTINCT ON (contact_id) contact_id, reason FROM bi_suppressions
+                   WHERE channel IN ('email', 'all') AND contact_id IS NOT NULL ORDER BY contact_id, created_at) sc ON sc.contact_id = lb.id
+       LEFT JOIN (SELECT DISTINCT ON (e) e, reason FROM (SELECT lower(btrim(coalesce(email, identifier))) AS e, reason, created_at FROM bi_suppressions
+                   WHERE channel IN ('email', 'all')) x WHERE e IS NOT NULL ORDER BY e, created_at) se ON se.e = lb.email
+       CROSS JOIN LATERAL (SELECT coalesce(sc.reason, se.reason) AS reason) s
       GROUP BY 1, 2, 3 ORDER BY 1, 4 DESC`,
   );
   res.json({ ok: true, rows: r.rows });
