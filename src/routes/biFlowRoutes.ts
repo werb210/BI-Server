@@ -33,20 +33,8 @@ const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Re
   });
 };
 
-const US_SQL = `(lower(btrim(coalesce(c.country, ''))) IN ('us', 'usa', 'united states', 'united states of america')
-  OR EXISTS (SELECT 1 FROM unnest(coalesce(c.tags, '{}')) t WHERE lower(btrim(t)) LIKE 'us %'))`;
-/** Who a flow is for: people tagged lender / broker, in the flow's country, with an email we may still write to. */
-export function audienceSql(market: string): string {
-  const marketSql = market === "US" ? `AND ${US_SQL}` : market === "CA" ? `AND NOT ${US_SQL}` : "";
-  return `
-    FROM bi_contacts c
-   WHERE c.email IS NOT NULL AND position('@' in c.email) > 1
-     AND COALESCE(c.outreach_excluded, false) = false
-     AND EXISTS (SELECT 1 FROM unnest(coalesce(c.tags, '{}')) t WHERE lower(btrim(t)) LIKE $1 || '%')
-     ${marketSql}
-     AND NOT EXISTS (SELECT 1 FROM bi_suppressions s
-                      WHERE (lower(s.email) = lower(c.email) OR lower(s.identifier) = lower(c.email) OR s.contact_id = c.id) AND s.channel IN ('email', 'all'))`;
-}
+import { audienceSql, addFlowAudience } from "../services/flows/flowAudience"; // BI_SERVER_FLOWS_AUTO_ADD_v1
+export { audienceSql };
 
 const COUNTS_SQL = `
   SELECT f.id, f.name, f.preset, f.audience, f.market, f.status, f.daily_new, f.from_name, f.reply_to, f.owner_user_id, f.owner_name,
@@ -158,15 +146,29 @@ router.post("/flows/:id/audience", wrap(async (req, res) => {
   if (!UUID.test(String(req.params.id))) return res.status(404).json({ ok: false, error: "not_found" });
   const f = await pool.query(`SELECT audience, market FROM bi_flows WHERE id = $1 AND status <> 'archived'`, [req.params.id]);
   if (!f.rowCount) return res.status(404).json({ ok: false, error: "not_found" });
+  const added = await addFlowAudience(pool, String(req.params.id), f.rows[0].audience, f.rows[0].market);
+  res.json({ ok: true, added });
+}));
+
+// BI_SERVER_FLOWS_AUTO_ADD_v1 - why lenders and brokers with an email are not in the flows: how many are excluded from
+// outreach, and how many are suppressed, by reason.
+router.get("/flows-diagnostics", wrap(async (req, res) => {
+  if (!adminOnly(req, res)) return;
   const r = await pool.query(
-    `INSERT INTO bi_flow_members (flow_id, contact_id, email)
-     SELECT DISTINCT ON (lower(c.email)) $2::uuid, c.id, lower(btrim(c.email)) ${audienceSql(f.rows[0].market)}
-        AND NOT EXISTS (SELECT 1 FROM bi_flow_members m WHERE m.flow_id = $2 AND lower(m.email) = lower(btrim(c.email)))
-      ORDER BY lower(c.email), c.created_at
-     ON CONFLICT (flow_id, contact_id) DO NOTHING`,
-    [f.rows[0].audience, req.params.id],
+    `WITH lb AS (
+       SELECT c.id, lower(btrim(c.email)) AS email, COALESCE(c.outreach_excluded, false) AS excluded,
+              CASE WHEN EXISTS (SELECT 1 FROM unnest(COALESCE(c.tags, '{}')) t WHERE lower(btrim(t)) LIKE 'lender%') THEN 'lender' ELSE 'broker' END AS kind
+         FROM bi_contacts c
+        WHERE c.email IS NOT NULL AND position('@' in c.email) > 1
+          AND EXISTS (SELECT 1 FROM unnest(COALESCE(c.tags, '{}')) t WHERE lower(btrim(t)) LIKE 'lender%' OR lower(btrim(t)) LIKE 'broker%'))
+     SELECT lb.kind, lb.excluded, coalesce(s.reason, 'none') AS reason, count(DISTINCT lb.id)::int AS people
+       FROM lb
+       LEFT JOIN LATERAL (SELECT s.reason FROM bi_suppressions s
+                           WHERE s.channel IN ('email', 'all') AND (s.contact_id = lb.id OR lower(s.email) = lb.email OR lower(s.identifier) = lb.email)
+                           LIMIT 1) s ON true
+      GROUP BY 1, 2, 3 ORDER BY 1, 4 DESC`,
   );
-  res.json({ ok: true, added: r.rowCount ?? 0 });
+  res.json({ ok: true, rows: r.rows });
 }));
 
 router.post("/flows/:id/test", wrap(async (req, res) => {
