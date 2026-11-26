@@ -96,6 +96,15 @@ export async function stopRepliedMembers(db: Db, deps: FlowDeps, now: Date): Pro
 /** BI_SERVER_AUTO_REPLY_REFERRALS_v1 - the colleagues an auto-reply names become contacts at the same company, with the
  *  same tags, so they join the same flow on the next hourly pass. A sender who has left gets a note and is taken off
  *  outreach (they will not read it); nobody is unsubscribed. */
+/** BI_SERVER_REFERRAL_PHONES_v1 - a North American number from an auto-reply ("(985) 249-7258", "504-565-3654") as
+ *  +19852497258; anything else is kept only in the note. */
+export function referralPhone(raw: unknown): string | null {
+  const d = String(raw ?? "").replace(/\D/g, "");
+  if (d.length === 10 && /^[2-9]/.test(d)) return `+1${d}`;
+  if (d.length === 11 && d.startsWith("1") && /^1[2-9]/.test(d)) return `+${d}`;
+  return null;
+}
+
 export async function addReferrals(db: Db, rep: FlowReply): Promise<number> {
   const src = await db.query(
     `SELECT id, company_id, tags, country, full_name, COALESCE(outreach_excluded, false) AS excluded FROM bi_contacts WHERE lower(btrim(email)) = $1 ORDER BY created_at LIMIT 1`, [rep.from]);
@@ -123,9 +132,9 @@ export async function addReferrals(db: Db, rep: FlowReply): Promise<number> {
     const tags = Array.from(new Set([...(orig.tags ?? []), "referred by auto-reply"]));
     const ins = await db.query(
       `INSERT INTO bi_contacts (full_name, first_name, last_name, email, phone_e164, company_id, tags, country, notes, source_first, outreach_status, outreach_updated_at)
-       VALUES ($1, $2, $3, $4, NULL, $5, $6::text[], $7, $8, 'auto-reply referral', 'cold', now()) RETURNING id`,
+       VALUES ($1, $2, $3, $4, $9, $5, $6::text[], $7, $8, 'auto-reply referral', 'cold', now()) RETURNING id`,
       [name, parts[0] ?? null, parts.slice(1).join(" ") || null, ref.email, orig.company_id, tags, orig.country,
-        `Named in ${orig.full_name ?? rep.from}'s automatic reply${ref.phone ? ` (phone given: ${ref.phone})` : ""}.`],
+        `Named in ${orig.full_name ?? rep.from}'s automatic reply${ref.phone ? ` (phone given: ${ref.phone})` : ""}.`, referralPhone(ref.phone)],
     );
     added += ins.rowCount ?? 0;
   }
