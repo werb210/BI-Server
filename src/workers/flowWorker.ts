@@ -3,6 +3,7 @@
 // Both deployment slots run this worker, so a tick only works while it holds a database advisory lock.
 import type { Pool, PoolClient } from "pg";
 import { pool as defaultPool } from "../db";
+import { greetingName } from "../services/personName";
 import { logger } from "../platform/logger";
 import { isSendableAt } from "../services/sequenceSchedule";
 import { biSendgridFrom, mergeFields, sendBiMarketingEmail, sendgridConfigured } from "../services/biSendgridService";
@@ -306,7 +307,7 @@ export async function sendDue(db: Db, deps: FlowDeps, now: Date): Promise<{ sent
     if (!content?.subject || !content?.body) { await stop(row.id, "no_email_wording"); continue; }
     const full = String(row.full_name ?? "").trim();
     const merge = {
-      first_name: String(row.first_name ?? "").trim() || full.split(/\s+/)[0] || "there",
+      first_name: greetingName(row.first_name, full, row.organization_name), // BI_SERVER_PERSON_NAMES_v1 - never "Hi Dir." or "Hi (general"
       full_name: full, name: full, company: String(row.organization_name ?? "").trim() || "your firm",
       link: String(row.link_url ?? ""), booking_link: String(row.booking_url ?? ""), email: to,
     };
