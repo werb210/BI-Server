@@ -8,6 +8,7 @@
 import express, { type Request, type Response } from "express";
 import { pool } from "../db";
 import { requireAuth } from "../platform/auth";
+import { splitNameTitle } from "../services/personName"; // BI_SERVER_PERSON_NAMES_v1
 import { logger } from "../platform/logger";
 import { isCompanySuppressed } from "../services/biCrmSuppression";
 
@@ -99,10 +100,15 @@ router.post("/crm/list-import", requireAuth, async (req: Request, res: Response)
   }
 
   for (const r of contacts) {
-    const fullName = text(r?.name, 200);
+    // BI_SERVER_PERSON_NAMES_v1 - a title in the name column becomes the title; a row naming no person keeps its email
+    // under the company's name, with no first name, so emails greet it as "there".
+    const cleaned = splitNameTitle(text(r?.name, 200), text(r?.job_title, 200));
+    const email0 = text(r?.email, 320);
+    const noPerson = !cleaned.name;
+    const fullName = cleaned.name ?? (email0 ? (text(r?.company_name, 200) ?? email0) : null);
     if (!fullName) { fail("contact", "", "missing_name"); continue; }
     try {
-      const email = text(r.email, 320);
+      const email = email0;
       if (email) {
         const supp = await pool.query(`SELECT 1 FROM bi_suppressions WHERE lower(email) = lower($1) LIMIT 1`, [email]);
         if (supp.rows.length) { fail("contact", fullName, "suppressed"); continue; }
@@ -118,7 +124,7 @@ router.post("/crm/list-import", requireAuth, async (req: Request, res: Response)
       const numbers = [main ? { type: "work", number: main.number, ...(main.extension ? { extension: main.extension } : {}) } : null, mobile ? { type: "mobile", number: mobile.number } : null].filter(Boolean);
       const tags = listTags(r.tags);
       const custom = listCustom(r.custom_fields);
-      const parts = fullName.split(/\s+/);
+      const parts = noPerson ? [] : fullName.split(/\s+/);
       const noteLines = [text(r.notes, 4000), main?.extension ? `Extension ${main.extension}` : null].filter(Boolean).join("\n") || null;
 
       let existing = email ? (await pool.query<{ id: string }>(`SELECT id FROM bi_contacts WHERE lower(email) = lower($1) LIMIT 1`, [email])).rows[0] : undefined;
@@ -128,19 +134,19 @@ router.post("/crm/list-import", requireAuth, async (req: Request, res: Response)
             WHERE COALESCE(c.email, '') = '' AND lower(trim(c.full_name)) = lower($1)
               AND (lower(COALESCE(co.legal_name, '')) = lower($2) OR lower(COALESCE(c.organization_name, '')) = lower($2)) LIMIT 1`, [fullName, companyName])).rows[0];
       }
-      const vals = [fullName, email, main?.number ?? mobile?.number ?? null, companyId, text(r.job_title, 200), noteLines, tags, JSON.stringify(custom ?? {}),
+      const vals = [fullName, email, main?.number ?? mobile?.number ?? null, companyId, cleaned.title, noteLines, tags, JSON.stringify(custom ?? {}),
         companyName, text(r.address_city, 120), text(r.address_state, 120), country(r.address_country), JSON.stringify(numbers)];
       let contactId: string;
       if (existing) {
         contactId = existing.id;
         await pool.query(
-          `UPDATE bi_contacts SET full_name = $2, email = COALESCE($3, email), phone_e164 = COALESCE($4, phone_e164), company_id = COALESCE($5, company_id),
+          `UPDATE bi_contacts SET full_name = CASE WHEN $15::boolean THEN full_name ELSE $2 END, email = COALESCE($3, email), phone_e164 = COALESCE($4, phone_e164), company_id = COALESCE($5, company_id),
               title = COALESCE($6, title), notes = COALESCE(notes, $7),
               tags = (SELECT ARRAY(SELECT DISTINCT unnest(COALESCE(bi_contacts.tags, '{}'::text[]) || $8::text[]))),
               custom_fields = COALESCE(custom_fields, '{}'::jsonb) || $9::jsonb, organization_name = COALESCE($10, organization_name),
               city = COALESCE($11, city), state = COALESCE($12, state), country = COALESCE($13, country),
               phone_numbers = CASE WHEN jsonb_array_length($14::jsonb) > 0 THEN $14::jsonb ELSE phone_numbers END, updated_at = NOW()
-            WHERE id = $1`, [contactId, ...vals]);
+            WHERE id = $1`, [contactId, ...vals, noPerson]);
         out.contacts_updated++;
       } else {
         const ins = await pool.query<{ id: string }>(

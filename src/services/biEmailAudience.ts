@@ -1,3 +1,4 @@
+import { greetingName } from "./personName";
 // BI_AUDIENCE_TAG_CASE_v33
 // The tag filter compared with the array-overlap operator:
 //
@@ -77,9 +78,10 @@ export function buildAudienceBreakdownSql(): string {
 // company stays empty on purpose: "Hi there" reads fine, "at there" does not.
 export function contactMergeVars(contact: Record<string, unknown>): Record<string, string> {
   const fullName = String(contact.full_name ?? "").trim();
-  const firstName = fullName.split(/\s+/)[0] || "";
+  // BI_SERVER_PERSON_NAMES_v1 - never greet a job title, placeholder or company name.
+  const firstName = greetingName(contact.first_name as string | null, fullName, (contact.organization_name ?? contact.company) as string | null);
   return {
-    first_name: firstName || "there",
+    first_name: firstName,
     full_name: fullName || "there",
     email: String(contact.email ?? ""),
     company: String(contact.company ?? ""),
