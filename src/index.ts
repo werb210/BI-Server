@@ -24,6 +24,7 @@ import { logger } from "./platform/logger";
 import { pool } from "./db";
 import { startMarketingWorker } from "./workers/marketingWorker";
 import { startFlowWorker } from "./workers/flowWorker"; // BI_SERVER_EMAIL_FLOWS_v1
+import { startEngagementWorker } from "./workers/engagementWorker"; // BI_SERVER_ENGAGEMENT_v1
 import { startBiSendWorker } from "./services/biMarketingSendRunner";
 import { startAbandonedApplicationNudge } from "./workers/abandonedApplicationNudge"; // BI_SERVER_ABANDONED_NUDGE_v1
 import { startMailboxHealthRollup } from "./workers/mailboxHealthRollup";
@@ -65,6 +66,7 @@ const server = app.listen(port, "0.0.0.0", () => {
   } else for (const [name, fn] of [
     ["marketingWorker",     startMarketingWorker],
     ["flowWorker", () => startFlowWorker()],
+    ["engagementWorker", () => startEngagementWorker()],
     ["mailboxHealthRollup", startMailboxHealthRollup],
     ["sendgridSuppressionSync", startSendgridSuppressionSync],
     ["abandonedApplicationNudge", startAbandonedApplicationNudge], // BI_SERVER_ABANDONED_NUDGE_v1

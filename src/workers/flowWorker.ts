@@ -15,6 +15,7 @@ import { pgiMarketingHeld } from "../lib/pgiMarketingHold";
 import { loadAttachments, type FlowAttachment } from "../services/flows/flowAttachments";
 import { createTask } from "./marketingWorker";
 import { addRunningAudiences } from "../services/flows/flowAudience"; // BI_SERVER_FLOWS_AUTO_ADD_v1
+import { recordReply } from "../services/engagement/engagement"; // BI_SERVER_ENGAGEMENT_v1
 
 type Db = Pick<Pool, "query"> | Pick<PoolClient, "query">;
 export type FlowDeps = {
@@ -26,7 +27,7 @@ export type FlowDeps = {
   replies?: (mailbox: string, since: Date) => Promise<{ connected: boolean; replies: FlowReply[] }>;
 };
 // BI_SERVER_AUTO_REPLY_REFERRALS_v1 - an auto-reply can say the person has left and name colleagues to contact instead.
-export type FlowReply = { from: string; at: string; auto_reply?: boolean; left?: boolean; referrals?: Array<{ email: string; name: string | null; phone: string | null }> };
+export type FlowReply = { from: string; at: string; subject?: string; snippet?: string; mailbox?: string; auto_reply?: boolean; left?: boolean; referrals?: Array<{ email: string; name: string | null; phone: string | null }> };
 const liveDeps: FlowDeps = {
   send: (m) => sendBiMarketingEmail(m),
   attachments: (ids) => loadAttachments(ids),
@@ -84,6 +85,9 @@ export async function stopRepliedMembers(db: Db, deps: FlowDeps, now: Date): Pro
       );
       for (const row of r.rows) {
         out.stopped += 1;
+        // BI_SERVER_ENGAGEMENT_v1 - the reply goes on the follow-up queue with what kind of reply it is.
+        await recordReply(db as any, { contactId: row.contact_id, at: new Date(rep.at), subject: rep.subject ?? null, body: rep.snippet ?? null, mailbox: b.mailbox })
+          .catch((err: unknown) => logger.warn({ err: (err as Error)?.message }, "flow.worker.engagement_reply_failed"));
         await db.query(
           `INSERT INTO bi_contact_activity (id, contact_id, actor_id, actor_name, event_type, outcome, body, meta)
            VALUES (gen_random_uuid(), $1, NULL, 'Email flow', 'note', 'replied', $2, $3::jsonb)`,
