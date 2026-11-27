@@ -27,6 +27,9 @@ export function firstRealClick(events: Array<{ job_id: string; event_type: strin
 }
 
 export async function reclassifyRobotClicks(db: Db): Promise<{ checked: number; removed: number }> {
+  // BI_SERVER_FLOW_COUNTS_MATCH_v1 - a member marked "clicked" with no real click on record is not a clicker.
+  await db.query(`UPDATE bi_flow_members SET track = CASE WHEN opened_at IS NOT NULL THEN 'opened' ELSE 'none' END, updated_at = now()
+                   WHERE track = 'clicked' AND clicked_at IS NULL`);
   const done = await db.query(`SELECT 1 FROM bi_engagement_settings WHERE key = 'robot_clicks_v2'`);
   if (done.rowCount) return { checked: 0, removed: 0 };
   const members = await db.query(`SELECT id, flow_id::text AS flow_id, contact_id::text AS contact_id, opened_at FROM bi_flow_members WHERE clicked_at IS NOT NULL`);
