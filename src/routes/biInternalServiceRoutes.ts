@@ -137,7 +137,8 @@ router.get("/engagement/digest", async (req: Request, res: Response) => {
     const { digestFor } = await import("../services/engagement/engagement");
     const owner = String(req.query.owner ?? "").trim();
     if (!owner) return res.status(400).json({ ok: false, error: "owner_required" });
-    res.json({ ok: true, digest: await digestFor(pool, owner) });
+    const { getSettings } = await import("../services/engagement/engagement");
+    res.json({ ok: true, enabled: (await getSettings(pool)).digest, digest: await digestFor(pool, owner) });
   } catch (err) { res.status(500).json({ ok: false, error: "engagement_digest_failed", requestId: logHiddenError(req, err, "engagement_digest_failed") }); }
 });
 router.get("/engagement/owners", async (req: Request, res: Response) => {
