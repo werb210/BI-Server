@@ -124,9 +124,9 @@ describe.skipIf(!process.env.DATABASE_URL)("PGI engagement tracking (real DB)", 
     const q2 = await request(app).get("/api/v1/bi/engagement/queue").set("Authorization", `Bearer ${admin()}`).expect(200);
     expect(q2.body.items.length).toBe(0);
     const board = await request(app).get("/api/v1/bi/engagement/board").set("Authorization", `Bearer ${admin()}`).expect(200);
-    expect(board.body.stages.find((s: any) => s.key === "met").count).toBe(1);
+    expect(board.body.stages.find((s: any) => s.key === "initial_call").count).toBe(1);
     const f = await request(app).get("/api/v1/bi/engagement/funnel").set("Authorization", `Bearer ${admin()}`).expect(200);
-    expect(f.body.total).toMatchObject({ sent: 2, clicked: 2, booked: 1, met: 1 });
+    expect(f.body.total).toMatchObject({ sent: 2, clicked: 2, initial_call: 1 });
     const d = await request(app).get(`/api/v1/bi/engagement/contacts/${a.id}`).set("Authorization", `Bearer ${admin()}`).expect(200);
     expect(d.body.contact.events.map((e: any) => e.kind)).toEqual(expect.arrayContaining(["booked", "met"]));
     const dg = await request(app).get("/api/v1/bi/internal/engagement/digest?owner=u2").set("Authorization", `Bearer ${service()}`).expect(200);
@@ -153,5 +153,49 @@ describe.skipIf(!process.env.DATABASE_URL)("PGI engagement tracking (real DB)", 
     }
     const e = (await pool.query(`SELECT stage FROM bi_engagement WHERE contact_id = $1`, [c.id])).rows[0];
     expect(e.stage).toBe("clicked");
+  });
+
+  // BI_SERVER_PIPELINE_v1
+  it("the pipeline: emails received, reply, staff answer, follow-up, booked call, demo, and back", async () => {
+    const co = await seedCompany({ legal_name: "Bank of Test" });
+    const c = await seedContact(co.id, { full_name: "Pat Lee", email: "pat@bank.test" });
+    const t0 = new Date(Date.now() - 10 * 86_400_000);
+    await flowWith(c.id, "pat@bank.test", { status: "active", first_sent_at: t0, opened_at: new Date(t0.getTime() + 3_600_000), sent_keys: ["e1", "o1"] });
+    const app = makeApp();
+    const stageOf = async () => { await syncEngagement(pool); return (await pool.query(`SELECT stage FROM bi_engagement WHERE contact_id = $1`, [c.id])).rows[0].stage; };
+    expect(await stageOf()).toBe("opened");
+    const meta = await request(app).get("/api/v1/bi/engagement/meta").set("Authorization", `Bearer ${admin()}`).expect(200);
+    expect(meta.body.stages.map((s: any) => s.label)).toEqual(["Emailed", "Opened", "Clicked", "Replied", "Staff responded", "Follow-up", "Initial call", "Demo", "Signed up", "Not interested"]);
+
+    await request(app).post("/api/v1/bi/internal/engagement/reply").set("Authorization", `Bearer ${service()}`)
+      .send({ email: "pat@bank.test", at: new Date(Date.now() - 6 * 86_400_000).toISOString(), subject: "RE: PGI", body: "Tell me more" }).expect(200);
+    expect(await stageOf()).toBe("replied");
+    let b = await request(app).get("/api/v1/bi/engagement/board?stage=replied").set("Authorization", `Bearer ${admin()}`).expect(200);
+    const card = b.body.stages[0].cards.find((x: any) => x.contact_id === c.id);
+    expect(card.replied_key).toBe("o1");
+    expect(card.sent_keys).toEqual(["e1", "o1"]);
+
+    // Staff answered from Outlook 5 days ago (BF-Server read the Sent Items) -> answered 3+ days ago = Follow-up.
+    await request(app).post("/api/v1/bi/internal/engagement/event").set("Authorization", `Bearer ${service()}`)
+      .send({ email: "pat@bank.test", kind: "responded", at: new Date(Date.now() - 5 * 86_400_000).toISOString(), mailbox: "andrew@boreal.financial" }).expect(200);
+    expect(await stageOf()).toBe("follow_up");
+    await request(app).post("/api/v1/bi/internal/engagement/event").set("Authorization", `Bearer ${service()}`)
+      .send({ email: "pat@bank.test", kind: "responded", at: new Date().toISOString() }).expect(200);
+    expect(await stageOf()).toBe("responded");
+    await request(app).post("/api/v1/bi/internal/engagement/reply").set("Authorization", `Bearer ${service()}`)
+      .send({ email: "pat@bank.test", at: new Date(Date.now() + 1000).toISOString(), body: "Thanks, what does it cost?" }).expect(200);
+    expect(await stageOf()).toBe("replied");
+
+    await request(app).post("/api/v1/bi/internal/engagement/event").set("Authorization", `Bearer ${service()}`).send({ email: "pat@bank.test", kind: "booked" }).expect(200);
+    expect(await stageOf()).toBe("initial_call");
+    await request(app).post(`/api/v1/bi/engagement/contacts/${c.id}/action`).set("Authorization", `Bearer ${admin()}`).send({ action: "demo" }).expect(200);
+    expect(await stageOf()).toBe("demo");
+    await request(app).post(`/api/v1/bi/engagement/contacts/${c.id}/action`).set("Authorization", `Bearer ${admin()}`).send({ action: "lost" }).expect(200);
+    expect(await stageOf()).toBe("lost");
+    await request(app).post(`/api/v1/bi/engagement/contacts/${c.id}/action`).set("Authorization", `Bearer ${admin()}`).send({ action: "auto" }).expect(200);
+    expect(await stageOf()).toBe("replied");
+    const f = await request(app).get("/api/v1/bi/engagement/funnel").set("Authorization", `Bearer ${admin()}`).expect(200);
+    expect(f.body.total).toMatchObject({ sent: 1, opened: 1, replied: 1, responded: 1 });
+    expect(f.body.leaks.unanswered).toBe(1);
   });
 });

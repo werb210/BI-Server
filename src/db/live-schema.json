@@ -6,7 +6,7 @@
     "newer than the baseline manifest (src/db/baseline/000000_baseline.files.txt).",
     "Regenerate after adding a migration: node scripts/generate-live-schema.mjs",
     "scripts/check-schema-drift.mjs fails when this file is stale.",
-    "Newer migrations folded in: 2026_09_27_v601_bi_applicant_passkeys.sql, 2026_10_09_v719_unstick_enrollments.sql, 2026_10_12_v789_audit2.sql, 2026_10_25_v856_crm_unify.sql, 2026_11_24_bi_custom_fields.sql, 2026_11_25_field_reps.sql, 2026_11_26_field_contact_audience.sql, 2026_11_27_field_rep_pin_sent.sql, 2026_12_10_field_rep_agreement.sql, 2026_12_11_pgi_limit_by_country.sql, 2026_12_12_bi_flows.sql, 2026_12_13_lenders_brokers_marketable.sql, 2026_12_14_crm_cleanup_ignores.sql, 2026_12_15_doc_catalog_no_underwriter.sql, 2026_12_16_lenders_brokers_marketable_v2.sql, 2026_12_19_flow_second_address.sql, 2026_12_20_one_time_jobs.sql, 2026_12_22_referral_phones.sql, 2026_12_24_bi_engagement.sql"
+    "Newer migrations folded in: 2026_09_27_v601_bi_applicant_passkeys.sql, 2026_10_09_v719_unstick_enrollments.sql, 2026_10_12_v789_audit2.sql, 2026_10_25_v856_crm_unify.sql, 2026_11_24_bi_custom_fields.sql, 2026_11_25_field_reps.sql, 2026_11_26_field_contact_audience.sql, 2026_11_27_field_rep_pin_sent.sql, 2026_12_10_field_rep_agreement.sql, 2026_12_11_pgi_limit_by_country.sql, 2026_12_12_bi_flows.sql, 2026_12_13_lenders_brokers_marketable.sql, 2026_12_14_crm_cleanup_ignores.sql, 2026_12_15_doc_catalog_no_underwriter.sql, 2026_12_16_lenders_brokers_marketable_v2.sql, 2026_12_19_flow_second_address.sql, 2026_12_20_one_time_jobs.sql, 2026_12_22_referral_phones.sql, 2026_12_24_bi_engagement.sql, 2026_12_26_bi_pipeline.sql"
   ],
   "admin_audit_logs": ["id","event_type","ip_address","user_agent","created_at"],
   "admin_login_security": ["id","email","failed_attempts","locked_until","updated_at"],
@@ -65,7 +65,7 @@
   "bi_email_link_clicks": ["id","job_id","contact_id","email","url","clicked_at"],
   "bi_email_relay": ["id","application_id","direction","from_email","to_email","subject","body_preview","provider_message_id","created_at"],
   "bi_email_templates": ["id","name","subject","body_text","body_html","category","is_active","created_by","created_at","updated_at","fields"],
-  "bi_engagement": ["contact_id","flow_id","stage","stage_at","sent_at","opened_at","clicked_at","replied_at","booked_at","met_at","signed_up_at","lost_at","lost_reason","reply_kind","reply_subject","reply_snippet","reply_mailbox","meeting_at","meeting_outcome","owner_user_id","owner_name","follow_up_due_at","follow_up_reason","followed_up_at","task_for","created_at","updated_at"],
+  "bi_engagement": ["contact_id","flow_id","stage","stage_at","sent_at","opened_at","clicked_at","replied_at","booked_at","met_at","signed_up_at","lost_at","lost_reason","reply_kind","reply_subject","reply_snippet","reply_mailbox","meeting_at","meeting_outcome","owner_user_id","owner_name","follow_up_due_at","follow_up_reason","followed_up_at","task_for","created_at","updated_at","last_reply_at","responded_at","replied_key","demo_at"],
   "bi_engagement_events": ["id","contact_id","kind","detail","actor_name","at"],
   "bi_engagement_settings": ["key","value","updated_at"],
   "bi_events": ["id","application_id","type","payload","silo","created_at"],

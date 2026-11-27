@@ -91,7 +91,7 @@ router.get("/outreach/contacts/:id", async (req: Request, res: Response) => {
 // BI_SERVER_ENGAGEMENT_v1 - BF-Server tells us about replies it found in any staff or shared mailbox and about bookings,
 // matched by email to contacts the PGI flows reached; and reads each owner's morning numbers for the digest.
 //   POST /engagement/reply { email, at, subject?, body?, mailbox? }   -> { ok, matched, kinds }
-//   POST /engagement/event { email, kind: "booked", at?, start? }      -> { ok, matched }
+//   POST /engagement/event { email, kind: "booked" | "responded", at?, start?, mailbox?, subject? }      -> { ok, matched }
 //   GET  /engagement/digest?owner=<BF user id>                         -> { ok, digest }
 //   GET  /engagement/owners                                            -> { ok, owners }
 //   GET  /engagement/leaks?days=7                                      -> { ok, leaks }
@@ -120,13 +120,18 @@ router.post("/engagement/event", async (req: Request, res: Response) => {
     const { contactIdsByEmail, recordEvent } = await import("../services/engagement/engagement");
     const email = String(req.body?.email ?? "").trim().toLowerCase();
     const kind = String(req.body?.kind ?? "");
-    if (!EMAIL_RE.test(email) || kind !== "booked") return res.status(400).json({ ok: false, error: "email_and_kind_required" });
+    // BI_SERVER_PIPELINE_v1 - "responded": a staff member emailed them (BF-Server reads Sent Items).
+    if (!EMAIL_RE.test(email) || (kind !== "booked" && kind !== "responded")) return res.status(400).json({ ok: false, error: "email_and_kind_required" });
     const at = req.body?.at ? new Date(String(req.body.at)) : new Date();
     let matched = 0;
     for (const id of await contactIdsByEmail(pool, email)) {
       // Only people the flows reached count as outreach bookings.
       const reached = await pool.query(`SELECT 1 FROM bi_engagement WHERE contact_id = $1 UNION ALL SELECT 1 FROM bi_flow_members WHERE contact_id = $1 AND first_sent_at IS NOT NULL LIMIT 1`, [id]);
       if (!reached.rowCount) continue;
+      if (kind === "responded") {
+        if (await recordEvent(pool, { contactId: id, kind: "responded", at, detail: { mailbox: String(req.body?.mailbox ?? "").slice(0, 200) || null, subject: String(req.body?.subject ?? "").slice(0, 300) || null }, actor: String(req.body?.mailbox ?? "Staff").slice(0, 200) })) matched += 1;
+        continue;
+      }
       if (await recordEvent(pool, { contactId: id, kind: "booked", at, detail: { start: req.body?.start ?? null, source: String(req.body?.source ?? "booking").slice(0, 60) }, actor: "Booking" })) matched += 1;
     }
     res.json({ ok: true, matched });

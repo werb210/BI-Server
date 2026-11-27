@@ -431,7 +431,7 @@ export async function runFlowTick(db: Db, deps: FlowDeps, now = new Date(), poll
   if (pollReplies) await restartAwayMembers(db, deps, now).catch((err) => logger.warn({ err: (err as Error)?.message }, "flow.worker.restart_away_failed"));
   const events = await ingestEvents(db);
   const tasks = await createCallTasks(db, deps);
-  // BI_SERVER_FLOWS_AUTO_ADD_v1 - new people who match a running flow join it by themselves, once an hour.
+  // BI_SERVER_FLOWS_AUTO_ADD_v1 - new people who match a running flow join it by themselves, every 15 minutes.
   const joined = pollReplies && now.getTime() - lastAudienceAdd >= AUDIENCE_ADD_MS ? await addRunningAudiences(db) : 0;
   if (pollReplies && now.getTime() - lastAudienceAdd >= AUDIENCE_ADD_MS) lastAudienceAdd = now.getTime();
   const started = await startNewPeople(db, now);
@@ -439,7 +439,7 @@ export async function runFlowTick(db: Db, deps: FlowDeps, now = new Date(), poll
   return { replied, ...events, tasks, joined, started, ...sends };
 }
 
-const AUDIENCE_ADD_MS = 60 * 60_000;
+const AUDIENCE_ADD_MS = 15 * 60_000; // BI_SERVER_FLOWS_TAGS_ARE_ENOUGH_v1 - every 15 minutes (was hourly)
 let lastAudienceAdd = 0;
 let timer: NodeJS.Timeout | null = null;
 let busy = false;
