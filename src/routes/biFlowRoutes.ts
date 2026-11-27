@@ -84,7 +84,9 @@ router.post("/flows", wrap(async (req, res) => {
       text(req.body?.owner_user_id, 80), text(req.body?.owner_name, 120), preset.link_url, preset.booking_url, JSON.stringify(preset.emails),
       String((req as any).user?.userId ?? (req as any).user?.id ?? "") || null],
   );
-  res.status(201).json({ ok: true, id: r.rows[0].id });
+  // BI_SERVER_FLOWS_TAGS_ARE_ENOUGH_v1 - everyone tagged for the flow joins it now; new tags join by themselves.
+  const added = await addFlowAudience(pool, r.rows[0].id, preset.audience, preset.market);
+  res.status(201).json({ ok: true, id: r.rows[0].id, added });
 }));
 
 router.get("/flows/:id", wrap(async (req, res) => {
@@ -204,8 +206,11 @@ for (const [action, status] of [["start", "active"], ["pause", "paused"]] as con
     if (!UUID.test(String(req.params.id))) return res.status(404).json({ ok: false, error: "not_found" });
     if (action === "start" && pgiMarketingHeld()) return res.status(409).json({ ok: false, error: "pgi_marketing_hold", message: PGI_HOLD_MESSAGE }); // BI_SERVER_PGI_MARKETING_HOLD_v1
     if (action === "start") {
+      // BI_SERVER_FLOWS_TAGS_ARE_ENOUGH_v1 - starting picks up everyone tagged for the flow; no "Add the people" step.
+      const f = await pool.query(`SELECT audience, market FROM bi_flows WHERE id = $1 AND status <> 'archived'`, [req.params.id]);
+      if (f.rowCount) await addFlowAudience(pool, String(req.params.id), f.rows[0].audience, f.rows[0].market);
       const people = await pool.query(`SELECT count(*)::int AS n FROM bi_flow_members WHERE flow_id = $1`, [req.params.id]);
-      if (!Number(people.rows[0]?.n)) return res.status(400).json({ ok: false, error: "no_people", message: "Add the people first." });
+      if (!Number(people.rows[0]?.n)) return res.status(400).json({ ok: false, error: "no_people", message: "Nobody with this flow's tag and an email address yet. Tag them in the CRM and start again." });
     }
     const r = await pool.query(
       `UPDATE bi_flows SET status = $2, started_at = CASE WHEN $2 = 'active' THEN COALESCE(started_at, now()) ELSE started_at END, updated_at = now()

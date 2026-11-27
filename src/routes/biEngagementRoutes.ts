@@ -11,9 +11,10 @@ import express, { type Request, type Response } from "express";
 import { pool } from "../db";
 import { logger } from "../platform/logger";
 import {
-  STAGES, STAGE_LABEL, board, contactDetail, funnel, getSettings, queue, recordEvent, saveSettings, type EventKind,
+  STAGES, STAGE_LABEL, STAGE_HELP, FOLLOW_UP_DAYS, board, contactDetail, funnel, getSettings, queue, recordEvent, saveSettings, type EventKind,
 } from "../services/engagement/engagement";
 import { REPLY_KIND_LABEL } from "../services/engagement/classifyReply";
+import { FLOW_KEY_LABEL } from "../services/flows/flowEngine";
 
 const router = express.Router();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -33,9 +34,12 @@ const filters = (req: Request) => ({
 });
 
 router.get("/engagement/meta", (_req, res) => {
-  res.json({ ok: true, brand: "PGI", stages: [...STAGES, "lost"].map((k) => ({ key: k, label: STAGE_LABEL[k as keyof typeof STAGE_LABEL] })), replyKinds: REPLY_KIND_LABEL });
+  res.json({ ok: true, brand: "PGI", stages: [...STAGES, "lost"].map((k) => ({ key: k, label: STAGE_LABEL[k as keyof typeof STAGE_LABEL], help: STAGE_HELP[k as keyof typeof STAGE_HELP] })),
+    replyKinds: REPLY_KIND_LABEL, emailLabels: FLOW_KEY_LABEL, followUpDays: FOLLOW_UP_DAYS,
+    // BI_SERVER_PIPELINE_v1 - where staff can move a card by hand ("auto" = back to where the emails put them).
+    moves: [{ key: "initial_call", label: "Initial call" }, { key: "demo", label: "Demo" }, { key: "signed_up", label: "Signed up" }, { key: "lost", label: "Not interested" }, { key: "auto", label: "Back to the email stages" }] });
 });
-router.get("/engagement/board", wrap(async (req, res) => res.json({ ok: true, stages: await board(pool, filters(req)) })));
+router.get("/engagement/board", wrap(async (req, res) => res.json({ ok: true, stages: await board(pool, { ...filters(req), stage: s(req.query.stage, 40), offset: Number(req.query.offset) || 0 }) })));
 router.get("/engagement/queue", wrap(async (req, res) => res.json({ ok: true, items: await queue(pool, filters(req)) })));
 router.get("/engagement/funnel", wrap(async (req, res) => {
   const days = Number(req.query.days);
@@ -48,7 +52,7 @@ router.get("/engagement/contacts/:id", wrap(async (req, res) => {
   if (!d) return res.status(404).json({ ok: false, error: "not_found" });
   res.json({ ok: true, contact: d });
 }));
-const ACTIONS: EventKind[] = ["followed_up", "met", "no_show", "booked", "lost", "reopen", "signed_up", "reply_kind", "requeue"];
+const ACTIONS: EventKind[] = ["followed_up", "met", "no_show", "booked", "lost", "reopen", "signed_up", "reply_kind", "requeue", "initial_call", "demo", "auto"];
 router.post("/engagement/contacts/:id/action", wrap(async (req, res) => {
   if (!UUID.test(req.params.id)) return res.status(400).json({ ok: false, error: "invalid_id" });
   const action = String(req.body?.action ?? "") as EventKind;

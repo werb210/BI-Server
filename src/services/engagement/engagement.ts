@@ -9,19 +9,39 @@ import { classifyReply, closesFollowUp, replyBody, type ReplyKind } from "./clas
 
 type Db = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
 
-export const STAGES = ["sent", "opened", "clicked", "replied", "booked", "met", "signed_up"] as const;
+// BI_SERVER_PIPELINE_v1 - the stages Todd set out, in order. "Follow-up" = staff answered and they have not written back
+// for FOLLOW_UP_DAYS. A booked call or Teams meeting moves them to Initial call by itself; Demo, Signed up and Not
+// interested are set by staff (or sign-up by the lender/referrer tables).
+export const STAGES = ["emailed", "opened", "clicked", "replied", "responded", "follow_up", "initial_call", "demo", "signed_up"] as const;
 export type Stage = (typeof STAGES)[number] | "lost";
 export const STAGE_LABEL: Record<Stage, string> = {
-  sent: "Sent", opened: "Opened", clicked: "Clicked", replied: "Replied", booked: "Booked", met: "Call held",
-  signed_up: "Signed up", lost: "Not interested",
+  emailed: "Emailed", opened: "Opened", clicked: "Clicked", replied: "Replied", responded: "Staff responded",
+  follow_up: "Follow-up", initial_call: "Initial call", demo: "Demo", signed_up: "Signed up", lost: "Not interested",
 };
+export const STAGE_HELP: Record<Stage, string> = {
+  emailed: "Getting the first emails. Nothing back yet.",
+  opened: "Opened an email.",
+  clicked: "Clicked a link in an email.",
+  replied: "Wrote back. Nobody has answered yet.",
+  responded: "We answered. Waiting for them.",
+  follow_up: "We answered 3+ days ago and they have not written back.",
+  initial_call: "A call or Teams meeting is booked or held.",
+  demo: "Demo booked or done.",
+  signed_up: "Signed up as a lender or referrer.",
+  lost: "Not interested, or unsubscribed.",
+};
+export const FOLLOW_UP_DAYS = 3;
 const DUE_HOURS: Record<string, number> = { replied: 24, booked: 24, clicked: 48 };
 
+const ANSWERED = `e.responded_at IS NOT NULL AND e.replied_at IS NOT NULL AND e.responded_at >= COALESCE(e.last_reply_at, e.replied_at)`;
 export const STAGE_SQL = `CASE WHEN e.lost_at IS NOT NULL THEN 'lost' WHEN e.signed_up_at IS NOT NULL THEN 'signed_up'
-  WHEN e.met_at IS NOT NULL THEN 'met' WHEN e.booked_at IS NOT NULL THEN 'booked' WHEN e.replied_at IS NOT NULL THEN 'replied'
-  WHEN e.clicked_at IS NOT NULL THEN 'clicked' WHEN e.opened_at IS NOT NULL THEN 'opened' ELSE 'sent' END`;
+  WHEN e.demo_at IS NOT NULL THEN 'demo' WHEN e.booked_at IS NOT NULL OR e.met_at IS NOT NULL THEN 'initial_call'
+  WHEN ${ANSWERED} AND e.responded_at < now() - interval '${FOLLOW_UP_DAYS} days' THEN 'follow_up'
+  WHEN ${ANSWERED} THEN 'responded' WHEN e.replied_at IS NOT NULL THEN 'replied'
+  WHEN e.clicked_at IS NOT NULL THEN 'clicked' WHEN e.opened_at IS NOT NULL THEN 'opened' ELSE 'emailed' END`;
 const STAGE_AT_SQL = `CASE WHEN e.lost_at IS NOT NULL THEN e.lost_at WHEN e.signed_up_at IS NOT NULL THEN e.signed_up_at
-  WHEN e.met_at IS NOT NULL THEN e.met_at WHEN e.booked_at IS NOT NULL THEN e.booked_at WHEN e.replied_at IS NOT NULL THEN e.replied_at
+  WHEN e.demo_at IS NOT NULL THEN e.demo_at WHEN e.booked_at IS NOT NULL OR e.met_at IS NOT NULL THEN COALESCE(e.booked_at, e.met_at)
+  WHEN ${ANSWERED} THEN e.responded_at WHEN e.replied_at IS NOT NULL THEN COALESCE(e.last_reply_at, e.replied_at)
   WHEN e.clicked_at IS NOT NULL THEN e.clicked_at WHEN e.opened_at IS NOT NULL THEN e.opened_at ELSE e.sent_at END`;
 
 export type Follower = { id: string; name: string };
@@ -61,6 +81,13 @@ export async function syncEngagement(db: Db): Promise<Record<string, number>> {
      WHERE e.flow_id IS DISTINCT FROM EXCLUDED.flow_id OR e.sent_at IS DISTINCT FROM LEAST(e.sent_at, EXCLUDED.sent_at)
         OR (e.opened_at IS NULL AND EXCLUDED.opened_at IS NOT NULL) OR (e.clicked_at IS NULL AND EXCLUDED.clicked_at IS NOT NULL)
         OR (e.replied_at IS NULL AND EXCLUDED.replied_at IS NOT NULL)`,
+  );
+  // BI_SERVER_PIPELINE_v1 - which email they replied to: the last one their flow had sent when the reply stopped it.
+  await db.query(
+    `UPDATE bi_engagement e SET replied_key = x.k, last_reply_at = GREATEST(e.last_reply_at, e.replied_at), updated_at = now()
+       FROM (SELECT DISTINCT ON (contact_id) contact_id, sent_keys[array_length(sent_keys, 1)] AS k
+               FROM bi_flow_members WHERE stop_reason = 'replied' AND array_length(sent_keys, 1) > 0 ORDER BY contact_id, updated_at) x
+      WHERE e.contact_id = x.contact_id AND (e.replied_key IS DISTINCT FROM x.k OR (e.last_reply_at IS NULL AND e.replied_at IS NOT NULL))`,
   );
   // 2. Signed up: became a lender portal contact or a referrer after the first email.
   const signed = await db.query(
@@ -156,7 +183,7 @@ export async function recordReply(db: Db, input: { contactId: string; at: Date; 
   const snippet = replyBody(input.body, 600) || null;
   const closes = closesFollowUp(kind);
   await db.query(
-    `UPDATE bi_engagement SET replied_at = COALESCE(replied_at, $2), reply_kind = $3, reply_subject = $4, reply_snippet = $5,
+    `UPDATE bi_engagement SET replied_at = COALESCE(replied_at, $2), last_reply_at = GREATEST(last_reply_at, $2), reply_kind = $3, reply_subject = $4, reply_snippet = $5,
             reply_mailbox = $6, lost_at = CASE WHEN $7 THEN COALESCE(lost_at, $2) ELSE lost_at END,
             lost_reason = CASE WHEN $7 THEN $3 ELSE lost_reason END,
             follow_up_due_at = CASE WHEN $7 THEN NULL WHEN $2 > COALESCE(followed_up_at, 'epoch'::timestamptz) THEN $2 + interval '${DUE_HOURS.replied} hours' ELSE follow_up_due_at END,
@@ -168,7 +195,8 @@ export async function recordReply(db: Db, input: { contactId: string; at: Date; 
   return kind;
 }
 
-export type EventKind = "booked" | "met" | "no_show" | "followed_up" | "lost" | "reopen" | "signed_up" | "reply_kind" | "requeue";
+export type EventKind = "booked" | "met" | "no_show" | "followed_up" | "lost" | "reopen" | "signed_up" | "reply_kind" | "requeue"
+  | "responded" | "initial_call" | "demo" | "auto";
 /** Bookings (BF-Server) and staff actions. */
 export async function recordEvent(db: Db, input: { contactId: string; kind: EventKind; at?: Date; detail?: Record<string, any>; actor?: string | null }): Promise<boolean> {
   const at = input.at ?? new Date();
@@ -181,9 +209,14 @@ export async function recordEvent(db: Db, input: { contactId: string; kind: Even
     followed_up: `followed_up_at = $2, follow_up_due_at = NULL`,
     lost: `lost_at = COALESCE(lost_at, $2), lost_reason = COALESCE($3::text, 'staff'), follow_up_due_at = NULL`,
     reopen: `lost_at = NULL, lost_reason = NULL`,
-    signed_up: `signed_up_at = COALESCE(signed_up_at, $2), follow_up_due_at = NULL`,
+    signed_up: `signed_up_at = COALESCE(signed_up_at, $2), lost_at = NULL, lost_reason = NULL, follow_up_due_at = NULL`,
     reply_kind: `reply_kind = $3::text`,
     // ENGAGEMENT_REQUEUE_v1 - undo a click on Followed up / Not interested: back in the follow-up list, due now.
+    // BI_SERVER_PIPELINE_v1 - staff answered (BF-Server reads Sent Items); staff moving a card on the pipeline.
+    responded: `responded_at = GREATEST(responded_at, $2), followed_up_at = GREATEST(followed_up_at, $2), follow_up_due_at = NULL`,
+    initial_call: `booked_at = COALESCE(booked_at, $2), demo_at = NULL, signed_up_at = NULL, lost_at = NULL, lost_reason = NULL`,
+    demo: `demo_at = COALESCE(demo_at, $2), signed_up_at = NULL, lost_at = NULL, lost_reason = NULL`,
+    auto: `booked_at = NULL, met_at = NULL, meeting_outcome = NULL, demo_at = NULL, signed_up_at = NULL, lost_at = NULL, lost_reason = NULL`,
     requeue: `followed_up_at = NULL, lost_at = NULL, lost_reason = NULL, follow_up_due_at = COALESCE(follow_up_due_at, $2), follow_up_reason = COALESCE(follow_up_reason, stage)`,
   };
   const third = input.kind === "booked" ? (d.start ?? null) : input.kind === "lost" ? (d.reason ?? null) : input.kind === "reply_kind" ? (d.kind ?? null) : null;
@@ -226,8 +259,12 @@ export async function createFollowUpTasks(db: Db, task: (owner: string, title: s
 
 const CARD_SQL = `e.contact_id, e.stage, e.stage_at, e.flow_id, f.name AS flow_name, e.reply_kind, e.reply_subject, e.reply_snippet,
   e.owner_user_id, e.owner_name, e.follow_up_due_at, e.follow_up_reason, e.meeting_at, e.meeting_outcome, e.sent_at, e.opened_at,
-  e.clicked_at, e.replied_at, e.booked_at, e.met_at, e.signed_up_at, e.lost_at, c.full_name, c.organization_name, c.email, c.phone_e164`;
-const FROM_SQL = `FROM bi_engagement e JOIN bi_contacts c ON c.id = e.contact_id LEFT JOIN bi_flows f ON f.id = e.flow_id`;
+  e.clicked_at, e.replied_at, e.booked_at, e.met_at, e.signed_up_at, e.lost_at, c.full_name, c.organization_name, c.email, c.phone_e164,
+  e.last_reply_at, e.responded_at, e.replied_key, e.demo_at, e.lost_reason, coalesce(mk.keys, '{}') AS sent_keys`;
+// BI_SERVER_PIPELINE_v1 - every flow email the contact has been sent (e1..n4 = the four first emails, o1/o2 = after an open,
+// c1 = after a click), across their flows.
+const FROM_SQL = `FROM bi_engagement e JOIN bi_contacts c ON c.id = e.contact_id LEFT JOIN bi_flows f ON f.id = e.flow_id
+  LEFT JOIN LATERAL (SELECT array_agg(DISTINCT k ORDER BY k) AS keys FROM bi_flow_members m, unnest(m.sent_keys) k WHERE m.contact_id = e.contact_id) mk ON true`;
 
 type Filters = { flowId?: string | null; owner?: string | null; q?: string | null };
 function where(f: Filters, params: unknown[]): string {
@@ -238,16 +275,19 @@ function where(f: Filters, params: unknown[]): string {
   return w.length ? `WHERE ${w.join(" AND ")}` : "";
 }
 
-export async function board(db: Db, f: Filters, perStage = 50) {
+/** The pipeline: every stage with its count and its newest cards (perStage, or one stage from an offset for "Show more"). */
+export async function board(db: Db, f: Filters & { stage?: string | null; offset?: number }, perStage = 100) {
   const p: unknown[] = [];
   const w = where(f, p);
-  const counts = await db.query(`SELECT e.stage, count(*)::int AS n ${FROM_SQL} ${w} GROUP BY 1`, p);
-  const p2 = [...p, perStage];
-  const cards = await db.query(
-    `SELECT * FROM (SELECT ${CARD_SQL}, row_number() OVER (PARTITION BY e.stage ORDER BY e.stage_at DESC NULLS LAST) AS rn ${FROM_SQL} ${w}) x
-      WHERE rn <= $${p2.length} AND stage <> 'sent' ORDER BY stage_at DESC NULLS LAST`, p2);
+  const keys = [...STAGES, "lost" as const];
+  const counts = await db.query(`SELECT e.stage, count(*)::int AS n FROM bi_engagement e JOIN bi_contacts c ON c.id = e.contact_id ${w} GROUP BY 1`, p);
   const n = new Map(counts.rows.map((r) => [r.stage, r.n]));
-  return [...STAGES, "lost" as const].map((s) => ({ key: s, label: STAGE_LABEL[s], count: n.get(s) ?? 0, cards: cards.rows.filter((c) => c.stage === s) }));
+  const only = f.stage && (keys as string[]).includes(f.stage) ? f.stage : null;
+  const p2 = [...p, perStage, Math.max(0, Math.trunc(f.offset ?? 0))];
+  const cards = await db.query(
+    `SELECT * FROM (SELECT ${CARD_SQL}, row_number() OVER (PARTITION BY e.stage ORDER BY e.stage_at DESC NULLS LAST, e.contact_id) AS rn ${FROM_SQL} ${w}) x
+      WHERE rn > $${p2.length} AND rn <= $${p2.length} + $${p2.length - 1} ${only ? `AND stage = '${only}'` : ""} ORDER BY stage_at DESC NULLS LAST`, p2);
+  return keys.filter((s) => !only || s === only).map((s) => ({ key: s, label: STAGE_LABEL[s], help: STAGE_HELP[s], count: n.get(s) ?? 0, cards: cards.rows.filter((c) => c.stage === s) }));
 }
 
 export async function queue(db: Db, f: Filters) {
@@ -261,17 +301,19 @@ export async function queue(db: Db, f: Filters) {
 export async function funnel(db: Db, since?: Date | null) {
   const p: unknown[] = [];
   const w = since ? (p.push(since), `WHERE e.sent_at >= $1`) : "";
+  // BI_SERVER_PIPELINE_v1 - "reached" counts: how many got to each stage or past it.
   const cols = `count(*)::int AS sent, count(e.opened_at)::int AS opened, count(e.clicked_at)::int AS clicked, count(e.replied_at)::int AS replied,
-    count(e.booked_at)::int AS booked, count(e.met_at)::int AS met, count(e.signed_up_at)::int AS signed_up, count(e.lost_at)::int AS lost`;
+    count(*) FILTER (WHERE e.responded_at IS NOT NULL AND e.replied_at IS NOT NULL)::int AS responded,
+    count(*) FILTER (WHERE e.booked_at IS NOT NULL OR e.met_at IS NOT NULL)::int AS initial_call, count(e.demo_at)::int AS demo,
+    count(e.signed_up_at)::int AS signed_up, count(e.lost_at)::int AS lost`;
   const total = await db.query(`SELECT ${cols} FROM bi_engagement e ${w}`, p);
   const byFlow = await db.query(`SELECT e.flow_id, coalesce(f.name, 'No flow') AS name, ${cols} FROM bi_engagement e LEFT JOIN bi_flows f ON f.id = e.flow_id ${w} GROUP BY 1, 2 ORDER BY sent DESC`, p);
   const kinds = await db.query(`SELECT coalesce(e.reply_kind, 'other') AS kind, count(*)::int AS n FROM bi_engagement e ${w ? `${w} AND` : "WHERE"} e.replied_at IS NOT NULL GROUP BY 1`, p);
-  // Leaks: clicked or replied and never followed up; bookings with no outcome a day after the meeting; reply speed.
   const leaks = await db.query(
-    `SELECT count(*) FILTER (WHERE e.follow_up_due_at < now())::int AS overdue,
-            count(*) FILTER (WHERE e.clicked_at IS NOT NULL AND e.followed_up_at IS NULL AND e.replied_at IS NULL AND e.lost_at IS NULL)::int AS clickers_not_called,
-            count(*) FILTER (WHERE e.booked_at IS NOT NULL AND e.met_at IS NULL AND e.meeting_outcome IS NULL AND coalesce(e.meeting_at, e.booked_at) < now() - interval '1 day')::int AS meetings_no_outcome,
-            round(avg(extract(epoch FROM (e.followed_up_at - e.replied_at)) / 3600) FILTER (WHERE e.followed_up_at > e.replied_at)::numeric, 1) AS avg_reply_hours
+    `SELECT count(*) FILTER (WHERE e.stage = 'replied')::int AS unanswered,
+            count(*) FILTER (WHERE e.stage = 'replied' AND COALESCE(e.last_reply_at, e.replied_at) < now() - interval '1 day')::int AS unanswered_day,
+            count(*) FILTER (WHERE e.stage = 'follow_up')::int AS follow_up,
+            round(avg(extract(epoch FROM (e.responded_at - e.replied_at)) / 3600) FILTER (WHERE e.responded_at > e.replied_at)::numeric, 1) AS avg_reply_hours
        FROM bi_engagement e ${w}`, p);
   return { total: total.rows[0], byFlow: byFlow.rows, replyKinds: kinds.rows, leaks: leaks.rows[0] };
 }

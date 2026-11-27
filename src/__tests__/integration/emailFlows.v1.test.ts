@@ -58,24 +58,27 @@ const haveDb = !!process.env.DATABASE_URL;
     await pool.end();
   });
 
-  it("is created from a ready-made flow, takes only US lenders, and cannot start empty", async () => {
+  it("is created from a ready-made flow and takes only US lenders by their tags, with no adding step", async () => {
     const made = await request(app).post("/api/v1/bi/flows").send({ preset: "lender_us", owner_user_id: "staff-1", owner_name: "Andrew", daily_new: 1000 });
     expect(made.status, JSON.stringify(made.body)).toBe(201);
     flowId = made.body.id;
     expect((await request(app).post("/api/v1/bi/flows").send({ preset: "lender_us" })).status).toBe(409);
-    expect((await request(app).post(`/api/v1/bi/flows/${flowId}/start`)).status).toBe(400);
     // BI_SERVER_PGI_COMPLIANCE_v1 - edited copy can be put back to the ready-made wording.
     await request(app).patch(`/api/v1/bi/flows/${flowId}`).send({ emails: { e1: { subject: "Edited", body: "<p>Edited {{link}}</p>" } } });
     expect((await request(app).post(`/api/v1/bi/flows/${flowId}/reset-copy`)).status).toBe(200);
     const after = (await pool.query(`SELECT emails, status FROM bi_flows WHERE id = $1`, [flowId])).rows[0];
     expect(after.emails.e1.subject).toBe("An option your borrowers may not know about");
     expect(after.status).toBe("draft");
-    // keep the test to its own people: everyone else in the database stays out of this flow
+    // BI_SERVER_FLOWS_TAGS_ARE_ENOUGH_v1 - creating the flow already took everyone tagged for it. Keep the test to its
+    // own people: everyone else in the database stays out of this flow.
+    await pool.query(`UPDATE bi_flow_members m SET status = 'stopped', stop_reason = 'test_excluded'
+                       FROM bi_contacts c WHERE m.flow_id = $1 AND c.id = m.contact_id AND NOT ($2 = ANY(c.tags))`, [flowId, tag]);
     await pool.query(`INSERT INTO bi_flow_members (flow_id, contact_id, email, status, stop_reason)
                       SELECT $1, id, lower(email), 'stopped', 'test_excluded' FROM bi_contacts WHERE email IS NOT NULL AND NOT ($2 = ANY(tags))
                       ON CONFLICT DO NOTHING`, [flowId, tag]);
-    const added = await request(app).post(`/api/v1/bi/flows/${flowId}/audience`);
-    expect(added.body.added).toBe(5); // the Canadian lender is not in the US flow
+    const mine = await pool.query(`SELECT count(*)::int AS n FROM bi_flow_members m JOIN bi_contacts c ON c.id = m.contact_id WHERE m.flow_id = $1 AND $2 = ANY(c.tags)`, [flowId, tag]);
+    expect(mine.rows[0].n).toBe(5); // the Canadian lender is not in the US flow
+    expect((await request(app).post(`/api/v1/bi/flows/${flowId}/audience`)).body.added).toBe(0);
     const shown = await request(app).get(`/api/v1/bi/flows/${flowId}`);
     expect(shown.body.emails).toHaveLength(7);
     expect(shown.body.emails[0].subject).toBe("An option your borrowers may not know about"); // BI_SERVER_PGI_COMPLIANCE_v1
