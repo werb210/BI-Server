@@ -35,7 +35,11 @@ describe.skipIf(!process.env.DATABASE_URL)("PGI engagement tracking (real DB)", 
     await resetDb();
     await pool.query(`TRUNCATE bi_engagement, bi_engagement_events, bi_engagement_settings, bi_flow_members, bi_flows CASCADE`);
   });
-  afterAll(async () => { await pool.end(); });
+  afterAll(async () => {
+    // Leave no active flows behind: other suites run the flow worker against the same database.
+    await pool.query(`TRUNCATE bi_engagement, bi_engagement_events, bi_engagement_settings, bi_flow_members, bi_flows CASCADE`);
+    await pool.end();
+  });
 
   it("climbs the stages from the flows, opens a follow-up for a click and gives it the flow's owner", async () => {
     const co = await seedCompany({ legal_name: "Prairie Lending" });
