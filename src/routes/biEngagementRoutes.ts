@@ -48,7 +48,7 @@ router.get("/engagement/contacts/:id", wrap(async (req, res) => {
   if (!d) return res.status(404).json({ ok: false, error: "not_found" });
   res.json({ ok: true, contact: d });
 }));
-const ACTIONS: EventKind[] = ["followed_up", "met", "no_show", "booked", "lost", "reopen", "signed_up", "reply_kind"];
+const ACTIONS: EventKind[] = ["followed_up", "met", "no_show", "booked", "lost", "reopen", "signed_up", "reply_kind", "requeue"];
 router.post("/engagement/contacts/:id/action", wrap(async (req, res) => {
   if (!UUID.test(req.params.id)) return res.status(400).json({ ok: false, error: "invalid_id" });
   const action = String(req.body?.action ?? "") as EventKind;
