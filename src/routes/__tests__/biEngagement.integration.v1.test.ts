@@ -10,6 +10,7 @@ import biInternalServiceRoutes from "../biInternalServiceRoutes";
 import biEngagementRoutes from "../biEngagementRoutes";
 import { resetDb, seedCompany, seedContact } from "../../test-support/integrationDb";
 import { createFollowUpTasks, syncEngagement } from "../../services/engagement/engagement";
+import { reclassifyRobotClicks } from "../../services/flows/robotClicks";
 
 function makeApp() {
   const app = express();
@@ -197,5 +198,26 @@ describe.skipIf(!process.env.DATABASE_URL)("PGI engagement tracking (real DB)", 
     const f = await request(app).get("/api/v1/bi/engagement/funnel").set("Authorization", `Bearer ${admin()}`).expect(200);
     expect(f.body.total).toMatchObject({ sent: 1, opened: 1, replied: 1, responded: 1 });
     expect(f.body.leaks.unanswered).toBe(1);
+  });
+
+  // BI_SERVER_ROBOT_CLICKS_v2
+  it("drops clicks already recorded that were scanners, once, and the pipeline follows", async () => {
+    const co = await seedCompany({});
+    const bot = await seedContact(co.id, { full_name: "Bot Bank", email: "bot@bank.test" });
+    const real = await seedContact(co.id, { full_name: "Real Person", email: "real@bank.test" });
+    const t0 = new Date(Date.now() - 2 * 86_400_000);
+    const plus = (m: number) => new Date(t0.getTime() + m * 60_000);
+    const fb = await flowWith(bot.id, "bot@bank.test", { status: "active", first_sent_at: t0, clicked_at: plus(1), track: "clicked", sent_keys: ["e1", "c1"] });
+    const fr = await flowWith(real.id, "real@bank.test", { status: "active", first_sent_at: t0, opened_at: plus(30), clicked_at: plus(45), track: "clicked", sent_keys: ["e1", "c1"] });
+    const ev = (c: string, f: string, type: string, at: Date) => pool.query(
+      `INSERT INTO bi_marketing_send_events (job_id, contact_id, email, event_type, detail, created_at) VALUES ($1, $2, 'x@x.test', $3, '{"url":"https://www.boreal.insure/ca"}', $4)`, [`flow:${f}:e1`, c, type, at]);
+    await ev(bot.id, fb, "delivered", t0); await ev(bot.id, fb, "click", plus(1));
+    await ev(real.id, fr, "delivered", t0); await ev(real.id, fr, "open", plus(30)); await ev(real.id, fr, "click", plus(45));
+    await syncEngagement(pool);
+    expect(await reclassifyRobotClicks(pool)).toEqual({ checked: 2, removed: 1 });
+    await syncEngagement(pool);
+    const st = (await pool.query(`SELECT c.full_name, e.stage FROM bi_engagement e JOIN bi_contacts c ON c.id = e.contact_id ORDER BY 1`)).rows;
+    expect(st).toEqual([{ full_name: "Bot Bank", stage: "emailed" }, { full_name: "Real Person", stage: "clicked" }]);
+    expect(await reclassifyRobotClicks(pool)).toEqual({ checked: 0, removed: 0 });
   });
 });

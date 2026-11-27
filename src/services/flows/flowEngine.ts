@@ -20,8 +20,11 @@ export const FLOW_WINDOW: SendWindow = { startHour: 9, endHour: 17, weekdaysOnly
 const DAY = 86_400_000;
 export const NO_OPEN_GAP_DAYS = 7;
 export const OPEN_FOLLOW_UP_BUSINESS_DAYS = 2;
-/** A click this soon after the email left is a mail filter scanning the link, not a person. */
-export const ROBOT_CLICK_SECONDS = 60;
+/** A click this soon after the email left is a mail filter scanning the link, not a person. BI_SERVER_ROBOT_CLICKS_v2: was 60s. */
+export const ROBOT_CLICK_SECONDS = 300;
+/** A click with no open before it, this soon after the email left, is a scanner too (BI_SERVER_ROBOT_CLICKS_v2). People whose
+ *  Outlook blocks images never "open", so a later click with no open still counts. */
+export const NO_OPEN_ROBOT_MINUTES = 60;
 /** This many different links clicked at the same moment is a scanner too. */
 export const ROBOT_CLICK_LINKS = 3;
 
@@ -76,18 +79,20 @@ export function onOpen(m: MemberState, at: Date): { track: Track; next: Next } |
 
 export type Click = { at: Date; url: string };
 /** True when the click looks like a security filter and not a person. `nearby` = this person's clicks around it. */
-export function isRobotClick(click: Click, lastSentAt: Date | null, nearby: Click[] = []): boolean {
-  if (lastSentAt && click.at.getTime() - lastSentAt.getTime() < ROBOT_CLICK_SECONDS * 1000) return true;
+export function isRobotClick(click: Click, lastSentAt: Date | null, nearby: Click[] = [], openedBefore = true): boolean {
+  const since = lastSentAt ? click.at.getTime() - lastSentAt.getTime() : Infinity;
+  if (since < ROBOT_CLICK_SECONDS * 1000) return true;
+  if (!openedBefore && since < NO_OPEN_ROBOT_MINUTES * 60_000) return true;
   const sameMoment = new Set(nearby.filter((c) => Math.abs(c.at.getTime() - click.at.getTime()) <= 5000).map((c) => c.url));
   sameMoment.add(click.url);
   return sameMoment.size >= ROBOT_CLICK_LINKS;
 }
-const isUnsubscribeUrl = (url: string): boolean => /unsubscribe|asm\/|\/wf\/unsubscribe|preferences/i.test(url);
+export const isUnsubscribeUrl = (url: string): boolean => /unsubscribe|asm\/|\/wf\/unsubscribe|preferences/i.test(url);
 
 /** A real click sends the "let's talk" email and asks for a call. */
 export function onClick(m: MemberState, click: Click, nearby: Click[] = []): { track: Track; next: Next } | null {
   if (m.track === "clicked" || m.sentKeys.length === 0) return null;
-  if (isUnsubscribeUrl(click.url) || isRobotClick(click, m.lastSentAt, nearby)) return null;
+  if (isUnsubscribeUrl(click.url) || isRobotClick(click, m.lastSentAt, nearby, m.track !== "none")) return null;
   if (m.sentKeys.includes("c1")) return { track: "clicked", next: null };
   return { track: "clicked", next: { key: "c1", at: inHours(click.at) } };
 }
