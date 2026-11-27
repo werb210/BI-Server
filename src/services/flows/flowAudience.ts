@@ -4,14 +4,16 @@ type Db = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; r
 
 const US_SQL = `(lower(btrim(coalesce(c.country, ''))) IN ('us', 'usa', 'united states', 'united states of america')
   OR EXISTS (SELECT 1 FROM unnest(coalesce(c.tags, '{}')) t WHERE lower(btrim(t)) LIKE 'us %'))`;
-/** Who a flow is for: people tagged lender / broker, in the flow's country, with an email we may still write to. */
+/** Who a flow is for: people tagged lender (or bank) / broker, in the flow's country, with an email we may still write to. */
 export function audienceSql(market: string): string {
   const marketSql = market === "US" ? `AND ${US_SQL}` : market === "CA" ? `AND NOT ${US_SQL}` : "";
   return `
     FROM bi_contacts c
    WHERE c.email IS NOT NULL AND position('@' in c.email) > 1
      AND COALESCE(c.outreach_excluded, false) = false
-     AND EXISTS (SELECT 1 FROM unnest(coalesce(c.tags, '{}')) t WHERE lower(btrim(t)) LIKE $1 || '%')
+     AND EXISTS (SELECT 1 FROM unnest(coalesce(c.tags, '{}')) t WHERE lower(btrim(t)) LIKE $1 || '%'
+                 -- BI_SERVER_BANKS_IN_LENDER_FLOWS_v1 - Todd: banks get the lender emails too.
+                 OR ($1 = 'lender' AND lower(btrim(t)) LIKE 'bank%'))
      ${marketSql}
      AND NOT EXISTS (SELECT 1 FROM bi_suppressions s
                       WHERE (lower(s.email) = lower(c.email) OR lower(s.identifier) = lower(c.email) OR s.contact_id = c.id) AND s.channel IN ('email', 'all'))`;
