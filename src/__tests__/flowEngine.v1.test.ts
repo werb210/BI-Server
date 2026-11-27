@@ -1,5 +1,6 @@
 // BI_SERVER_EMAIL_FLOWS_v1 - the rules of an email flow.
 import { describe, expect, it } from "vitest";
+import { firstRealClick } from "../services/flows/robotClicks";
 import { addBusinessDays, dailyNewCap, flowJobId, htmlToText, isRobotClick, nextAfterSend, onClick, onOpen, parseFlowJobId, withFooter } from "../services/flows/flowEngine";
 import { FLOW_PRESETS } from "../services/flows/flowPresets";
 
@@ -42,6 +43,20 @@ describe("what comes next in a flow", () => {
     expect(onClick(m, burst[0]!, burst)).toBeNull();
     expect(onClick(m, { at: later, url: "https://u.sendgrid.net/wf/unsubscribe?x=1" })).toBeNull();
     expect(onClick(m, { at: later, url: "https://www.boreal.insure/ca" })!.track).toBe("clicked");
+  });
+  // BI_SERVER_ROBOT_CLICKS_v2
+  it("a click within 5 minutes, or within the hour with no open first, is a scanner", () => {
+    const at = (min: number) => ({ at: new Date(MON_10.getTime() + min * 60_000), url: "https://www.boreal.insure/ca" });
+    expect(isRobotClick(at(4), MON_10, [], true)).toBe(true);
+    expect(isRobotClick(at(6), MON_10, [], true)).toBe(false);
+    expect(isRobotClick(at(30), MON_10, [], false)).toBe(true);
+    expect(isRobotClick(at(90), MON_10, [], false)).toBe(false);
+    expect(onClick({ track: "none", sentKeys: ["e1"], lastSentAt: MON_10 }, at(30))).toBeNull();
+    expect(onClick({ track: "opened", sentKeys: ["e1"], lastSentAt: MON_10 }, at(30))!.track).toBe("clicked");
+    const job = "flow:11111111-2222-3333-4444-555555555555:e1";
+    const ev = (type: string, min: number) => ({ job_id: job, event_type: type, at: new Date(MON_10.getTime() + min * 60_000), detail: JSON.stringify({ url: "https://www.boreal.insure/ca" }) });
+    expect(firstRealClick([ev("delivered", 0), ev("click", 2), ev("click", 20)])).toBeNull();
+    expect(firstRealClick([ev("delivered", 0), ev("click", 2), ev("open", 10), ev("click", 20)])?.getTime()).toBe(MON_10.getTime() + 20 * 60_000);
   });
   it("business days skip the weekend, and the daily number doubles each week up to 1,000", () => {
     expect(addBusinessDays(new Date("2026-11-26T18:00:00Z"), 2).toISOString()).toBe("2026-11-30T18:00:00.000Z");

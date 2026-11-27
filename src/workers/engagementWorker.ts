@@ -5,15 +5,17 @@ import { pool as defaultPool } from "../db";
 import { logger } from "../platform/logger";
 import { createFollowUpTasks, syncEngagement } from "../services/engagement/engagement";
 import { createTask } from "./marketingWorker";
+import { reclassifyRobotClicks } from "../services/flows/robotClicks"; // BI_SERVER_ROBOT_CLICKS_v2
 
 const LOCK_KEY = 74_120_031;
 let timer: NodeJS.Timeout | null = null;
 let busy = false;
 
 export async function runEngagementTick(db: Pick<Pool, "query">): Promise<Record<string, number>> {
+  const robots = await reclassifyRobotClicks(db); // once: drops scanner clicks recorded before the stricter rule
   const sync = await syncEngagement(db);
   const tasks = await createFollowUpTasks(db, (owner, title, notes) => createTask(owner, title, notes));
-  return { ...sync, tasks };
+  return { ...sync, tasks, robot_clicks_removed: robots.removed };
 }
 
 async function tick(pool: Pool): Promise<void> {
