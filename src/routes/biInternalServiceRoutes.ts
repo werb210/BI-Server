@@ -94,6 +94,7 @@ router.get("/outreach/contacts/:id", async (req: Request, res: Response) => {
 //   POST /engagement/event { email, kind: "booked", at?, start? }      -> { ok, matched }
 //   GET  /engagement/digest?owner=<BF user id>                         -> { ok, digest }
 //   GET  /engagement/owners                                            -> { ok, owners }
+//   GET  /engagement/leaks?days=7                                      -> { ok, leaks }
 router.post("/engagement/reply", async (req: Request, res: Response) => {
   try {
     const { contactIdsByEmail, recordReply } = await import("../services/engagement/engagement");
@@ -144,6 +145,14 @@ router.get("/engagement/owners", async (req: Request, res: Response) => {
     const { owners } = await import("../services/engagement/engagement");
     res.json({ ok: true, owners: await owners(pool) });
   } catch (err) { res.status(500).json({ ok: false, error: "engagement_owners_failed", requestId: logHiddenError(req, err, "engagement_owners_failed") }); }
+});
+
+router.get("/engagement/leaks", async (req: Request, res: Response) => {
+  try {
+    const { funnel } = await import("../services/engagement/engagement");
+    const days = Math.min(Math.max(Number(req.query.days) || 7, 1), 90);
+    res.json({ ok: true, leaks: (await funnel(pool, new Date(Date.now() - days * 86_400_000))).leaks });
+  } catch (err) { res.status(500).json({ ok: false, error: "engagement_leaks_failed", requestId: logHiddenError(req, err, "engagement_leaks_failed") }); }
 });
 
 export default router;
