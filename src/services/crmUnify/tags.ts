@@ -24,7 +24,7 @@ export const CORE_TAGS: ReadonlyArray<{ slug: string; label: string }> = [
 
 /** BI_SERVER_BI_CORE_TAGS_v1 - Todd 2026-11-27: BI has no use for Active, Insurance or A/R Credit Insurance, so its
  *  catalogue (which the portal's View-by row and Tag menu read) leaves them out. */
-export const BI_HIDDEN_CORE: ReadonlyArray<string> = ["active", "insurance", "ar_credit_insurance"];
+export const BI_HIDDEN_CORE: ReadonlyArray<string> = ["active", "insurance", "ar_credit_insurance", "lawyer", "accountant"]; // Todd 2026-11-27: BI does not market to lawyers or accountants
 export const BI_CORE_TAGS = CORE_TAGS.filter((t) => !BI_HIDDEN_CORE.includes(t.slug));
 
 export const SYSTEM_TAGS: ReadonlyArray<string> = [
