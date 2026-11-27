@@ -22,6 +22,11 @@ export const CORE_TAGS: ReadonlyArray<{ slug: string; label: string }> = [
   { slug: "ar_credit_insurance", label: "A/R Credit Insurance" },
 ];
 
+/** BI_SERVER_BI_CORE_TAGS_v1 - Todd 2026-11-27: BI has no use for Active, Insurance or A/R Credit Insurance, so its
+ *  catalogue (which the portal's View-by row and Tag menu read) leaves them out. */
+export const BI_HIDDEN_CORE: ReadonlyArray<string> = ["active", "insurance", "ar_credit_insurance"];
+export const BI_CORE_TAGS = CORE_TAGS.filter((t) => !BI_HIDDEN_CORE.includes(t.slug));
+
 export const SYSTEM_TAGS: ReadonlyArray<string> = [
   "application_started", "applicant", "applicant_otp", "contact_form", "booked_call", "booking", "credit_readiness",
   "email", "test", "referral", "startup_capital", "startup_waitlist", "maya", "website", "import", "imported",
@@ -145,7 +150,7 @@ export async function tagCatalogue(db: Q) {
     merged.set(tag, next);
   }
   return {
-    core: CORE_TAGS.map((t) => ({ ...t, kind: "core" as TagKind })),
+    core: BI_CORE_TAGS.map((t) => ({ ...t, kind: "core" as TagKind })),
     custom: custom.map((t) => ({ ...t, kind: "custom" as TagKind })),
     system: [...SYSTEM_TAGS],
     inUse: Array.from(merged.values()),
