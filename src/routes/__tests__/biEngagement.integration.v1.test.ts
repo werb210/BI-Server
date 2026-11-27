@@ -35,7 +35,11 @@ describe.skipIf(!process.env.DATABASE_URL)("PGI engagement tracking (real DB)", 
     await resetDb();
     await pool.query(`TRUNCATE bi_engagement, bi_engagement_events, bi_engagement_settings, bi_flow_members, bi_flows CASCADE`);
   });
-  afterAll(async () => { await pool.end(); });
+  afterAll(async () => {
+    // Leave no active flows behind: other suites run the flow worker against the same database.
+    await pool.query(`TRUNCATE bi_engagement, bi_engagement_events, bi_engagement_settings, bi_flow_members, bi_flows CASCADE`);
+    await pool.end();
+  });
 
   it("climbs the stages from the flows, opens a follow-up for a click and gives it the flow's owner", async () => {
     const co = await seedCompany({ legal_name: "Prairie Lending" });
@@ -127,5 +131,27 @@ describe.skipIf(!process.env.DATABASE_URL)("PGI engagement tracking (real DB)", 
     expect(d.body.contact.events.map((e: any) => e.kind)).toEqual(expect.arrayContaining(["booked", "met"]));
     const dg = await request(app).get("/api/v1/bi/internal/engagement/digest?owner=u2").set("Authorization", `Bearer ${service()}`).expect(200);
     expect(dg.body.digest.open).toBe(0);
+  });
+
+  // ENGAGEMENT_REQUEUE_v1
+  it("undo puts a contact back in the follow-up list after Followed up or Not interested", async () => {
+    const co = await seedCompany({});
+    const c = await seedContact(co.id, { full_name: "Josh H", email: "josh@x.test" });
+    const sent = new Date(Date.now() - 86_400_000);
+    await flowWith(c.id, "josh@x.test", { status: "active", first_sent_at: sent, clicked_at: new Date(sent.getTime() + 60_000) });
+    await syncEngagement(pool);
+    const app = makeApp();
+    const q = async () => (await request(app).get("/api/v1/bi/engagement/queue").set("Authorization", `Bearer ${admin()}`)).body.items.length;
+    expect(await q()).toBe(1);
+    for (const action of ["followed_up", "lost"]) {
+      await request(app).post(`/api/v1/bi/engagement/contacts/${c.id}/action`).set("Authorization", `Bearer ${admin()}`).send({ action, reason: "not_interested" }).expect(200);
+      await syncEngagement(pool);
+      expect(await q()).toBe(0);
+      await request(app).post(`/api/v1/bi/engagement/contacts/${c.id}/action`).set("Authorization", `Bearer ${admin()}`).send({ action: "requeue" }).expect(200);
+      await syncEngagement(pool);
+      expect(await q()).toBe(1);
+    }
+    const e = (await pool.query(`SELECT stage FROM bi_engagement WHERE contact_id = $1`, [c.id])).rows[0];
+    expect(e.stage).toBe("clicked");
   });
 });
