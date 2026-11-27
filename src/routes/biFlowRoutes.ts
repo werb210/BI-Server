@@ -42,9 +42,10 @@ const COUNTS_SQL = `
          count(m.id)::int AS people,
          count(m.id) FILTER (WHERE m.status = 'queued')::int AS waiting,
          count(m.id) FILTER (WHERE m.first_sent_at IS NOT NULL)::int AS emailed,
-         count(m.id) FILTER (WHERE m.track = 'none' AND m.first_sent_at IS NOT NULL)::int AS not_opened,
-         count(m.id) FILTER (WHERE m.track = 'opened')::int AS opened,
-         count(m.id) FILTER (WHERE m.track = 'clicked')::int AS clicked,
+         -- BI_SERVER_FLOW_COUNTS_MATCH_v1 - from the same timestamps as the outreach pipeline (scanner clicks already dropped).
+         count(m.id) FILTER (WHERE m.first_sent_at IS NOT NULL AND m.opened_at IS NULL AND m.clicked_at IS NULL)::int AS not_opened,
+         count(m.id) FILTER (WHERE m.opened_at IS NOT NULL AND m.clicked_at IS NULL)::int AS opened,
+         count(m.id) FILTER (WHERE m.clicked_at IS NOT NULL)::int AS clicked,
          count(m.id) FILTER (WHERE m.status = 'stopped')::int AS stopped,
          COALESCE(sum(cardinality(m.sent_keys) + cardinality(m.prior_keys)), 0)::int AS emails_sent, -- BI_SERVER_FLOW_SECOND_ADDRESS_v1
          count(m.id) FILTER (WHERE m.round >= 2)::int AS second_address
